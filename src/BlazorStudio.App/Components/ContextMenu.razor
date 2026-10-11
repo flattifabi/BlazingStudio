@@ -1,0 +1,50 @@
+@implements IDisposable
+@inject DesignActions Design
+@inject Localizer L
+
+@if (_req is { } r)
+{
+    <div class="click-catcher" @onclick="Close" @oncontextmenu="Close" @oncontextmenu:preventDefault="true"></div>
+    <div class="pop menu-pop ctxmenu" style="left:@Px(Math.Min(r.X, 99999))px;top:@Px(r.Y)px">
+        <button class="mi" @onclick='() => Run("edit.duplicate")'><Icon Name="copy" />@L["cmd.duplicate"]<kbd>Ctrl D</kbd></button>
+        <button class="mi" @onclick='() => Run("edit.copy")'><Icon Name="clipboard" />@L["cmd.copy"]<kbd>Ctrl C</kbd></button>
+        <button class="mi" @onclick='() => Run("edit.cut")'><Icon Name="scissors" />@L["cmd.cut"]<kbd>Ctrl X</kbd></button>
+        <button class="mi" @onclick='() => Run("edit.paste")'><Icon Name="clipboard" />@L["cmd.paste"]<kbd>Ctrl V</kbd></button>
+        <div class="sep"></div>
+        <button class="mi" @onclick='() => Run("edit.wrap")'><Icon Name="wrap" />@L["cmd.wrap"]</button>
+        <button class="mi" @onclick='() => Run("edit.wrapFlex")'><Icon Name="row" />@L["cmd.wrapFlex"]</button>
+        <button class="mi" @onclick='() => Run("edit.unwrap")'><Icon Name="unwrap" />@L["cmd.unwrap"]</button>
+        <div class="sep"></div>
+        <button class="mi" @onclick='() => Run("edit.moveUp")'><Icon Name="up" />@L["cmd.moveUp"]<kbd>Alt ↑</kbd></button>
+        <button class="mi" @onclick='() => Run("edit.moveDown")'><Icon Name="down" />@L["cmd.moveDown"]<kbd>Alt ↓</kbd></button>
+        <button class="mi" @onclick='() => Run("edit.parent")'><Icon Name="chevu" />@L["cmd.selectParent"]<kbd>Esc</kbd></button>
+        <div class="sep"></div>
+        <button class="mi danger" @onclick='() => Run("edit.delete")'><Icon Name="trash" />@L["cmd.delete"]<kbd>Del</kbd></button>
+    </div>
+}
+
+@code {
+    [CascadingParameter] public Shell Shell { get; set; } = default!;
+
+    private ContextMenuRequest? _req;
+
+    protected override void OnInitialized() => Design.ContextMenu += OnMenu;
+
+    private void OnMenu(ContextMenuRequest? r) => InvokeAsync(() =>
+    {
+        _req = r;
+        StateHasChanged();
+    });
+
+    private static string Px(double v) => Math.Round(v).ToString(CultureInfo.InvariantCulture);
+
+    private void Close() => _req = null;
+
+    private async Task Run(string id)
+    {
+        _req = null;
+        await Shell.ExecuteAsync(id);
+    }
+
+    public void Dispose() => Design.ContextMenu -= OnMenu;
+}

@@ -1,0 +1,144 @@
+@* Toolbox links: HTML/Blazor-Elemente, eigene Komponenten und erkannte Bibliotheken – alles zum Reinziehen. *@
+@inherits StudioComponent
+@inject DesignActions Design
+
+<aside class="island toolbox">
+    <div class="split-x" data-splitter="tool" style="right:0"></div>
+    <div class="sh">
+        <div class="seg">
+            <button class="@(_tab == "elements" ? "on" : "")" @onclick='() => _tab = "elements"'>@L["tb.tabElements"]</button>
+            <button class="@(_tab == "project" ? "on" : "")" @onclick='() => _tab = "project"'>@L["tb.tabProject"]</button>
+            <button class="@(_tab == "libs" ? "on" : "")" @onclick='() => _tab = "libs"' title="@L["tb.tabLibrariesHint"]">
+                @L["tb.tabLibraries"] @if (Ws.Libraries.Count > 0) { <span class="cnt lib">@Ws.Libraries.Sum(l => l.Components.Count)</span> }
+            </button>
+        </div>
+    </div>
+    <div class="f side-search" style="margin:6px 6px 2px">
+        <Icon Name="search" Class="sm dim" />
+        <input placeholder="@L["tb.search"]" value="@_filter" spellcheck="false" @oninput="e => _filter = e.Value?.ToString() ?? string.Empty" />
+        @if (_filter.Length > 0) { <span class="clr" @onclick='() => _filter = ""'><Icon Name="x" /></span> }
+    </div>
+
+    <div class="scroll tb-list" style="flex:1">
+        @switch (_tab)
+        {
+            case "elements":
+                @foreach (var cat in BuiltInCatalog.Categories.Where(c => c != "project"))
+                {
+                    @Group("e:" + cat, L["cat." + cat], Filter(Ws.AllComponents.Where(i => i.Category == cat && i.Source != ComponentSource.Library && i.Source != ComponentSource.Project)))
+                }
+                @Group("e:blocks", L["side.blocks"], Filter(BuiltInCatalog.Blocks))
+                break;
+
+            case "project":
+                var comps = Filter(Ws.Project?.Components.Values.Select(c => c.Definition) ?? Enumerable.Empty<ComponentDefinition>()).ToList();
+                @Group("p:pages", L["tb.pages"], comps.Where(c => c.Icon == "page").ToList())
+                @Group("p:comps", L["tb.components"], comps.Where(c => c.Icon != "page").ToList())
+                @if (comps.Count == 0) { <div class="empty-hint">@L["insert.noProjectComponents"]</div> }
+                break;
+
+            default:
+                @if (Ws.LibrariesLoading)
+                {
+                    <div class="empty-hint"><Icon Name="refresh" Class="sm spin" /> @L["tb.scanning"]</div>
+                }
+                else if (Ws.Libraries.Count == 0)
+                {
+                    <div class="empty-hint">@L["tb.noLibraries"]
+                        <button class="btn sm wide" style="margin-top:10px" @onclick='() => Ui.OpenOverlay("nuget")'><Icon Name="package" />@L["tb.findLibraries"]</button>
+                    </div>
+                }
+                @foreach (var lib in Ws.Libraries)
+                {
+                    var l = lib;
+                    var key = "l:" + l.PackageId;
+                    var open = IsOpen(key, true);
+                    var setUp = Ws.Project is { } proj && LibrarySetup.IsSetUp(proj, l);
+                    <div class="tb-lib @(open ? "open" : "")" @onclick="() => Toggle(key, true)">
+                        <span class="ch @(open ? "open" : "")"><Icon Name="chev" /></span>
+                        <PackageIcon Id="@l.PackageId" />
+                        <span class="t"><b>@l.PackageId</b><small>@l.Version · @L.F("tb.componentCount", l.Components.Count)</small></span>
+                    </div>
+                    if (!open) continue;
+                    if (!setUp)
+                    {
+                        <div class="hint warn tb-setup">
+                            <Icon Name="alert" />
+                            <span>@(LibrarySetup.HasRecipe(l.PackageId) ? L.F("tb.setupNeeded", l.PackageId) : L.F("tb.usingNeeded", l.Namespaces.FirstOrDefault() ?? l.PackageId))
+                                <button class="btn sm ac" style="margin-top:6px" @onclick="() => SetUp(l)">@L["tb.setUp"]</button></span>
+                        </div>
+                    }
+                    @foreach (var g in Filter(l.Components).GroupBy(c => c.Category).OrderBy(g => CategoryOrder(g.Key)))
+                    {
+                        @Group(key + ":" + g.Key, L["libcat." + g.Key], g.ToList(), depth: 1)
+                    }
+                }
+                break;
+        }
+    </div>
+</aside>
+
+@code {
+    private string _tab = "elements";
+    private string _filter = "";
+    private readonly HashSet<string> _open = new();
+    private readonly HashSet<string> _closed = new();
+
+    private bool IsOpen(string key, bool byDefault) => _filter.Length > 0 || (byDefault ? !_closed.Contains(key) : _open.Contains(key));
+
+    private void Toggle(string key, bool byDefault)
+    {
+        if (byDefault) { if (!_closed.Remove(key)) _closed.Add(key); }
+        else if (!_open.Remove(key)) _open.Add(key);
+    }
+
+    private IEnumerable<ComponentDefinition> Filter(IEnumerable<ComponentDefinition> items)
+    {
+        var q = _filter.Trim();
+        return q.Length == 0 ? items : items.Where(i =>
+            i.TagName.Contains(q, StringComparison.OrdinalIgnoreCase) || L.Label(i).Contains(q, StringComparison.OrdinalIgnoreCase) ||
+            i.Keywords.Contains(q, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static int CategoryOrder(string c) => Array.IndexOf(new[] { "layout", "actions", "inputs", "text", "navigation", "data", "feedback", "media", "other" }, c) is var i and >= 0 ? i : 99;
+
+    private RenderFragment Group(string key, string title, IEnumerable<ComponentDefinition> items, int depth = 0) => __builder =>
+    {
+        var list = items.ToList();
+        if (list.Count == 0) return;
+        var open = IsOpen(key, depth == 0 || list.Count <= 12);
+        <div class="tb-group" style="padding-left:@(6 + depth * 12)px" @onclick="() => Toggle(key, depth == 0 || list.Count <= 12)">
+            <span class="ch @(open ? "open" : "")"><Icon Name="chev" /></span>
+            <span>@title</span><em>@list.Count</em>
+        </div>
+        if (!open) return;
+        foreach (var item in list)
+        {
+            var it = item;
+            <div class="tb-item @(it.Source == ComponentSource.Library ? "lib" : it.Source == ComponentSource.Project ? "proj" : "")"
+                 style="padding-left:@(22 + depth * 12)px" draggable="true" data-bs-palette="@it.Key"
+                 title="@Tooltip(it)" @onclick="() => Design.InsertAtSelection(it.Key)">
+                <Icon Name="@it.Icon" />
+                <span class="ellipsis">@L.Label(it)</span>
+                @if (it.Source is ComponentSource.Library or ComponentSource.Blazor && L.Label(it) != it.TagName) { <em>@it.TagName</em> }
+            </div>
+        }
+    };
+
+    private string Tooltip(ComponentDefinition d)
+    {
+        var head = d.TagName + (d.Library is not null ? " · " + d.Library : "");
+        if (d.Parameters.Count == 0) return head + "\n" + L["insert.hint"];
+        var ps = string.Join("\n", d.Parameters.Take(14).Select(p => $"  {p.Name}: {p.Type}{(p.IsRequired ? " *" : "")}"));
+        return $"{head}\n{ps}{(d.Parameters.Count > 14 ? "\n  …" : "")}\n{L["insert.hint"]}";
+    }
+
+    private void SetUp(ComponentLibrary lib)
+    {
+        if (Ws.Project is null) return;
+        var changed = LibrarySetup.Apply(Ws, Ws.Project, lib);
+        Ui.ShowToast(changed.Count == 0 ? L["tb.setupNothing"] : L.F("tb.setupDone", lib.PackageId, string.Join(", ", changed.Select(Path.GetFileName))),
+            ToastKind.Success, 6000);
+        Ws.Rescan();
+    }
+}

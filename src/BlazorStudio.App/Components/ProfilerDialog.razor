@@ -1,0 +1,357 @@
+@inherits StudioComponent
+@inject ProfilerService Prof
+
+<div class="backdrop" style="padding-top:3vh" @onclick="Ui.CloseOverlay">
+    <div class="dialog nuget prof" @onclick:stopPropagation="true">
+        <div class="ng-head">
+            <div class="iic"><Icon Name="activity" /></div>
+            <div class="t">
+                <h2>@L["prof.title"]</h2>
+                <small class="dim">@(Prof.AttachedName is { } n ? L.F("prof.attachedTo", n) : L["prof.notAttached"])</small>
+            </div>
+            <Dropdown Label="@L["prof.process"]" Value="@_pid?.ToString()" Placeholder="@L["prof.noProcesses"]" Options='Prof.Processes.Select(p => new Dropdown.Option(p.Id.ToString(), p.Name, "PID " + p.Id, p.Name.Equals(Prof.Suggested?.Name, StringComparison.OrdinalIgnoreCase) ? "play" : "terminal"))' ValueChanged="v => PickProcess(new ChangeEventArgs { Value = v })" />
+            <button class="ibtn" title="@L["nuget.refresh"]" @onclick="Prof.RefreshProcesses"><Icon Name="refresh" /></button>
+            @if (Prof.AttachedPid is null)
+            {
+                <button class="btn ac" disabled="@(_pid is null)" @onclick="Attach"><Icon Name="activity" />@L["prof.attach"]</button>
+            }
+            else
+            {
+                <button class="btn" @onclick="Prof.Detach"><Icon Name="x" />@L["prof.detach"]</button>
+            }
+            <button class="ibtn" title="@L["action.close"]" @onclick="Ui.CloseOverlay"><Icon Name="x" /></button>
+        </div>
+
+        @if (Prof.Processes.Count == 0 || (Prof.AttachedPid is null && Run.State == RunState.Idle && !Debug.IsActive))
+        {
+            <div class="banner info"><Icon Name="info" /><span>@L["prof.startHint"]</span><span class="grow"></span>
+                @if (Run.State == RunState.Idle && !Debug.IsActive && Ws.Project?.ProjectFile is not null)
+                {
+                    <button class="btn sm ac" @onclick="StartApp"><Icon Name="play" />@L["run.start"]</button>
+                }
+            </div>
+        }
+        @if (Prof.Error is { } err)
+        {
+            <div class="banner warn"><Icon Name="alert" /><span>@err</span></div>
+        }
+
+        <div class="prof-tiles">
+            @foreach (var c in Counters)
+            {
+                var values = Series(c.Key);
+                var latest = values.Count > 0 ? values[^1] : (double?)null;
+                <div class="tile">
+                    <div class="tile-h"><span>@L["prof.c." + c.Key]</span><b>@(latest is null ? "–" : c.Format(latest.Value))</b></div>
+                    <Sparkline Values="values" Color="@c.Color" Max="@c.Max" />
+                </div>
+            }
+        </div>
+
+        <div class="ng-bar" style="padding-top:12px">
+            <div class="seg">
+                @foreach (var s in new[] { 5, 10, 30, 60 })
+                {
+                    var sec = s;
+                    <button class="@(_seconds == sec ? "on" : "")" @onclick="() => _seconds = sec">@(sec) s</button>
+                }
+            </div>
+            <label class="check" style="margin:0"><input type="checkbox" checked="@_cpu" @onchange="e => _cpu = e.Value is true" />CPU</label>
+            <label class="check" style="margin:0"><input type="checkbox" checked="@_alloc" @onchange="e => _alloc = e.Value is true" />@L["prof.allocations"]</label>
+            <label class="check" style="margin:0" title="@L["prof.hideIdleHint"]"><input type="checkbox" checked="@_hideIdle" @onchange="ToggleIdle" />@L["prof.hideIdle"]</label>
+            <span class="grow"></span>
+            @if (Prof.IsRecording)
+            {
+                <span class="rec-dot"></span><span>@L.F("prof.recording", Remaining)</span>
+                <button class="btn" @onclick="Prof.StopRecording"><Icon Name="stop" />@L["prof.stopEarly"]</button>
+            }
+            else if (Prof.IsAnalyzing)
+            {
+                <Icon Name="refresh" Class="spin dim" /><span>@L["prof.analyzing"]</span>
+            }
+            else
+            {
+                <button class="btn ac" disabled="@(Prof.AttachedPid is null || (!_cpu && !_alloc))" @onclick="Record"><span class="rec-dot idle"></span>@L["prof.record"]</button>
+            }
+        </div>
+
+        <div class="prof-body">
+            @if (Prof.Report is not { } r)
+            {
+                <div class="ins-empty" style="padding-top:50px"><Icon Name="activity" /><span>@L["prof.empty"]</span></div>
+            }
+            else
+            {
+                <div class="seg prof-tabs">
+                    <button class="@(_tab == "mine" ? "on" : "")" @onclick='() => _tab = "mine"'>@L["prof.tabMine"]</button>
+                    <button class="@(_tab == "hot" ? "on" : "")" @onclick='() => _tab = "hot"'>@L["prof.tabHotspots"]</button>
+                    <button class="@(_tab == "tree" ? "on" : "")" @onclick='() => _tab = "tree"'>@L["prof.tabTree"]</button>
+                    <button class="@(_tab == "alloc" ? "on" : "")" @onclick='() => _tab = "alloc"'>@L["prof.tabAllocTypes"]</button>
+                    <button class="@(_tab == "allocsite" ? "on" : "")" @onclick='() => _tab = "allocsite"'>@L["prof.tabAllocSites"]</button>
+                    <button class="@(_tab == "gc" ? "on" : "")" @onclick='() => _tab = "gc"'>@L["prof.tabGc"]</button>
+                    <span class="grow"></span>
+                    <span class="dim" style="font-size:12px">@L.F("prof.summary", r.DurationSeconds.ToString("0.0", CultureInfo.CurrentCulture), r.TotalSamples - r.IdleSamples, r.IdleSamples)</span>
+                </div>
+                <div class="scroll prof-table">
+                    @switch (_tab)
+                    {
+                        case "mine":
+                            <div class="hint" style="margin:8px 10px"><Icon Name="info" />@L["prof.mineHint"]</div>
+                            @MethodTable(r.UserAttribution, selfOnly: true)
+                            break;
+                        case "hot":
+                            <div class="prof-filter"><label class="check" style="margin:0"><input type="checkbox" checked="@_onlyMine" @onchange="e => _onlyMine = e.Value is true" />@L["prof.onlyMine"]</label>
+                                <span class="grow"></span><div class="seg"><button class="@(_sortTotal ? "" : "on")" @onclick="() => _sortTotal = false">Self</button><button class="@(_sortTotal ? "on" : "")" @onclick="() => _sortTotal = true">Total</button></div></div>
+                            @MethodTable((_sortTotal ? r.Hotspots.OrderByDescending(h => h.TotalPercent) : r.Hotspots.OrderByDescending(h => h.SelfPercent)).Where(h => !_onlyMine || h.IsUserCode).Take(150).ToList(), selfOnly: false)
+                            break;
+                        case "tree":
+                            <div class="prof-filter"><span class="dim">@L["prof.treeHint"]</span></div>
+                            @Tree(r.Root, 0, Math.Max(1, r.Root.Samples))
+                            break;
+                        case "alloc":
+                            @AllocTable(r.AllocationsByType, r.SampledAllocatedBytes, sites: false)
+                            break;
+                        case "allocsite":
+                            <div class="hint" style="margin:8px 10px"><Icon Name="info" />@L["prof.allocSiteHint"]</div>
+                            @AllocTable(r.AllocationsByMethod, r.SampledAllocatedBytes, sites: true)
+                            break;
+                        default:
+                            <div class="ef-grid" style="padding:10px">
+                                <div class="card" style="padding:12px">
+                                    <h4 class="ef-h">Garbage Collection</h4>
+                                    <div class="ef-kv"><span>Gen 0</span><b>@r.Gc.Gen0</b></div>
+                                    <div class="ef-kv"><span>Gen 1</span><b>@r.Gc.Gen1</b></div>
+                                    <div class="ef-kv"><span>Gen 2</span><b>@r.Gc.Gen2</b></div>
+                                    <div class="ef-kv"><span>@L["prof.gcPause"]</span><b>@r.Gc.PauseMs.ToString("0.0", CultureInfo.CurrentCulture) ms</b></div>
+                                    <div class="ef-kv"><span>@L["prof.gcMaxPause"]</span><b>@r.Gc.MaxPauseMs.ToString("0.0", CultureInfo.CurrentCulture) ms</b></div>
+                                    @if (r.Gc.HeapAfterBytes is { } heap) { <div class="ef-kv"><span>@L["prof.heapAfter"]</span><b>@Bytes(heap)</b></div> }
+                                    <div class="ef-kv"><span>@L["prof.allocated"]</span><b>≈ @Bytes(r.SampledAllocatedBytes)</b></div>
+                                </div>
+                                <div class="card" style="padding:12px">
+                                    <h4 class="ef-h">Exceptions (@r.ExceptionCount)</h4>
+                                    @if (r.Exceptions.Count == 0) { <div class="dim">@L["prof.noExceptions"]</div> }
+                                    @foreach (var (type, count) in r.Exceptions)
+                                    {
+                                        <div class="ef-kv"><span class="mono">@type</span><b>@count×</b></div>
+                                    }
+                                </div>
+                            </div>
+                            break;
+                    }
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private int? _pid;
+    private int _seconds = 10;
+    private bool _cpu = true;
+    private bool _alloc = true;
+    private bool _hideIdle = true;
+    private bool _onlyMine;
+    private bool _sortTotal;
+    private string _tab = "mine";
+    private readonly HashSet<CallNode> _open = new();
+
+    private sealed record Counter(string Key, string Color, double? Max, Func<double, string> Format);
+
+    private static readonly Counter[] Counters =
+    {
+        new("cpu-usage", "#4c8dff", 100, v => v.ToString("0.#", CultureInfo.CurrentCulture) + " %"),
+        new("working-set", "#14b8a6", null, v => v.ToString("0", CultureInfo.CurrentCulture) + " MB"),
+        new("gc-heap-size", "#8b5cf6", null, v => v.ToString("0.#", CultureInfo.CurrentCulture) + " MB"),
+        new("alloc-rate", "#f59e0b", null, v => Bytes((long)v) + "/s"),
+        new("gen-0-gc-count", "#22c55e", null, v => v.ToString("0", CultureInfo.CurrentCulture) + "/s"),
+        new("gen-2-gc-count", "#ef4444", null, v => v.ToString("0", CultureInfo.CurrentCulture) + "/s"),
+        new("threadpool-thread-count", "#64748b", null, v => v.ToString("0", CultureInfo.CurrentCulture)),
+        new("exception-count", "#ec4899", null, v => v.ToString("0", CultureInfo.CurrentCulture) + "/s"),
+    };
+
+    protected override void OnStudioInitialized()
+    {
+        Prof.Changed += Refresh;
+        Prof.CountersUpdated += Refresh;
+        Prof.RefreshProcesses();
+        _pid = Prof.AttachedPid ?? Prof.Suggested?.Id;
+    }
+
+    private IReadOnlyList<double> Series(string key)
+    {
+        lock (Prof.History)
+        {
+            return Prof.History.TryGetValue(key, out var h) ? h.ToArray() : Array.Empty<double>();
+        }
+    }
+
+    private string Remaining => Prof.RecordingUntil is { } u ? Math.Max(0, (u - DateTime.Now).TotalSeconds).ToString("0", CultureInfo.CurrentCulture) : "";
+
+    private void PickProcess(ChangeEventArgs e) => _pid = int.TryParse(e.Value?.ToString(), out var id) ? id : null;
+
+    private void Attach()
+    {
+        var p = Prof.Processes.FirstOrDefault(x => x.Id == _pid);
+        if (p is not null) Prof.Attach(p);
+    }
+
+    private async Task StartApp()
+    {
+        await Run.StartAsync(false);
+        // warten, bis der App-Prozess erscheint
+        for (var i = 0; i < 60; i++)
+        {
+            await Task.Delay(1000);
+            Prof.RefreshProcesses();
+            if (Prof.Suggested is { } s && Run.Url is not null)
+            {
+                _pid = s.Id;
+                Prof.Attach(s);
+                return;
+            }
+        }
+    }
+
+    private async Task Record()
+    {
+        _open.Clear();
+        _ = TickAsync();
+        await Prof.RecordAsync(_seconds, _cpu, _alloc, _hideIdle);
+        _tab = _cpu ? "mine" : "allocsite";
+    }
+
+    private async Task TickAsync()
+    {
+        while (Prof.IsRecording)
+        {
+            await Task.Delay(500);
+            StateHasChanged();
+        }
+    }
+
+    private async Task ToggleIdle(ChangeEventArgs e)
+    {
+        _hideIdle = e.Value is true;
+        await Prof.ReanalyzeAsync(_hideIdle);
+    }
+
+    private void Open(string method)
+    {
+        if (Prof.Locate(method) is { } loc)
+        {
+            Ws.Open(loc.File, loc.Line);
+            Ui.CloseOverlay();
+        }
+        else Ui.ShowToast(L["prof.sourceNotFound"], ToastKind.Info);
+    }
+
+    // ------------------------------------------------------------------
+
+    private RenderFragment MethodTable(IReadOnlyList<MethodStat> rows, bool selfOnly) => __builder =>
+    {
+        <table class="ptable">
+            <thead><tr><th>@L["prof.method"]</th><th style="width:120px">@L["prof.module"]</th>
+                @if (!selfOnly) { <th class="num" style="width:120px">Self</th> }
+                <th class="num" style="width:150px">@(selfOnly ? L["prof.share"] : "Total")</th></tr></thead>
+            <tbody>
+            @foreach (var row in rows)
+            {
+                var m = row;
+                <tr class="@(m.IsUserCode ? "mine" : "")" title="@m.Method" @onclick="() => Open(m.Method)">
+                    <td><span class="mono ellipsis-block">@ShortMethod(m.Method)</span></td>
+                    <td class="dim">@ShortModule(m.Module)</td>
+                    @if (!selfOnly) { <td class="num">@Bar(m.SelfPercent)</td> }
+                    <td class="num">@Bar(m.TotalPercent)</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+        @if (rows.Count == 0) { <div class="empty-hint">@L["prof.noSamples"]</div> }
+    };
+
+    private RenderFragment Tree(CallNode node, int depth, int total) => __builder =>
+    {
+        foreach (var c in node.Children.Values.OrderByDescending(c => c.Samples))
+        {
+            var child = c;
+            var open = _open.Contains(child) || (!_closedAuto.Contains(child) && depth < 3 && child.Samples * 100 / total > 30);
+            var pct = 100.0 * child.Samples / total;
+            <div class="trow @(child.IsUserCode ? "mine" : "")" style="padding-left:@(8 + depth * 14)px" title="@child.Method">
+                <span class="ch @(open ? "open" : "")" @onclick="() => ToggleNode(child, open)">@if (child.Children.Count > 0) { <Icon Name="chev" /> }</span>
+                <span class="mono ellipsis-block" @ondblclick="() => Open(child.Method)">@ShortMethod(child.Method)</span>
+                <span class="dim tmod">@ShortModule(child.Module)</span>
+                <span class="num">@Bar(pct)</span>
+            </div>
+            if (open && depth < 70)
+            {
+                @Tree(child, depth + 1, total)
+            }
+        }
+    };
+
+    private void ToggleNode(CallNode n, bool currentlyOpen)
+    {
+        if (currentlyOpen) { _open.Remove(n); _closedAuto.Add(n); }
+        else _open.Add(n);
+    }
+
+    private readonly HashSet<CallNode> _closedAuto = new();
+
+    private RenderFragment AllocTable(IReadOnlyList<AllocationStat> rows, long totalBytes, bool sites) => __builder =>
+    {
+        <table class="ptable">
+            <thead><tr><th>@(sites ? L["prof.allocSite"] : L["prof.type"])</th><th class="num" style="width:110px">@L["prof.samples"]</th><th class="num" style="width:180px">@L["prof.bytes"]</th></tr></thead>
+            <tbody>
+            @foreach (var row in rows)
+            {
+                var a = row;
+                <tr class="@(sites && !a.Name.StartsWith('[') ? "mine" : "")" title="@a.Name" @onclick="() => { if (sites && !a.Name.StartsWith('[')) Open(a.Name); }">
+                    <td>
+                        <span class="mono ellipsis-block">@(sites ? ShortMethod(a.Name) : a.Name)</span>
+                        @if (a.TopTypes.Count > 0)
+                        {
+                            <div class="ptypes">@foreach (var (t, b) in a.TopTypes) { <span>@ShortType(t) <i>@Bytes(b)</i></span> }</div>
+                        }
+                    </td>
+                    <td class="num">@a.Count</td>
+                    <td class="num">@Bar(totalBytes == 0 ? 0 : 100.0 * a.Bytes / totalBytes, Bytes(a.Bytes))</td>
+                </tr>
+            }
+            </tbody>
+        </table>
+        @if (rows.Count == 0) { <div class="empty-hint">@L["prof.noAllocations"]</div> }
+    };
+
+    private static RenderFragment Bar(double pct, string? label = null) => __builder =>
+    {
+        <span class="pbar"><i style="width:@(Math.Clamp(pct, 0, 100).ToString("0.#", CultureInfo.InvariantCulture))%"></i><b>@(label ?? pct.ToString("0.0", CultureInfo.CurrentCulture) + " %")</b></span>
+    };
+
+    private static string ShortMethod(string m)
+    {
+        if (m.StartsWith('[') && m.IndexOf("] ", StringComparison.Ordinal) is var close and > 0) m = m[(close + 2)..];
+        var paren = m.IndexOf('(');
+        var name = paren > 0 ? m[..paren] : m;
+        var parts = name.Split('.');
+        return parts.Length > 3 ? string.Join('.', parts[^3..]) + (paren > 0 ? "()" : "") : name + (paren > 0 ? "()" : "");
+    }
+
+    private static string ShortModule(string m) => m.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) || m.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) ? m[..^4] : m;
+
+    private static string ShortType(string t) => t.Contains('.') ? t[(t.LastIndexOf('.') + 1)..] : t;
+
+    public static string Bytes(long b) => b switch
+    {
+        >= 1L << 30 => (b / (double)(1L << 30)).ToString("0.0", CultureInfo.CurrentCulture) + " GB",
+        >= 1L << 20 => (b / (double)(1L << 20)).ToString("0.0", CultureInfo.CurrentCulture) + " MB",
+        >= 1L << 10 => (b / 1024d).ToString("0", CultureInfo.CurrentCulture) + " KB",
+        _ => b + " B",
+    };
+
+    public override void Dispose()
+    {
+        base.Dispose();
+        Prof.Changed -= Refresh;
+        Prof.CountersUpdated -= Refresh;
+    }
+}

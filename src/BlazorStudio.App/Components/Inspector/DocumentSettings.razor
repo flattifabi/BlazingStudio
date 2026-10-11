@@ -1,0 +1,86 @@
+@* Einstellungen der ganzen Komponente/Seite, wenn nichts ausgewählt ist. *@
+@inject Workspace Ws
+@inject DesignActions Design
+@inject UiService Ui
+@inject Localizer L
+
+<div class="sec">
+    <h4>@L["doc.route"]</h4>
+    <div class="bound">
+        <span class="at">@@page</span>
+        <input value="@Session.Doc?.PageRoute" placeholder="@L["doc.noRoute"]" spellcheck="false" @onchange="e => SetRoute(e.Value?.ToString())" />
+    </div>
+    <div class="hint" style="margin-top:6px"><Icon Name="info" />@L["doc.routeHint"]</div>
+</div>
+<div class="sec">
+    <h4>@L["doc.directives"]</h4>
+    <div class="f area">
+        <textarea rows="5" class="mono" spellcheck="false" @onchange="e => SetDirectives(e.Value?.ToString())">@string.Join("\n", Session.Doc?.Directives ?? new List<string>())</textarea>
+    </div>
+</div>
+<div class="sec">
+    <h4>@L["doc.code"]</h4>
+    @{ var members = Ws.MembersFor(Session); }
+    <div class="hint" style="margin-bottom:8px"><Icon Name="braces" />@L.F("doc.memberStats", members.Count(m => m.Kind != CodeMemberKind.Method), members.Count(m => m.Kind == CodeMemberKind.Method), members.Count(m => m.IsParameter))</div>
+    @if (Ws.CodeBehindPath(Session) is { } cb)
+    {
+        <button class="btn  wide" @onclick="() => Ws.Open(cb)"><FileIcon Path="@cb" />@Path.GetFileName(cb)</button>
+    }
+    else
+    {
+        <button class="btn dashed  wide" @onclick="CreateCodeBehind"><Icon Name="plus" />@L.F("doc.createCodeBehind", Session.Name + ".cs")</button>
+    }
+    <button class="btn dashed  wide" style="margin-top:6px" @onclick="AddProperty"><Icon Name="plus" />@L["doc.addProperty"]</button>
+</div>
+<div class="sec">
+    <div class="hint"><Icon Name="sparkle" />@L["doc.tip"]</div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public DocumentSession Session { get; set; } = default!;
+
+    private void SetRoute(string? route)
+    {
+        Session.Apply(d =>
+        {
+            d.Directives.RemoveAll(x => x.TrimStart().StartsWith("\u0040page", StringComparison.Ordinal));
+            if (!string.IsNullOrWhiteSpace(route))
+                d.Directives.Insert(0, $"@page \"{(route.StartsWith('/') ? route.Trim() : "/" + route.Trim())}\"");
+        });
+    }
+
+    private void SetDirectives(string? text)
+    {
+        Session.Apply(d =>
+        {
+            d.Directives.Clear();
+            d.Directives.AddRange((text ?? "").Split('\n').Select(l => l.Trim()).Where(l => l.StartsWith('@')));
+        });
+    }
+
+    private void CreateCodeBehind()
+    {
+        var path = Session.Path + ".cs";
+        if (File.Exists(path)) { Ws.Open(path); return; }
+        var name = Path.GetFileNameWithoutExtension(Session.Path);
+        var ns = Ws.GuessNamespace(Path.GetDirectoryName(Session.Path)!);
+        File.WriteAllText(path, $"namespace {ns};\n\npublic partial class {name}\n{{\n}}\n");
+        Ws.Rescan();
+        Ws.Open(path);
+    }
+
+    private async Task AddProperty()
+    {
+        var req = new DialogRequest
+        {
+            Title = L["doc.addProperty"],
+            Message = L["doc.addPropertyHint"],
+            InputValue = "public string Title { get; set; } = \"\";",
+            OkText = L["action.add"],
+            CancelText = L["action.cancel"],
+        };
+        if (await Ui.ShowDialogAsync(req) != DialogResult.Ok || string.IsNullOrWhiteSpace(req.InputValue)) return;
+        var where = Ws.AddMethod(Session, req.InputValue.Trim());
+        Ui.ShowToast(L.F("toast.memberAdded", where), ToastKind.Success);
+    }
+}

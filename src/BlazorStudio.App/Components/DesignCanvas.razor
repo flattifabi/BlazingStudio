@@ -1,0 +1,142 @@
+@implements IAsyncDisposable
+@inject Workspace Ws
+@inject DesignActions Design
+@inject Localizer L
+@inject IJSRuntime JS
+
+<div class="stage" @ref="_stage">
+    <div class="stage-inner">
+        <div class="frame @(Session.DeviceWidth == 0 ? "full" : "") @(Session.DevicePreset is "phone" or "tablet" ? "dev-" + Session.DevicePreset + (Session.DeviceLandscape ? " land" : "") : "")"
+             style="@(Session.DeviceWidth > 0 ? $"--device:{Session.DeviceWidth}px;" : "")zoom:@((Session.Zoom / 100.0).ToString(CultureInfo.InvariantCulture))">
+            <div class="wlabel">
+                <span>@(Session.DeviceWidth > 0 ? $"{Session.DeviceWidth} px · {L["dev." + (Session.DevicePreset == "custom" ? "custom" : Session.DevicePreset)]}{(Session.DeviceLandscape ? " · " + L["dev.landscape"] : "")}" : L["canvas.fullWidth"])</span>
+                <span>@(Session.Doc?.PageRoute ?? Session.Name)</span>
+            </div>
+            <CanvasStyles Css="@(IsActive ? Ws.PreviewCss : "")" />
+            <div class="bs-page">
+                @if (IsActive && Session.Doc is not null)
+                {
+                    @_renderer.Render(Session.Doc)
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public DocumentSession Session { get; set; } = default!;
+
+    [Parameter] public bool IsActive { get; set; }
+
+    private ElementReference _stage;
+    private DotNetObjectReference<DesignCanvas>? _ref;
+    private CanvasRenderer _renderer = default!;
+    private bool _attached;
+    private string? _lastSelected;
+    private string? _lastLabel;
+    private string _lastState = "";
+    private bool _disposed;
+
+    protected override void OnInitialized()
+    {
+        _renderer = new CanvasRenderer(Ws, L);
+        Session.Changed += OnChanged;
+        Session.SelectionChanged += OnSelectionChanged;
+        Ws.PreviewCssChanged += OnCssChanged;
+    }
+
+    private void OnChanged(ChangeOrigin _) => InvokeAsync(StateHasChanged);
+
+    private void OnSelectionChanged() => InvokeAsync(SyncSelectionAsync);
+
+    private int _cssVersion;
+    private string? _lastRenderKey;
+
+    private void OnCssChanged()
+    {
+        _cssVersion++;
+        InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>Nur neu rendern, wenn sich Inhalt, Gerät, Zoom, CSS oder Sichtbarkeit geändert haben.</summary>
+    protected override bool ShouldRender()
+    {
+        var key = $"{Session.Version}|{Session.DeviceWidth}|{Session.DeviceLandscape}|{Session.Zoom}|{IsActive}|{_cssVersion}|{L.Language}|{Ws.ScanVersion}";
+        if (key == _lastRenderKey) return false;
+        _lastRenderKey = key;
+        return true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if (_disposed) return;
+        if (!_attached && IsActive)
+        {
+            _ref ??= DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("studio.designer.attach", _stage, _ref);
+            _attached = true;
+            _lastSelected = null;
+        }
+        if (_attached) await SyncSelectionAsync();
+    }
+
+    private async Task SyncSelectionAsync()
+    {
+        if (!_attached || _disposed) return;
+        var sel = Session.Selected;
+        var id = sel?.Id;
+        var label = sel is null ? null : CanvasRenderer.LabelOf(sel);
+        if (id != _lastSelected || label != _lastLabel)
+        {
+            _lastSelected = id;
+            _lastLabel = label;
+            await JS.InvokeVoidAsync("studio.designer.select", _stage, id, label);
+        }
+        var state = Session.DesignState;
+        if (state != _lastState || id != null)
+        {
+            _lastState = state;
+            await JS.InvokeVoidAsync("studio.designer.setState", _stage, id, state);
+        }
+    }
+
+    // ------------------------------------------------------------------
+
+    [JSInvokable]
+    public void OnCanvasClick(string? id) => Session.Select(id);
+
+    [JSInvokable]
+    public void OnDrop(string kind, string payload, string? targetId, string position) => Design.Drop(kind, payload, targetId, position);
+
+    [JSInvokable]
+    public void OnChipAction(string action)
+    {
+        switch (action)
+        {
+            case "parent": Design.SelectParent(); break;
+            case "duplicate": Design.Duplicate(); break;
+            case "delete": Design.Delete(); break;
+        }
+    }
+
+    [JSInvokable]
+    public void OnInlineText(string id, string text) => Design.SetText(id, text);
+
+    [JSInvokable]
+    public void OnCanvasContextMenu(string id, double x, double y) => Design.RequestContextMenu(id, x, y);
+
+    public async ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        Session.Changed -= OnChanged;
+        Session.SelectionChanged -= OnSelectionChanged;
+        Ws.PreviewCssChanged -= OnCssChanged;
+        try
+        {
+            if (_attached) await JS.InvokeVoidAsync("studio.designer.detach", _stage);
+        }
+        catch (JSDisconnectedException) { }
+        catch (TaskCanceledException) { }
+        _ref?.Dispose();
+    }
+}

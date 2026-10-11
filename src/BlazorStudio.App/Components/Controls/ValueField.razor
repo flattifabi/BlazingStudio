@@ -1,0 +1,182 @@
+@* Wert eines Attributs oder Parameters: festes Literal ODER Binding an einen Member (@wert / @bind-). *@
+@inject Localizer L
+
+<div class="param">
+    <div class="ph">
+        <b>@Name</b>
+        @if (Type is not null) { <span class="t">@Type</span> }
+        @if (IsRequired) { <span class="req">@L["inspector.required"]</span> }
+        @if (Editor != ValueEditor.Fragment)
+        {
+            <button class="bind @(IsBound ? "on" : "")" title="@L["inspector.bindHint"]" @onclick="ToggleBind">
+                <Icon Name="bindi" />@(TwoWay ? "\u0040bind" : IsBound ? L["inspector.bound"] : L["inspector.bind"])
+            </button>
+        }
+    </div>
+    @if (Description is not null) { <div class="desc">@Description</div> }
+
+    @if (IsBound)
+    {
+        <div class="bound">
+            <span class="at">@(TwoWay ? "\u0040bind-" : "\u0040")</span>
+            <input list="@_listId" value="@BoundExpression" spellcheck="false" placeholder="@L["inspector.memberPlaceholder"]"
+                   @onchange="e => SetBound(e.Value?.ToString())" />
+            <datalist id="@_listId">
+                @foreach (var c in Matching)
+                {
+                    <option value="@c.Expression">@c.Type · @KindText(c)</option>
+                }
+            </datalist>
+            @if (Matching.FirstOrDefault(c => c.Expression == BoundExpression) is { } cur)
+            {
+                <small>@cur.Type</small>
+            }
+        </div>
+        @if (Bindable && !TwoWay)
+        {
+            <button class="btn ghost sm" style="margin-top:4px" @onclick="() => OnBind.InvokeAsync((BoundExpression, true))"><Icon Name="bindi" />@L["inspector.makeTwoWay"]</button>
+        }
+        @if (!Matching.Any())
+        {
+            <div class="hint" style="margin-top:6px"><Icon Name="info" />@L["inspector.noMembers"]</div>
+        }
+    }
+    else
+    {
+        @switch (Editor)
+        {
+            case ValueEditor.Bool:
+                <div style="display:flex;align-items:center;gap:8px">
+                    <span class="toggle @(BoolValue ? "on" : "")" @onclick='() => OnLiteral.InvokeAsync(BoolValue ? (IsHtml ? null : (Value is null ? null : "false")) : "true")'></span>
+                    <span class="muted">@(BoolValue ? "true" : "false")</span>
+                    @if (!IsHtml && Value is not null)
+                    {
+                        <button class="btn ghost sm" style="margin-left:auto" @onclick="() => OnLiteral.InvokeAsync(null)">@L["inspector.reset"]</button>
+                    }
+                </div>
+                break;
+            case ValueEditor.Enum when Options is { Count: > 0 and <= 4 }:
+                <div class="seg fill">
+                    @foreach (var o in Options)
+                    {
+                        var opt = o;
+                        var full = (EnumPrefix ?? "") + opt;
+                        <button class="@(Value == full || Value == opt ? "on" : "")" @onclick="() => OnLiteral.InvokeAsync(Value == full ? null : full)">@opt</button>
+                    }
+                </div>
+                break;
+            case ValueEditor.Enum when Options is { Count: > 4 }:
+                <Dropdown Class="@(Value is null ? "" : "set")" Value="@Value" Mono="true" Options='Options.Select(o => new Dropdown.Option((EnumPrefix ?? "") + o, o)).Prepend(new Dropdown.Option(null, "—"))' ValueChanged="v => OnLiteral.InvokeAsync(v)" />
+                break;
+            case ValueEditor.Color:
+                <ColorField Value="@Value" OnChange="v => OnLiteral.InvokeAsync(v)" />
+                break;
+            case ValueEditor.Fragment:
+                <div class="hint"><Icon Name="info" />@L["inspector.fragmentHint"]</div>
+                break;
+            case ValueEditor.Expression:
+                <div class="f @(Value is null ? "" : "set")">
+                    <input class="mono" value="@Value" placeholder="@L["inspector.expressionPlaceholder"]" spellcheck="false" @onchange="e => OnLiteral.InvokeAsync(Clean(e.Value))" />
+                </div>
+                break;
+            default:
+                <div class="f @(Value is null ? "" : "set")">
+                    <input value="@Value" placeholder="@Placeholder" spellcheck="false" @oninput="e => OnLiteral.InvokeAsync(Clean(e.Value, keepEmpty: false))" />
+                    @if (Value is not null) { <span class="clr" @onclick="() => OnLiteral.InvokeAsync(null)"><Icon Name="x" /></span> }
+                </div>
+                break;
+        }
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Name { get; set; } = "";
+
+    [Parameter] public string? Type { get; set; }
+
+    [Parameter] public ValueEditor Editor { get; set; } = ValueEditor.Text;
+
+    [Parameter] public IReadOnlyList<string>? Options { get; set; }
+
+    [Parameter] public string? EnumPrefix { get; set; }
+
+    [Parameter] public bool IsRequired { get; set; }
+
+    [Parameter] public string? Description { get; set; }
+
+    [Parameter] public string? Placeholder { get; set; }
+
+    /// <summary>HTML-Attribut (bool = vorhanden/nicht vorhanden).</summary>
+    [Parameter] public bool IsHtml { get; set; }
+
+    /// <summary>Roh-Wert des Attributs (null = nicht gesetzt).</summary>
+    [Parameter] public string? Value { get; set; }
+
+    /// <summary>Ist das Attribut ohne Wert vorhanden (z. B. disabled)?</summary>
+    [Parameter] public bool Present { get; set; }
+
+    /// <summary>Wert von @bind-Name, falls zwei-Wege-gebunden.</summary>
+    [Parameter] public string? TwoWayValue { get; set; }
+
+    [Parameter] public bool Bindable { get; set; }
+
+    [Parameter] public IReadOnlyList<BindingCandidate> Candidates { get; set; } = Array.Empty<BindingCandidate>();
+
+    [Parameter] public EventCallback<string?> OnLiteral { get; set; }
+
+    [Parameter] public EventCallback<(string Expression, bool TwoWay)> OnBind { get; set; }
+
+    private readonly string _listId = "bl" + Guid.NewGuid().ToString("N")[..6];
+    private bool _forceBound;
+
+    private bool TwoWay => TwoWayValue is not null;
+
+    private bool IsBound => TwoWay || _forceBound || IsBoundValue;
+
+    private bool IsBoundValue => Value is not null && DocumentEditor.IsBoundValue(Value, new ParameterDefinition(Name, Type ?? "", Editor, Options, EnumPrefix: EnumPrefix));
+
+    private string BoundExpression => TwoWay ? TwoWayValue!.TrimStart('@') : (Value ?? "").Trim().TrimStart('@').Trim('(', ')');
+
+    private bool BoolValue => IsHtml ? Present || Value is "true" : Value is "true";
+
+    private IEnumerable<BindingCandidate> Matching => BindingScope.ForValue(Candidates, Type);
+
+    protected override void OnParametersSet()
+    {
+        if (Value is not null || TwoWay) _forceBound = false;
+    }
+
+    private async Task ToggleBind()
+    {
+        if (IsBound)
+        {
+            _forceBound = false;
+            await OnLiteral.InvokeAsync(null);
+            return;
+        }
+        var first = Matching.FirstOrDefault(c => BindingScope.TypeMatches(c.Type, Type));
+        if (first is not null) await OnBind.InvokeAsync((first.Expression, false));
+        else _forceBound = true;
+    }
+
+    private Task SetBound(string? expr)
+    {
+        if (string.IsNullOrWhiteSpace(expr)) return OnLiteral.InvokeAsync(null);
+        return OnBind.InvokeAsync((expr.Trim(), TwoWay));
+    }
+
+    private string KindText(BindingCandidate c) => c.Kind switch
+    {
+        BindingSourceKind.LoopVariable => L["binding.loop"],
+        BindingSourceKind.Injected => "@inject",
+        BindingSourceKind.Context => "Context",
+        _ => c.Source,
+    };
+
+    private static string? Clean(object? v, bool keepEmpty = false)
+    {
+        var s = v?.ToString();
+        if (s is null) return null;
+        return s.Length == 0 && !keepEmpty ? null : s;
+    }
+}

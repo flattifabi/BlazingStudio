@@ -1,0 +1,149 @@
+﻿@inject Workspace Ws
+@inject DesignActions Design
+@inject Localizer L
+
+@{
+    var candidates = BindingScope.Collect(Session.Doc!, Node, Ws.MembersFor(Session));
+}
+
+@if (Node.Kind == NodeKind.Component && Definition is not null)
+{
+    @if (Definition.Parameters.Count == 0)
+    {
+        <div class="sec"><div class="hint"><Icon Name="info" />@L.F("props.noParameters", Node.Name)</div></div>
+    }
+    @foreach (var p in Definition.Parameters.Where(p => p.Editor != ValueEditor.Callback && !p.Name.EndsWith("Changed", StringComparison.Ordinal) && !p.Name.EndsWith("Expression", StringComparison.Ordinal)))
+    {
+        var param = p;
+        <ValueField Name="@param.Name" Type="@param.Type" Editor="param.Editor" Options="param.Options" EnumPrefix="@param.EnumPrefix"
+                    IsRequired="param.IsRequired" Description="@param.Description" Bindable="param.IsBindable"
+                    Value="@Node.GetAttribute(param.Name)" TwoWayValue="@Node.GetAttribute("\u0040bind-" + param.Name)"
+                    Candidates="candidates"
+                    OnLiteral="v => Design.Mutate(Node, n => DocumentEditor.SetParameterLiteral(n, param, v), param.Name)"
+                    OnBind='e => Design.Mutate(Node, n => DocumentEditor.BindParameter(n, param.Name, e.Expression, e.TwoWay, param.IsStringLike), "bind:" + param.Name)' />
+    }
+    @if (Definition.Parameters.Any(p => p.Editor == ValueEditor.Callback))
+    {
+        <div class="sec"><div class="hint"><Icon Name="zap" />@L["props.callbacksInEvents"]</div></div>
+    }
+    @Extras(Definition.Parameters.Select(p => p.Name).ToHashSet(), candidates)
+}
+else if (Node.Kind == NodeKind.Component)
+{
+    <div class="sec"><div class="hint"><Icon Name="info" />@L.F("props.unknownComponent", Node.Name)</div></div>
+    @Extras(new HashSet<string>(), candidates)
+}
+else
+{
+    var tag = Node.Name.ToLowerInvariant();
+    @if (Node.IsTextOnly || (Node.Children.Count == 0 && IsTextTag(tag)) || Node.Children.All(c => c.Kind == NodeKind.Expression) && Node.Children.Count > 0)
+    {
+        <ContentField Node="Node" Candidates="candidates" />
+    }
+
+    @if (HtmlSchema.SupportsBind(tag) || tag == "input")
+    {
+        var bindAttr = Node.HasAttribute("\u0040bind-value") ? "\u0040bind-value" : "\u0040bind";
+        <div class="param">
+            <div class="ph"><b>@@bind</b><span class="t">@L["props.twoWay"]</span></div>
+            <div class="bound">
+                <span class="at">@@bind</span>
+                <input list="bindlist" value="@Node.GetAttribute(bindAttr)" spellcheck="false" placeholder="@L["inspector.memberPlaceholder"]"
+                       @onchange='e => Design.Mutate(Node, n => { n.RemoveAttribute("\u0040bind-value"); n.SetAttribute("\u0040bind", string.IsNullOrWhiteSpace(e.Value?.ToString()) ? null : e.Value!.ToString()!.Trim()); })' />
+                <datalist id="bindlist">
+                    @foreach (var c in BindingScope.ForValue(candidates, null)) { <option value="@c.Expression">@c.Type</option> }
+                </datalist>
+            </div>
+            @if (Node.HasAttribute(bindAttr))
+            {
+                <div class="g2" style="margin-top:6px">
+                    <div class="seg fill" title="@@bind:event">
+                        <button class="@(Node.GetAttribute("\u0040bind:event") is null or "onchange" ? "on" : "")" @onclick='() => Design.Mutate(Node, n => n.RemoveAttribute("\u0040bind:event"))'>onchange</button>
+                        <button class="@(Node.GetAttribute("\u0040bind:event") == "oninput" ? "on" : "")" @onclick='() => Design.Mutate(Node, n => n.SetAttribute("\u0040bind:event", "oninput"))'>oninput</button>
+                    </div>
+                    <StyleField Label="fmt" Property="@@bind:format" Unit="@null" Value="@Node.GetAttribute("\u0040bind:format")" Placeholder="yyyy-MM-dd"
+                                OnChange='v => Design.SetAttribute(Node, "\u0040bind:format", v)' />
+                </div>
+                <div style="margin-top:6px">
+                    <EventRow Name="@@bind:after" Value="@Node.GetAttribute("\u0040bind:after")" Methods="BindingScope.Methods(candidates)"
+                              OnSet='v => Design.SetAttribute(Node, "\u0040bind:after", v)'
+                              OnCreate='() => Design.CreateHandler(Node, "\u0040bind:after", null, "On" + char.ToUpperInvariant(tag[0]) + tag[1..] + "Changed")' />
+                </div>
+            }
+        </div>
+    }
+
+    @foreach (var a in HtmlSchema.AttributesFor(tag))
+    {
+        var attr = a;
+        <ValueField Name="@attr.Name" Editor="attr.Editor" Options="attr.Options" IsHtml="true"
+                    Type="@(attr.Editor == ValueEditor.Bool ? "bool" : attr.Editor == ValueEditor.Number ? "int" : "string")"
+                    Value="@Node.GetAttribute(attr.Name)" Present="@Node.HasAttribute(attr.Name)" Candidates="candidates"
+                    OnLiteral="v => SetHtml(attr, v)"
+                    OnBind='e => Design.SetAttribute(Node, attr.Name, "\u0040" + e.Expression)' />
+    }
+    @Extras(HtmlSchema.AttributesFor(tag).Select(a => a.Name).ToHashSet(StringComparer.OrdinalIgnoreCase), candidates)
+}
+
+@code {
+    [Parameter, EditorRequired] public DocumentSession Session { get; set; } = default!;
+
+    [Parameter, EditorRequired] public DesignNode Node { get; set; } = default!;
+
+    [Parameter] public ComponentDefinition? Definition { get; set; }
+
+    private string _newName = "";
+
+    private static bool IsTextTag(string t) => t is "p" or "h1" or "h2" or "h3" or "h4" or "h5" or "h6" or "span" or "a" or "button" or "label" or "li" or "strong" or "em" or "small" or "td" or "th" or "option" or "code";
+
+    private void SetHtml(AttributeDefinition a, string? v)
+    {
+        if (a.Editor == ValueEditor.Bool)
+        {
+            Design.Mutate(Node, n =>
+            {
+                if (v == "true") n.SetAttribute(a.Name, null, removeIfNull: false);
+                else n.RemoveAttribute(a.Name);
+            });
+            return;
+        }
+        Design.SetAttribute(Node, a.Name, v);
+    }
+
+    /// <summary>Weitere Attribute, die nicht im Schema stehen (z. B. data-*, AdditionalAttributes).</summary>
+    private RenderFragment Extras(HashSet<string> known, List<BindingCandidate> candidates) => __builder =>
+    {
+        var extras = Node.Attributes.Where(a =>
+            !known.Contains(a.Name) && a.Name is not ("class" or "style") &&
+            !a.Name.StartsWith("\u0040on", StringComparison.Ordinal) && !a.Name.StartsWith("\u0040bind", StringComparison.Ordinal) &&
+            a.Name is not ("\u0040ref" or "@key") && !(Definition?.Parameters.Any(p => "@bind-" + p.Name == a.Name || p.Name == a.Name) ?? false)).ToList();
+        <div class="sec">
+            <h4>@L["props.otherAttributes"]<span class="r">@extras.Count</span></h4>
+            <div class="prop-more">
+                @foreach (var a in extras)
+                {
+                    var attr = a;
+                    <div class="kv">
+                        <code title="@attr.Name">@attr.Name</code>
+                        <div class="f set"><input value="@attr.Value" spellcheck="false" @onchange='e => Design.Mutate(Node, n => { var x = n.FindAttribute(attr.Name); if (x is not null) x.Value = e.Value?.ToString(); }, "x:" + attr.Name)' /></div>
+                        <button class="ibtn sm" @onclick="() => Design.Mutate(Node, n => n.RemoveAttribute(attr.Name))"><Icon Name="x" /></button>
+                    </div>
+                }
+                <div class="kv">
+                    <div class="f"><input placeholder="@L["props.name"]" value="@_newName" spellcheck="false" @onchange='e => _newName = e.Value?.ToString() ?? ""' /></div>
+                    <div class="f"><input placeholder="@L["props.value"]" spellcheck="false" @onchange="AddAttribute" /></div>
+                    <span></span>
+                </div>
+            </div>
+        </div>
+    };
+
+    private void AddAttribute(ChangeEventArgs e)
+    {
+        var name = _newName.Trim();
+        if (name.Length == 0 || name.Contains(' ')) return;
+        var value = e.Value?.ToString();
+        Design.Mutate(Node, n => n.SetAttribute(name, string.IsNullOrEmpty(value) ? null : value, removeIfNull: false));
+        _newName = "";
+    }
+}

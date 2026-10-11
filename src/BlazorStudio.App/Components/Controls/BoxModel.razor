@@ -1,0 +1,49 @@
+@* Margin/Padding als verschachteltes Box-Modell mit direkt editierbaren Seiten. *@
+<div class="box">
+    <span class="lb">margin</span>
+    @Side("margin", Margin, 0, "t") @Side("margin", Margin, 1, "r") @Side("margin", Margin, 2, "b") @Side("margin", Margin, 3, "l")
+    <div class="box pad">
+        <span class="lb">padding</span>
+        @Side("padding", Padding, 0, "t") @Side("padding", Padding, 1, "r") @Side("padding", Padding, 2, "b") @Side("padding", Padding, 3, "l")
+        <div class="core">@Core</div>
+    </div>
+</div>
+
+@code {
+    [Parameter] public BoxValues Margin { get; set; } = BoxValues.Empty;
+
+    [Parameter] public BoxValues Padding { get; set; } = BoxValues.Empty;
+
+    [Parameter] public string Core { get; set; } = "";
+
+    /// <summary>(Eigenschaft, neue Werte)</summary>
+    [Parameter] public EventCallback<(string Property, BoxValues Values)> OnChange { get; set; }
+
+    private RenderFragment Side(string prop, BoxValues values, int side, string css) => __builder =>
+    {
+        <input class="bx @css" value="@Short(values[side])" placeholder="0" spellcheck="false" title="@($"{prop}-{SideName(side)}")"
+               @onchange="e => Set(prop, values, side, e.Value?.ToString())" @onkeydown="e => Key(e, prop, values, side)" />
+    };
+
+    private static string SideName(int s) => s switch { 0 => "top", 1 => "right", 2 => "bottom", _ => "left" };
+
+    private static string Short(string v) => v.EndsWith("px", StringComparison.Ordinal) ? v[..^2] : v;
+
+    private Task Set(string prop, BoxValues values, int side, string? raw)
+    {
+        var v = CssValue.WithUnit(raw, prop) ?? "";
+        return OnChange.InvokeAsync((prop, values.With(side, v)));
+    }
+
+    private Task Key(KeyboardEventArgs e, string prop, BoxValues values, int side)
+    {
+        if (e.Key is not ("ArrowUp" or "ArrowDown")) return Task.CompletedTask;
+        var (n, unit) = CssValue.Split(values[side]);
+        var next = (n ?? 0) + (e.Key == "ArrowUp" ? 1 : -1) * (e.ShiftKey ? 10 : 1);
+        if (unit.Length == 0) unit = "px";
+        var text = next == 0 ? "0" : next.ToString(CultureInfo.InvariantCulture) + unit;
+        // Alt: alle Seiten gleichzeitig
+        var nv = e.AltKey ? new BoxValues(text, text, text, text) : values.With(side, text);
+        return OnChange.InvokeAsync((prop, nv));
+    }
+}

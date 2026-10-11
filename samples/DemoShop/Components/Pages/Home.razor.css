@@ -1,0 +1,23 @@
+.hero {
+    padding: 40px 0 24px;
+    text-align: center;
+}
+
+.actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+}
+
+.grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin: 24px 0;
+}
+
+@media (max-width: 767.98px) {
+    .grid {
+        grid-template-columns: 1fr;
+    }
+}

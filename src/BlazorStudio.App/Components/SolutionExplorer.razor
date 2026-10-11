@@ -1,0 +1,384 @@
+@* Projektmappen-Explorer wie in Rider / Visual Studio: Ordner, Projekte, Abhängigkeiten, Dateien. *@
+@inherits StudioComponent
+@inject NuGetService NuGet
+@inject IHostBridge Host
+
+<div class="f side-search"><Icon Name="search" Class="sm dim" /><input placeholder="@L["sol.filter"]" @bind="_filter" @bind:event="oninput" /></div>
+<div class="scroll" style="flex:1">
+    @if (Ws.Solution is { } sln)
+    {
+        <div class="tree">
+            <div class="row" style="padding-left:4px" title="@sln.Path" @onclick='() => Toggle("sln")'>
+                <span class="ch @(IsOpen("sln", true) ? "open" : "")"><Icon Name="chev" /></span>
+                <Icon Name="sln" Class="k sln" />
+                <span class="ellipsis"><b>@sln.Name</b></span>
+                <em>@L.F("sol.projectCount", sln.AllProjects.Count())</em>
+            </div>
+            @if (IsOpen("sln", true))
+            {
+                @Items(sln.Root, 1)
+            }
+        </div>
+    }
+</div>
+
+@if (_menu is { } m)
+{
+    <div class="click-catcher" @onclick="() => _menu = null" @oncontextmenu="() => _menu = null" @oncontextmenu:preventDefault="true"></div>
+    <div class="pop menu-pop ctxmenu" style="left:@Px(m.X)px;top:min(@Px(m.Y)px, calc(100vh - 300px))">
+        <div class="hdr">@m.Item.Name</div>
+        <button class="mi" disabled="@IsStartup(m.Item)" @onclick="() => Do(() => Ws.SetStartupProjectAsync(m.Item))"><Icon Name="play" />@L["sol.setStartup"]</button>
+        <button class="mi" @onclick="() => Do(() => Build(m.Item))"><Icon Name="hammer" />@L["sol.buildProject"]</button>
+        <button class="mi" @onclick="() => Do(() => OpenNuGet(m.Item))"><Icon Name="package" />@L["cmd.nuget"]</button>
+        <button class="mi" @onclick='() => Do(async () => { if (!IsStartup(m.Item)) await Ws.SetStartupProjectAsync(m.Item); Ui.OpenOverlay("publish"); })'><Icon Name="upload" />@L["cmd.publish"]</button>
+        <div class="sep"></div>
+        <button class="mi" @onclick="() => Do(() => { Ws.Open(m.Item.Path); return Task.CompletedTask; })"><Icon Name="code" />@L["sol.editProject"]</button>
+        <button class="mi" @onclick="() => Do(() => { Host.RevealInExplorer(m.Item.Path); return Task.CompletedTask; })"><Icon Name="folder" />@L["cmd.reveal"]</button>
+    </div>
+}
+
+@code {
+    private string _filter = "";
+    private readonly HashSet<string> _open = new();
+    private readonly HashSet<string> _closed = new();
+    private readonly Dictionary<string, (int Version, FileNode Tree)> _trees = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string?> _dllVersions = new(StringComparer.OrdinalIgnoreCase);
+    private Menu? _menu;
+
+    private sealed record Menu(SolutionItem Item, double X, double Y);
+
+    private bool IsOpen(string key, bool byDefault = false) => _filter.Length > 0 || (byDefault ? !_closed.Contains(key) : _open.Contains(key));
+
+    private void Toggle(string key, bool byDefault = false)
+    {
+        if (byDefault)
+        {
+            if (!_closed.Remove(key)) _closed.Add(key);
+        }
+        else if (!_open.Remove(key)) _open.Add(key);
+    }
+
+    private bool IsStartup(SolutionItem i) => Ws.StartupItem == i;
+
+    private static string Px(double v) => Math.Round(v).ToString(CultureInfo.InvariantCulture);
+
+    private async Task Do(Func<Task> action)
+    {
+        _menu = null;
+        await action();
+    }
+
+    // ------------------------------------------------------------------
+
+    private RenderFragment Items(IEnumerable<SolutionItem> items, int depth) => __builder =>
+    {
+        foreach (var item in items)
+        {
+            var it = item;
+            if (it.IsFolder)
+            {
+                var key = "f:" + it.Name + depth;
+                <div class="row" style="padding-left:@(4 + depth * 14)px" @onclick="() => Toggle(key, true)">
+                    <span class="ch @(IsOpen(key, true) ? "open" : "")"><Icon Name="chev" /></span>
+                    <Icon Name="@(IsOpen(key, true) ? "folderopen" : "folder")" Class="k fld" />
+                    <span class="ellipsis">@it.Name</span>
+                </div>
+                if (IsOpen(key, true))
+                {
+                    @Items(it.Children, depth + 1)
+                    foreach (var f in it.Files)
+                    {
+                        var file = f;
+                        <div class="row" style="padding-left:@(18 + (depth + 1) * 14)px" title="@file" @onclick="() => Ws.Open(file)">
+                            <FileIcon Path="@file" /><span class="ellipsis">@Path.GetFileName(file)</span>
+                        </div>
+                    }
+                }
+            }
+            else
+            {
+                @ProjectRow(it, depth)
+            }
+        }
+    };
+
+    private RenderFragment ProjectRow(SolutionItem it, int depth) => __builder =>
+    {
+        var p = it.Project;
+        var key = "p:" + it.Path;
+        var open = IsOpen(key, IsStartup(it));
+        var startup = IsStartup(it);
+        <div class="row @(startup ? "on" : "")" style="padding-left:@(4 + depth * 14)px" title="@it.Path"
+             @onclick="() => ToggleProject(it)" @oncontextmenu="e => _menu = new Menu(it, e.ClientX, e.ClientY)" @oncontextmenu:preventDefault="true">
+            <span class="ch @(open ? "open" : "")"><Icon Name="chev" /></span>
+            <Icon Name="@KindIcon(p)" Class="@("k " + (p?.Kind ?? "missing"))" />
+            <span class="ellipsis">@if (startup) { <b>@it.Name</b> } else { @it.Name }</span>
+            @if (p is null)
+            {
+                <em class="warnc">@L["sol.notFound"]</em>
+            }
+            else
+            {
+                <em>@string.Join(";", p.TargetFrameworks)</em>
+            }
+            <span class="acts">
+                @if (!startup && p is not null)
+                {
+                    <button title="@L["sol.setStartup"]" @onclick="() => Ws.SetStartupProjectAsync(it)" @onclick:stopPropagation="true"><Icon Name="play" /></button>
+                }
+                <button title="@L["cmd.nuget"]" @onclick="() => OpenNuGet(it)" @onclick:stopPropagation="true"><Icon Name="package" /></button>
+            </span>
+        </div>
+        if (open && p is not null)
+        {
+            @Dependencies(it, p, depth + 1)
+            @Files(p.Directory, depth + 1)
+        }
+    };
+
+    private void ToggleProject(SolutionItem it)
+    {
+        var key = "p:" + it.Path;
+        Toggle(key, IsStartup(it));
+    }
+
+    private RenderFragment Dependencies(SolutionItem it, ProjectModel p, int depth) => __builder =>
+    {
+        var key = "d:" + p.Path;
+        var pad = 4 + depth * 14;
+        <div class="row" style="padding-left:@(pad)px" @onclick="() => Toggle(key)">
+            <span class="ch @(IsOpen(key) ? "open" : "")"><Icon Name="chev" /></span>
+            <Icon Name="deps" Class="k" />
+            <span>@L["sol.dependencies"]</span>
+            @if (p.AssetsMissing) { <em class="warnc" title="@L["sol.restoreHint"]">⚠ restore</em> }
+        </div>
+        if (!IsOpen(key)) return;
+
+        // Frameworks
+        var fk = key + ":fw";
+        <div class="row" style="padding-left:@(pad + 14)px" @onclick="() => Toggle(fk)">
+            <span class="ch @(IsOpen(fk) ? "open" : "")"><Icon Name="chev" /></span><Icon Name="cube" Class="k" />
+            <span>@L["sol.frameworks"]</span><em>@p.FrameworkReferences.Count</em>
+        </div>
+        if (IsOpen(fk))
+        {
+            foreach (var fw in p.FrameworkReferences)
+            {
+                <div class="row nested" style="padding-left:@(pad + 42)px"><Icon Name="cube" Class="k" /><span class="ellipsis">@fw</span><em>@string.Join(";", p.TargetFrameworks)</em></div>
+            }
+        }
+
+        // Pakete
+        if (p.PackageReferences.Count > 0)
+        {
+            var pk = key + ":pk";
+            <div class="row" style="padding-left:@(pad + 14)px" @onclick="() => Toggle(pk)">
+                <span class="ch @(IsOpen(pk) ? "open" : "")"><Icon Name="chev" /></span><Icon Name="package" Class="k" />
+                <span>@L["sol.packages"]</span><em>@p.PackageReferences.Count</em>
+            </div>
+            if (IsOpen(pk))
+            {
+                foreach (var pkg in p.PackageReferences)
+                {
+                    @PackageRow(p, pkg, depth + 2, pk, new HashSet<string>(StringComparer.OrdinalIgnoreCase))
+                }
+                var transitive = p.ResolvedPackages.Where(r => r.IsTransitive).ToList();
+                if (transitive.Count > 0)
+                {
+                    var tk = pk + ":t";
+                    <div class="row nested" style="padding-left:@(pad + 28)px" @onclick="() => Toggle(tk)">
+                        <span class="ch @(IsOpen(tk) ? "open" : "")"><Icon Name="chev" /></span><Icon Name="layers" Class="k" />
+                        <span>@L["sol.transitive"]</span><em>@transitive.Count</em>
+                    </div>
+                    if (IsOpen(tk))
+                    {
+                        foreach (var t in transitive.OrderBy(t => t.Id, StringComparer.OrdinalIgnoreCase))
+                        {
+                            <div class="row nested" style="padding-left:@(pad + 56)px" title="@string.Join("\n", t.Dependencies)">
+                                <Icon Name="package" Class="k" /><span class="ellipsis">@t.Id</span><em class="mono">@t.Version</em>
+                            </div>
+                        }
+                    }
+                }
+            }
+        }
+
+        // Projektverweise
+        if (p.ProjectReferences.Count > 0)
+        {
+            var pr = key + ":pr";
+            <div class="row" style="padding-left:@(pad + 14)px" @onclick="() => Toggle(pr)">
+                <span class="ch @(IsOpen(pr) ? "open" : "")"><Icon Name="chev" /></span><Icon Name="link" Class="k" />
+                <span>@L["sol.projects"]</span><em>@p.ProjectReferences.Count</em>
+            </div>
+            if (IsOpen(pr))
+            {
+                foreach (var r in p.ProjectReferences)
+                {
+                    var target = Ws.Solution?.AllProjects.FirstOrDefault(x => x.Path.Equals(r, StringComparison.OrdinalIgnoreCase));
+                    <div class="row nested" style="padding-left:@(pad + 42)px" title="@r" @onclick="() => { if (target is not null) Reveal(target); }">
+                        <Icon Name="@KindIcon(target?.Project)" Class="k" /><span class="ellipsis">@Path.GetFileNameWithoutExtension(r)</span>
+                        @if (target is null) { <em class="warnc">@L["sol.notInSolution"]</em> }
+                        else { <em>@string.Join(";", target.Project?.TargetFrameworks ?? Array.Empty<string>())</em> }
+                    </div>
+                }
+            }
+        }
+
+        // Assemblies
+        if (p.AssemblyReferences.Count > 0)
+        {
+            var ar = key + ":as";
+            <div class="row" style="padding-left:@(pad + 14)px" @onclick="() => Toggle(ar)">
+                <span class="ch @(IsOpen(ar) ? "open" : "")"><Icon Name="chev" /></span><Icon Name="dll" Class="k" />
+                <span>@L["sol.assemblies"]</span><em>@p.AssemblyReferences.Count</em>
+            </div>
+            if (IsOpen(ar))
+            {
+                foreach (var a in p.AssemblyReferences)
+                {
+                    <div class="row nested" style="padding-left:@(pad + 42)px" title="@(a.Path ?? a.Name)">
+                        <Icon Name="dll" Class="k" /><span class="ellipsis">@a.Name</span>
+                        <em class="mono">@(a.Version ?? (a.Path is not null && !File.Exists(a.Path) ? "⚠" : ""))</em>
+                    </div>
+                }
+            }
+        }
+
+        // Analysatoren
+        if (p.Analyzers.Count > 0)
+        {
+            var an = key + ":an";
+            <div class="row" style="padding-left:@(pad + 14)px" @onclick="() => Toggle(an)">
+                <span class="ch @(IsOpen(an) ? "open" : "")"><Icon Name="chev" /></span><Icon Name="sparkle" Class="k" />
+                <span>@L["sol.analyzers"]</span><em>@p.Analyzers.Count</em>
+            </div>
+            if (IsOpen(an))
+            {
+                foreach (var a in p.Analyzers) { <div class="row nested" style="padding-left:@(pad + 42)px"><Icon Name="sparkle" Class="k" /><span class="ellipsis">@a</span></div> }
+            }
+        }
+    };
+
+    /// <summary>Paket mit Versions-Badge; aufgeklappt: DLLs (mit Assembly-Version) und Abhängigkeiten.</summary>
+    private RenderFragment PackageRow(ProjectModel p, PackageDependency pkg, int depth, string parentKey, HashSet<string> seen) => __builder =>
+    {
+        var key = parentKey + ":" + pkg.Id;
+        var installed = NuGet.Find(pkg.Id);
+        var resolved = p.ResolvedPackages.FirstOrDefault(r => r.Id.Equals(pkg.Id, StringComparison.OrdinalIgnoreCase)) ?? pkg;
+        var hasKids = resolved.Dependencies.Count > 0 || resolved.Assemblies.Count > 0;
+        <div class="row" style="padding-left:@(4 + depth * 14)px" title="@pkg.Id @pkg.Version" @onclick="() => Toggle(key)">
+            <span class="ch @(IsOpen(key) ? "open" : "")">@if (hasKids) { <Icon Name="chev" /> }</span>
+            <Icon Name="package" Class="k pkg" />
+            <span class="ellipsis">@pkg.Id</span>
+            <em class="mono">@resolved.Version</em>
+            @if (installed?.HasUpdate == true) { <em class="upc" title="@L["nuget.updates"]">↑ @installed.Latest</em> }
+        </div>
+        if (!IsOpen(key) || !seen.Add(pkg.Id)) return;
+        foreach (var dll in resolved.Assemblies)
+        {
+            if (!_dllVersions.TryGetValue(dll, out var v)) _dllVersions[dll] = v = ProjectModel.VersionOf(dll);
+            <div class="row nested" style="padding-left:@(4 + (depth + 1) * 14 + 14)px" title="@dll">
+                <Icon Name="dll" Class="k" /><span class="ellipsis">@Path.GetFileName(dll)</span><em class="mono">@(v ?? "")</em>
+            </div>
+        }
+        foreach (var d in resolved.Dependencies)
+        {
+            var id = d.Split(' ')[0];
+            var dep = p.ResolvedPackages.FirstOrDefault(r => r.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+            if (dep is null) continue;
+            @PackageRow(p, dep, depth + 1, key, seen)
+        }
+    };
+
+    private RenderFragment Files(string dir, int depth) => __builder =>
+    {
+        if (!_trees.TryGetValue(dir, out var t) || t.Version != Ws.ScanVersion)
+        {
+            t = (Ws.ScanVersion, ProjectIndex.BuildTree(dir));
+            _trees[dir] = t;
+        }
+        @Dir(t.Tree, depth)
+    };
+
+    private RenderFragment Dir(FileNode dir, int depth) => __builder =>
+    {
+        var filter = _filter.Trim();
+        foreach (var c in dir.Children)
+        {
+            var node = c;
+            if (node.IsDirectory)
+            {
+                if (filter.Length > 0 && !HasMatch(node, filter)) continue;
+                var key = "dir:" + node.FullPath;
+                var open = IsOpen(key);
+                <div class="row" style="padding-left:@(4 + depth * 14)px" @onclick="() => Toggle(key)">
+                    <span class="ch @(open ? "open" : "")"><Icon Name="chev" /></span>
+                    <Icon Name="@(node.Name.Equals("Properties", StringComparison.OrdinalIgnoreCase) ? "gear" : open ? "folderopen" : "folder")" Class="k fld" />
+                    <span class="ellipsis">@node.Name</span>
+                </div>
+                if (open)
+                {
+                    @Dir(node, depth + 1)
+                }
+            }
+            else
+            {
+                if (filter.Length > 0 && !node.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)) continue;
+                if (node.Name.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)) continue;
+                var isActive = Ws.Active?.Path.Equals(node.FullPath, StringComparison.OrdinalIgnoreCase) == true;
+                var nestedKey = "n:" + node.FullPath;
+                var hasNested = node.Nested.Count > 0;
+                <div class="row @(isActive ? "on" : "")" style="padding-left:@(4 + depth * 14)px" title="@node.FullPath" @onclick="() => Ws.Open(node.FullPath)">
+                    <span class="ch @(IsOpen(nestedKey) ? "open" : "")" @onclick="() => Toggle(nestedKey)" @onclick:stopPropagation="true">@if (hasNested) { <Icon Name="chev" /> }</span>
+                    <FileIcon Path="@node.Name" /><span class="ellipsis">@node.Name</span>
+                    @if (Ws.Documents.FirstOrDefault(d => d.Path.Equals(node.FullPath, StringComparison.OrdinalIgnoreCase)) is { IsDirty: true }) { <span class="badge">●</span> }
+                </div>
+                if (hasNested && IsOpen(nestedKey))
+                {
+                    foreach (var n in node.Nested)
+                    {
+                        var nested = n;
+                        <div class="row nested" style="padding-left:@(18 + depth * 14)px" @onclick="() => Ws.Open(nested.FullPath)">
+                            <span class="ch"></span><FileIcon Path="@nested.Name" /><span class="ellipsis">@nested.Name</span>
+                        </div>
+                    }
+                }
+            }
+        }
+    };
+
+    private static bool HasMatch(FileNode dir, string filter) =>
+        dir.Children.Any(c => c.IsDirectory ? HasMatch(c, filter) : c.Name.Contains(filter, StringComparison.OrdinalIgnoreCase));
+
+    private static string KindIcon(ProjectModel? p) => p?.Kind switch
+    {
+        "web" => "globe",
+        "test" => "checkc",
+        "exe" => "terminal",
+        null => "alert",
+        _ => "cube",
+    };
+
+    private void Reveal(SolutionItem target)
+    {
+        _closed.Remove("p:" + target.Path);
+        _open.Add("p:" + target.Path);
+    }
+
+    private async Task Build(SolutionItem it)
+    {
+        BottomPanel.Show?.Invoke(BottomTab.Output);
+        Ws.SaveAll();
+        var code = await Run.ExecAsync(Path.GetDirectoryName(it.Path)!, "build", it.Path, "-nologo", "-v", "q");
+        Ui.ShowToast(code == 0 ? L.F("sol.buildOk", it.Name) : L.F("sol.buildFailed", it.Name), code == 0 ? ToastKind.Success : ToastKind.Error);
+        Ws.Rescan();
+    }
+
+    private Task OpenNuGet(SolutionItem it)
+    {
+        NuGet.TargetProject = it.Path;
+        Ui.OpenOverlay("nuget");
+        return Task.CompletedTask;
+    }
+}

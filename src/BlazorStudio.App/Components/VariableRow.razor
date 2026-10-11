@@ -1,0 +1,45 @@
+@inject DebugService Debug
+
+<div class="vr" style="padding-left:@(10 + Depth * 16)px" title="@Variable.Value">
+    @if (Variable.HasChildren)
+    {
+        <span class="tw" @onclick="Toggle"><Icon Name="@(_open ? "chevd" : "chev")" /></span>
+    }
+    else
+    {
+        <span class="tw"></span>
+    }
+    <span class="n">@Variable.Name</span>
+    <span class="v @ValueClass">@Variable.Value</span>
+    @if (Variable.Type is not null) { <span class="t">@ShortType(Variable.Type)</span> }
+</div>
+@if (_open && _children is not null)
+{
+    @foreach (var c in _children)
+    {
+        <VariableRow Variable="c" Depth="Depth + 1" />
+    }
+}
+
+@code {
+    [Parameter, EditorRequired] public BlazorStudio.Core.Debugging.VariableInfo Variable { get; set; } = default!;
+
+    [Parameter] public int Depth { get; set; }
+
+    private bool _open;
+    private IReadOnlyList<BlazorStudio.Core.Debugging.VariableInfo>? _children;
+
+    private string ValueClass => Variable.Value.StartsWith('"') ? "str" : double.TryParse(Variable.Value, CultureInfo.InvariantCulture, out _) ? "num" : "";
+
+    private async Task Toggle()
+    {
+        _open = !_open;
+        if (_open && _children is null)
+        {
+            try { _children = await Debug.Session.GetVariablesAsync(Variable.VariablesReference); }
+            catch (Exception) { _children = Array.Empty<BlazorStudio.Core.Debugging.VariableInfo>(); }
+        }
+    }
+
+    private static string ShortType(string t) => t.Length > 32 ? t[..31] + "…" : t;
+}

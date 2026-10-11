@@ -1,0 +1,15 @@
+@* Projekt-CSS für die Vorschau. Rendert nur neu, wenn sich das CSS wirklich ändert. *@
+<style>@((MarkupString)Css)</style>
+
+@code {
+    [Parameter] public string Css { get; set; } = "";
+
+    private string? _last;
+
+    protected override bool ShouldRender()
+    {
+        if (_last == Css) return false;
+        _last = Css;
+        return true;
+    }
+}

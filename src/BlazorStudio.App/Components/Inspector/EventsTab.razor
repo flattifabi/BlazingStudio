@@ -1,0 +1,158 @@
+@inject Workspace Ws
+@inject DesignActions Design
+@inject Localizer L
+
+@{
+    var candidates = BindingScope.Collect(Session.Doc!, Node, Ws.MembersFor(Session));
+    var methods = BindingScope.Methods(candidates).ToList();
+}
+
+@if (Node.Kind == NodeKind.Component)
+{
+    var callbacks = Definition?.Parameters.Where(p => p.Editor == ValueEditor.Callback).ToList() ?? new List<ParameterDefinition>();
+    <div class="evg">
+        <h6>@L.F("events.callbacksOf", Node.Name)</h6>
+        @if (callbacks.Count == 0)
+        {
+            <div class="hint"><Icon Name="info" />@L["events.noCallbacks"]</div>
+        }
+        @foreach (var p in callbacks)
+        {
+            var param = p;
+            <EventRow Name="@param.Name" ArgsType="@param.CallbackArgument" Value="@Node.GetAttribute(param.Name)" Methods="methods"
+                      OnSet="v => Design.SetAttribute(Node, param.Name, v)"
+                      OnCreate="() => Design.CreateHandler(Node, param.Name, param.CallbackArgument)"
+                      OnGoTo="GoToMethod" />
+        }
+    </div>
+}
+else
+{
+    var tag = Node.Name.ToLowerInvariant();
+    var groups = HtmlSchema.EventGroupsFor(tag);
+    @foreach (var g in groups)
+    {
+        var group = g;
+        var events = HtmlSchema.Events.Where(e => e.Group == group).ToList();
+        var assigned = events.Count(e => Node.HasAttribute("\u0040" + e.Name));
+        var expanded = _expanded.Contains(group) || assigned > 0 || groups.Take(2).Contains(group);
+        <div class="evg">
+            <h6>
+                @L["evgroup." + group]
+                @if (assigned > 0) { <span class="cnt">@assigned</span> }
+                <button @onclick="() => ToggleGroup(group)">@(expanded ? "−" : "+")</button>
+            </h6>
+            @if (expanded)
+            {
+                @foreach (var e in events)
+                {
+                    var ev = e;
+                    var attr = "\u0040" + ev.Name;
+                    if (!expanded) continue;
+                    <EventRow Name="@attr" ArgsType="@ev.ArgsType" Value="@Node.GetAttribute(attr)" Methods="methods"
+                              Modifiers="Modifiers" ActiveModifiers="ActiveMods(attr)"
+                              OnSet="v => SetEvent(attr, v)"
+                              OnCreate="() => Design.CreateHandler(Node, attr, ev.ArgsType)"
+                              OnToggleModifier="m => ToggleModifier(attr, m)"
+                              OnGoTo="GoToMethod" />
+                }
+            }
+        </div>
+    }
+}
+
+<div class="evg">
+    <h6>@L["events.directives"]</h6>
+    <div class="ev @(Node.HasAttribute("\u0040ref") ? "set" : "")">
+        <code>@@ref</code>
+        @if (Node.GetAttribute("\u0040ref") is { } r)
+        {
+            <div class="f set"><input class="mono" value="@r" spellcheck="false" @onchange='e => Design.SetAttribute(Node, "\u0040ref", e.Value?.ToString())' />
+                <span class="clr" @onclick='() => Design.SetAttribute(Node, "\u0040ref", null)'><Icon Name="x" /></span></div>
+        }
+        else
+        {
+            <button class="add" @onclick="CreateRef">+ @L["events.createRef"]</button>
+        }
+    </div>
+    <div class="ev @(Node.HasAttribute("\u0040key") ? "set" : "")">
+        <code>@@key</code>
+        <div class="f @(Node.HasAttribute("\u0040key") ? "set" : "")">
+            <input class="mono" value="@Node.GetAttribute("\u0040key")" placeholder="item.Id" spellcheck="false" @onchange='e => Design.SetAttribute(Node, "\u0040key", e.Value?.ToString())' />
+        </div>
+    </div>
+    @if (Node.Kind == NodeKind.Element)
+    {
+        <div class="ev @(Node.HasAttribute("\u0040attributes") ? "set" : "")">
+            <code>@@attributes</code>
+            <div class="f @(Node.HasAttribute("\u0040attributes") ? "set" : "")">
+                <input class="mono" value="@Node.GetAttribute("\u0040attributes")" placeholder="AdditionalAttributes" spellcheck="false" @onchange='e => Design.SetAttribute(Node, "\u0040attributes", e.Value?.ToString())' />
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public DocumentSession Session { get; set; } = default!;
+
+    [Parameter, EditorRequired] public DesignNode Node { get; set; } = default!;
+
+    [Parameter] public ComponentDefinition? Definition { get; set; }
+
+    private static readonly IReadOnlyList<string> Modifiers = new[] { "preventDefault", "stopPropagation" };
+    private readonly HashSet<string> _expanded = new();
+
+    private void ToggleGroup(string g)
+    {
+        if (!_expanded.Remove(g)) _expanded.Add(g);
+    }
+
+    private IReadOnlyCollection<string> ActiveMods(string attr) =>
+        Modifiers.Where(m => Node.HasAttribute(attr + ":" + m)).ToList();
+
+    private void SetEvent(string attr, string? value) => Design.Mutate(Node, n =>
+    {
+        n.SetAttribute(attr, string.IsNullOrWhiteSpace(value) ? null : value);
+        if (value is null) foreach (var m in Modifiers) n.RemoveAttribute(attr + ":" + m);
+    }, "ev:" + attr);
+
+    private void ToggleModifier(string attr, string mod) => Design.Mutate(Node, n =>
+    {
+        var name = attr + ":" + mod;
+        if (n.HasAttribute(name)) n.RemoveAttribute(name);
+        else n.SetAttribute(name, null, removeIfNull: false);
+    });
+
+    private void CreateRef()
+    {
+        var type = Node.Kind == NodeKind.Component ? Node.Name : "ElementReference";
+        var baseName = "_" + char.ToLowerInvariant(Node.Name[0]) + Node.Name[1..] + "Ref";
+        Design.CreateField(Node, type, baseName, "\u0040ref");
+    }
+
+    /// <summary>Zur Methode im Code springen (Code-Behind oder @code).</summary>
+    private void GoToMethod(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return;
+        var pattern = new System.Text.RegularExpressions.Regex($@"\b{System.Text.RegularExpressions.Regex.Escape(name)}\s*\(");
+        if (Ws.CodeBehindPath(Session) is { } cb)
+        {
+            var text = Ws.Documents.FirstOrDefault(d => d.Path.Equals(cb, StringComparison.OrdinalIgnoreCase))?.Text ?? Workspace.ReadText(cb) ?? "";
+            var m = pattern.Match(text);
+            if (m.Success)
+            {
+                var doc = Ws.Open(cb, LineOf(text, m.Index));
+                return;
+            }
+        }
+        var mm = pattern.Matches(Session.Text).LastOrDefault();
+        if (mm is not null)
+        {
+            if (Session.View == ViewMode.Design) Session.View = ViewMode.Split;
+            Session.RevealLine = LineOf(Session.Text, mm.Index);
+            Ws.Activate(Session);
+        }
+    }
+
+    private static int LineOf(string text, int index) => text.Take(index).Count(c => c == '\n') + 1;
+}

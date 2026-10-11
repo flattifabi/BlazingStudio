@@ -1,0 +1,95 @@
+@inject Workspace Ws
+@inject UiService Ui
+@inject Localizer L
+@inject IHostBridge Host
+
+<div class="f side-search"><Icon Name="search" Class="sm dim" /><input placeholder="@L["files.filter"]" @bind="_filter" @bind:event="oninput" /></div>
+<div class="scroll" style="flex:1">
+    @if (Ws.Project is { } p)
+    {
+        <div class="tree">
+            @RenderDir(p.Tree, 0, root: true)
+        </div>
+    }
+</div>
+
+@code {
+    private static readonly HashSet<string> Expanded = new(StringComparer.OrdinalIgnoreCase);
+    private string _filter = "";
+
+    private RenderFragment RenderDir(FileNode dir, int depth, bool root = false) => __builder =>
+    {
+        var filter = _filter.Trim();
+        var children = dir.Children;
+        foreach (var c in children)
+        {
+            var node = c;
+            if (node.IsDirectory)
+            {
+                if (filter.Length > 0 && !HasMatch(node, filter)) continue;
+                var open = filter.Length > 0 || Expanded.Contains(node.FullPath) || (root && Expanded.Count == 0 && node.Name is "Components" or "Pages");
+                <div class="row" style="padding-left:@(6 + depth * 14)px" @onclick="() => Toggle(node)">
+                    <span class="ch @(open ? "open" : "")"><Icon Name="chev" /></span>
+                    <Icon Name="@(open ? "folderopen" : "folder")" Class="k" />
+                    <span class="ellipsis">@node.Name</span>
+                    <span class="acts">
+                        <button title="@L["cmd.newComponent"]" @onclick="() => NewIn(node)" @onclick:stopPropagation="true"><Icon Name="filenew" /></button>
+                        <button title="@L["cmd.reveal"]" @onclick="() => Host.RevealInExplorer(node.FullPath)" @onclick:stopPropagation="true"><Icon Name="ext" /></button>
+                    </span>
+                </div>
+                if (open)
+                {
+                    @RenderDir(node, depth + 1)
+                }
+            }
+            else
+            {
+                if (filter.Length > 0 && !node.Name.Contains(filter, StringComparison.OrdinalIgnoreCase) && !node.Nested.Any(n => n.Name.Contains(filter, StringComparison.OrdinalIgnoreCase))) continue;
+                var isActive = Ws.Active?.Path.Equals(node.FullPath, StringComparison.OrdinalIgnoreCase) == true;
+                var hasNested = node.Nested.Count > 0;
+                var nestedOpen = Expanded.Contains(node.FullPath) || filter.Length > 0;
+                <div class="row @(isActive ? "on" : "")" style="padding-left:@(6 + depth * 14)px" title="@node.FullPath" @onclick="() => Ws.Open(node.FullPath)">
+                    <span class="ch @(nestedOpen ? "open" : "")" @onclick="() => ToggleNested(node)" @onclick:stopPropagation="true">@if (hasNested) { <Icon Name="chev" /> }</span>
+                    <FileIcon Path="@node.Name" />
+                    <span class="ellipsis">@node.Name</span>
+                    @if (Ws.Documents.FirstOrDefault(d => d.Path.Equals(node.FullPath, StringComparison.OrdinalIgnoreCase)) is { IsDirty: true })
+                    {
+                        <span class="badge">●</span>
+                    }
+                </div>
+                if (hasNested && nestedOpen)
+                {
+                    foreach (var n in node.Nested)
+                    {
+                        var nested = n;
+                        var nestedActive = Ws.Active?.Path.Equals(nested.FullPath, StringComparison.OrdinalIgnoreCase) == true;
+                        <div class="row nested @(nestedActive ? "on" : "")" style="padding-left:@(20 + depth * 14)px" @onclick="() => Ws.Open(nested.FullPath)">
+                            <span class="ch"></span><FileIcon Path="@nested.Name" /><span class="ellipsis">@nested.Name</span>
+                        </div>
+                    }
+                }
+            }
+        }
+    };
+
+    private static bool HasMatch(FileNode dir, string filter) =>
+        dir.Children.Any(c => c.IsDirectory ? HasMatch(c, filter) : c.Name.Contains(filter, StringComparison.OrdinalIgnoreCase));
+
+    private void Toggle(FileNode d)
+    {
+        if (Expanded.Count == 0 && Ws.Project is not null)
+            foreach (var c in Ws.Project.Tree.Children.Where(c => c.IsDirectory && c.Name is "Components" or "Pages")) Expanded.Add(c.FullPath);
+        if (!Expanded.Remove(d.FullPath)) Expanded.Add(d.FullPath);
+    }
+
+    private void ToggleNested(FileNode f)
+    {
+        if (!Expanded.Remove(f.FullPath)) Expanded.Add(f.FullPath);
+    }
+
+    private void NewIn(FileNode dir)
+    {
+        NewComponentDialog.PresetFolder = dir.FullPath;
+        Ui.OpenOverlay("newComponent");
+    }
+}

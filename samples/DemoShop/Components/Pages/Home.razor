@@ -1,0 +1,31 @@
+@page "/"
+@inject ISupportRequiredService Support
+
+<PageTitle>Home</PageTitle>
+
+<section class="hero">
+    <h1>Willkommen im Shop</h1>
+    <button type="button">Button</button>
+    <p class="lead">Handgemachte Produkte, direkt aus Österreich.</p>
+    <button type="button" @onmouseup="OnButtonMouseup">@cartCount</button>
+    <MudDropZone T="string" />
+    <MudDropZone T="string" />
+    <MudDropZone T="string" />
+    <div class="actions">
+        <button class="btn btn-primary" @onclick="GoToShop">Jetzt einkaufen</button>
+        <button class="btn btn-outline-secondary">Mehr erfahren</button>
+    </div>
+</section>
+
+<HeaderCell T="string">
+    <MudBreakpointProvider />
+</HeaderCell>
+
+<div class="grid">
+    @foreach (var p in products)
+    {
+        <ProductCard Product="p" ShowPrice="true" OnAddToCart="AddToCart" />
+    }
+</div>
+
+<p>Im Warenkorb: @cartCount</p>

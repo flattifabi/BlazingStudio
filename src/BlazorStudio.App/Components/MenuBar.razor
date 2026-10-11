@@ -1,0 +1,64 @@
+@* Klassische Menüleiste (Datei, Bearbeiten, Ansicht …) – alle Einträge kommen aus den Shell-Befehlen. *@
+@inherits StudioComponent
+
+@if (_open is not null)
+{
+    <div class="click-catcher" @onclick="() => _open = null"></div>
+}
+<nav class="menubar @(_open is not null ? "active" : "")">
+    @foreach (var m in Menus)
+    {
+        var menu = m;
+        <div class="mbw">
+            <button class="mb @(_open == menu.Key ? "on" : "")"
+                    @onclick="() => _open = _open == menu.Key ? null : menu.Key"
+                    @onmouseenter="() => { if (_open is not null) _open = menu.Key; }">@L["menu." + menu.Key]</button>
+            @if (_open == menu.Key)
+            {
+                <div class="pop menu-pop mbpop">
+                    @foreach (var id in menu.Items)
+                    {
+                        if (id == "-")
+                        {
+                            <div class="sep"></div>
+                            continue;
+                        }
+                        var cmd = Shell.Commands.FirstOrDefault(c => c.Id == id);
+                        if (cmd is null) continue;
+                        var enabled = cmd.Enabled?.Invoke() != false;
+                        <button class="mi" disabled="@(!enabled)" @onclick="() => Run(cmd.Id)">
+                            <Icon Name="@cmd.Icon" />@L[cmd.LabelKey]@if (cmd.Keys is not null) { <kbd>@cmd.Keys</kbd> }
+                        </button>
+                    }
+                </div>
+            }
+        </div>
+    }
+</nav>
+
+@code {
+    [CascadingParameter] public Shell Shell { get; set; } = default!;
+
+    private string? _open;
+
+    private sealed record Menu(string Key, string[] Items);
+
+    private static readonly Menu[] Menus =
+    {
+        new("file", new[] { "file.open", "file.openSolution", "file.newProject", "file.newComponent", "-", "file.save", "file.saveAll", "file.close", "-", "file.reveal", "file.closeProject" }),
+        new("edit", new[] { "edit.undo", "edit.redo", "-", "edit.cut", "edit.copy", "edit.paste", "edit.duplicate", "edit.delete", "-", "edit.wrap", "edit.wrapFlex", "edit.unwrap", "-", "edit.parent", "edit.moveUp", "edit.moveDown" }),
+        new("view", new[] { "view.design", "view.split", "view.code", "-", "view.toolbox", "view.bottom", "view.terminal", "view.newTerminal", "view.problems", "view.nugetPanel", "view.zoomIn", "view.zoomOut", "view.zoomReset", "-", "view.theme", "view.lang", "-", "go.files", "go.commands" }),
+        new("project", new[] { "file.newComponent", "tools.nuget", "tools.ef", "run.publish", "-", "file.rescan", "file.reveal" }),
+        new("build", new[] { "run.build", "run.publish", "-", "run.start", "run.startNoHot", "run.restart", "run.stop", "-", "run.browser" }),
+        new("debug", new[] { "run.debug", "run.stop", "run.restart", "-", "debug.over", "debug.into", "debug.out", "-", "tools.profiler" }),
+        new("git", new[] { "git.commitView", "git.logView", "-", "git.pull", "git.push", "git.fetch", "-", "git.newBranch", "git.stash", "git.unstash", "-", "git.remote", "git.init" }),
+        new("tools", new[] { "tools.nuget", "tools.ef", "tools.profiler", "-", "settings" }),
+        new("help", new[] { "help.shortcuts", "help.docs", "help.efdocs", "help.debugger", "-", "help.updates", "help.about" }),
+    };
+
+    private async Task Run(string id)
+    {
+        _open = null;
+        await Shell.ExecuteAsync(id);
+    }
+}

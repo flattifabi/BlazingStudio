@@ -1,0 +1,440 @@
+@implements IDisposable
+@inject Workspace Ws
+@inject UiService Ui
+@inject Localizer L
+@inject SettingsService Settings
+@inject RunService Run
+@inject DebugService Debug
+@inject DesignActions Design
+@inject IHostBridge Host
+@inject IJSRuntime JS
+@inject GitService Git
+@inject UpdateService Updates
+@inject TerminalService Term
+
+<CascadingValue Value="this" IsFixed="true">
+    <div class="shell @(Ws.HasProject ? "" : "no-project") @(Settings.Current.BottomCollapsed && Ws.HasProject ? "bottom-collapsed" : "") @(Settings.Current.ToolboxCollapsed ? "no-toolbox" : "")"
+         style="--side-w:@(Settings.Current.SideWidth)px; --bottom-h:@(Settings.Current.BottomHeight)px; --tool-w:@(Settings.Current.ToolboxWidth)px">
+        <TopBar />
+        @if (Ws.HasProject)
+        {
+            <ToolStrip />
+            @if (!Settings.Current.ToolboxCollapsed) { <Toolbox /> }
+            <DocumentArea />
+            <BottomPanel />
+            <SidePanel />
+        }
+        else
+        {
+            <section class="island doc"><WelcomeScreen /></section>
+        }
+        <StatusBar />
+    </div>
+
+    <CommandPalette />
+    <DialogHost />
+    <ContextMenu />
+    <PopupMenu />
+    <Toasts />
+    @switch (Ui.Overlay)
+    {
+        case "newComponent": <NewComponentDialog /> break;
+        case "newProject": <NewProjectDialog /> break;
+        case "settings": <SettingsDialog /> break;
+        case "nuget": <NuGetDialog /> break;
+        case "ef": <EfCoreDialog /> break;
+        case "profiler": <ProfilerDialog /> break;
+        case "publish": <PublishDialog /> break;
+        case "update": <UpdateDialog /> break;
+    }
+</CascadingValue>
+
+@code {
+    private DotNetObjectReference<Shell>? _ref;
+
+    public sealed record Command(string Id, string LabelKey, string Icon, string? Keys, Func<Task> Run, Func<bool>? Enabled = null);
+
+    public List<Command> Commands { get; private set; } = new();
+
+    protected override void OnInitialized()
+    {
+        L.SetLanguage(Settings.Current.Language);
+        Ws.Changed += Refresh;
+        Ui.Changed += Refresh;
+        Run.Changed += Refresh;
+        Debug.Changed += Refresh;
+        L.Changed += Refresh;
+        Settings.Changed += Refresh;
+        BuildCommands();
+    }
+
+    private void Refresh() => InvokeAsync(StateHasChanged);
+
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if (!first) return;
+        _ref = DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("studio.registerShortcuts", _ref);
+        await JS.InvokeVoidAsync("studio.initSplitters", _ref);
+        await ApplyThemeAsync();
+        _ = Updates.CheckOnStartupAsync();
+
+        // BlazorStudio.exe <Projektordner>
+        var args = Environment.GetCommandLineArgs();
+        if (args.Length > 1 && (Directory.Exists(args[1]) || File.Exists(args[1])) && !Ws.HasProject) await Ws.OpenProjectAsync(Path.GetFullPath(args[1]));
+    }
+
+    [JSInvokable]
+    public void OnJsError(string message) => Run.Write("[UI] " + message, OutputKind.Error);
+
+    // ------------------------------------------------------------------
+    // Theme
+    // ------------------------------------------------------------------
+
+    public string EffectiveTheme { get; private set; } = "dark";
+
+    public async Task ApplyThemeAsync()
+    {
+        var mode = Settings.Current.ThemeMode;
+        if (mode == "system") EffectiveTheme = await JS.InvokeAsync<bool>("studio.prefersLight") ? "light" : "dark";
+        else EffectiveTheme = mode == "light" ? "light" : "dark";
+        Settings.Current.Theme = EffectiveTheme;
+        await JS.InvokeVoidAsync("studio.setTheme", EffectiveTheme, Settings.Current.Accent, Settings.Current.EditorScheme);
+        Host.SetDarkTitleBar(EffectiveTheme == "dark");
+    }
+
+    public async Task SetThemeModeAsync(string mode)
+    {
+        Settings.Current.ThemeMode = mode;
+        Settings.Save();
+        await ApplyThemeAsync();
+    }
+
+    public async Task SetAccentAsync(string accent)
+    {
+        Settings.Current.Accent = accent;
+        Settings.Save();
+        await ApplyThemeAsync();
+    }
+
+    public void SetLanguage(string lang)
+    {
+        Settings.Current.Language = lang;
+        Settings.Save();
+        L.SetLanguage(lang);
+        BuildCommands();
+    }
+
+    [JSInvokable]
+    public async Task OnSystemThemeChanged()
+    {
+        if (Settings.Current.ThemeMode == "system") await ApplyThemeAsync();
+    }
+
+    [JSInvokable]
+    public void OnSplitterChanged(string kind, int value)
+    {
+        if (kind == "side") Settings.Current.SideWidth = value;
+        else if (kind == "bottom") Settings.Current.BottomHeight = value;
+        else if (kind == "tool") Settings.Current.ToolboxWidth = value;
+        Settings.Save();
+    }
+
+    // ------------------------------------------------------------------
+    // Befehle
+    // ------------------------------------------------------------------
+
+    private DocumentSession? Active => Ws.Active;
+
+    private bool IsRazor => Active?.Kind == DocumentKind.Razor;
+
+    private void BuildCommands()
+    {
+        Commands = new List<Command>
+        {
+            new("file.open", "cmd.openProject", "folderopen", "Ctrl+O", OpenProjectAsync),
+            new("file.openSolution", "cmd.openSolution", "sln", null, OpenSolutionAsync),
+            new("file.newProject", "cmd.newProject", "foldernew", null, () => { Ui.OpenOverlay("newProject"); return Task.CompletedTask; }),
+            new("file.newComponent", "cmd.newComponent", "filenew", "Ctrl+N", () => { Ui.OpenOverlay("newComponent"); return Task.CompletedTask; }, () => Ws.HasProject),
+            new("file.save", "cmd.save", "save", "Ctrl+S", SaveAsync, () => Active is not null),
+            new("file.saveAll", "cmd.saveAll", "save", "Ctrl+Shift+S", () => { Ws.SaveAll(); return Task.CompletedTask; }, () => Ws.Documents.Any(d => d.IsDirty)),
+            new("file.close", "cmd.closeTab", "x", "Ctrl+W", async () => { if (Active is not null) await Ws.CloseAsync(Active); }, () => Active is not null),
+            new("file.closeProject", "cmd.closeProject", "x", null, async () => await Ws.CloseProjectAsync(), () => Ws.HasProject),
+            new("tools.nuget", "cmd.nuget", "package", "Ctrl+Shift+N", () => { Ui.OpenOverlay("nuget"); return Task.CompletedTask; }, () => Ws.Project?.ProjectFile is not null),
+            new("tools.profiler", "cmd.profiler", "activity", "Alt+F2", () => { Ui.OpenOverlay("profiler"); return Task.CompletedTask; }),
+            new("tools.ef", "cmd.ef", "database", null, () => { Ui.OpenOverlay("ef"); return Task.CompletedTask; }, () => Ws.Solution is not null),
+            new("file.rescan", "cmd.rescan", "refresh", null, () => { Ws.Rescan(); return Task.CompletedTask; }, () => Ws.HasProject),
+            new("file.reveal", "cmd.reveal", "folder", null, () => { if (Active is not null) Host.RevealInExplorer(Active.Path); else if (Ws.Project is not null) Host.RevealInExplorer(Ws.Project.RootDirectory); return Task.CompletedTask; }, () => Ws.HasProject),
+
+            new("edit.undo", "cmd.undo", "undo", "Ctrl+Z", () => { Active?.Undo(); return Task.CompletedTask; }, () => Active?.CanUndo == true),
+            new("edit.redo", "cmd.redo", "redo", "Ctrl+Y", () => { Active?.Redo(); return Task.CompletedTask; }, () => Active?.CanRedo == true),
+            new("edit.delete", "cmd.delete", "trash", "Entf", () => { Design.Delete(); return Task.CompletedTask; }, HasSelection),
+            new("edit.duplicate", "cmd.duplicate", "copy", "Ctrl+D", () => { Design.Duplicate(); return Task.CompletedTask; }, HasSelection),
+            new("edit.copy", "cmd.copy", "clipboard", "Ctrl+C", CopyAsync, HasSelection),
+            new("edit.cut", "cmd.cut", "scissors", "Ctrl+X", CutAsync, HasSelection),
+            new("edit.paste", "cmd.paste", "clipboard", "Ctrl+V", PasteAsync, () => IsRazor),
+            new("edit.wrap", "cmd.wrap", "wrap", null, () => { Design.Wrap(); return Task.CompletedTask; }, HasSelection),
+            new("edit.wrapFlex", "cmd.wrapFlex", "row", null, () => { Design.Wrap("div", "display: flex; gap: 12px; align-items: center"); return Task.CompletedTask; }, HasSelection),
+            new("edit.unwrap", "cmd.unwrap", "unwrap", null, () => { Design.Unwrap(); return Task.CompletedTask; }, HasSelection),
+            new("edit.parent", "cmd.selectParent", "chevu", "Esc", () => { Design.SelectParent(); return Task.CompletedTask; }, HasSelection),
+            new("edit.moveUp", "cmd.moveUp", "up", "Alt+↑", () => { Design.Nudge(-1); return Task.CompletedTask; }, HasSelection),
+            new("edit.moveDown", "cmd.moveDown", "down", "Alt+↓", () => { Design.Nudge(1); return Task.CompletedTask; }, HasSelection),
+
+            new("view.design", "cmd.viewDesign", "design", null, () => SetView(ViewMode.Design), () => IsRazor),
+            new("view.split", "cmd.viewSplit", "split", null, () => SetView(ViewMode.Split), () => IsRazor),
+            new("view.code", "cmd.viewCode", "code", null, () => SetView(ViewMode.Code), () => IsRazor),
+            new("view.toolbox", "cmd.toggleToolbox", "blocks", "Ctrl+Alt+X", () => { Settings.Current.ToolboxCollapsed = !Settings.Current.ToolboxCollapsed; Settings.Save(); return Task.CompletedTask; }, () => Ws.HasProject),
+            new("view.bottom", "cmd.toggleBottom", "panelb", "Ctrl+J", () => { ToggleBottom(); return Task.CompletedTask; }, () => Ws.HasProject),
+            new("view.terminal", "bottom.terminal", "terminal", "Alt+F12", () => { BottomPanel.Show?.Invoke(BottomTab.Terminal); return Task.CompletedTask; }, () => Ws.HasProject),
+            new("view.newTerminal", "term.new", "plus", null, () => { Term.Open(); BottomPanel.Show?.Invoke(BottomTab.Terminal); return Task.CompletedTask; }, () => Ws.HasProject),
+            new("view.problems", "bottom.problems", "alertc", null, () => { BottomPanel.Show?.Invoke(BottomTab.Problems); return Task.CompletedTask; }, () => Ws.HasProject),
+            new("view.nugetPanel", "bottom.nuget", "package", null, () => { BottomPanel.Show?.Invoke(BottomTab.NuGet); return Task.CompletedTask; }, () => Ws.HasProject),
+            new("git.commitView", "git.commit", "commit", "Alt+0", () => { GitPanel.Request("changes"); BottomPanel.Show?.Invoke(BottomTab.Git); return Task.CompletedTask; }, () => Ws.HasProject),
+            new("git.logView", "git.log", "git", "Alt+9", () => { GitPanel.Request("log"); BottomPanel.Show?.Invoke(BottomTab.Git); return Task.CompletedTask; }, () => Ws.HasProject),
+            new("git.pull", "git.pull", "down", "Ctrl+T", () => Git.PullAsync(), () => Git.Root is not null),
+            new("git.push", "git.push", "up", "Ctrl+Shift+K", () => Git.PushAsync(), () => Git.Root is not null),
+            new("git.fetch", "git.fetch", "refresh", null, () => Git.FetchAsync(), () => Git.Root is not null),
+            new("git.newBranch", "git.newBranch", "git", null, () => Git.CreateBranchAsync(), () => Git.Root is not null),
+            new("git.stash", "git.stash", "box", null, () => Git.StashAsync(), () => Git.Root is not null),
+            new("git.unstash", "git.unstash", "box", null, () => Git.StashPopAsync(), () => Git.Root is not null && Git.Stashes.Count > 0),
+            new("git.remote", "git.remote", "globe", null, () => Git.SetRemoteAsync(), () => Git.Root is not null),
+            new("git.init", "git.init", "plus", null, () => Git.InitAsync(), () => Ws.HasProject && Git.Checked && Git.Root is null),
+            new("view.zoomIn", "cmd.zoomIn", "plus", "Ctrl+Mausrad", () => { Zoom(10); return Task.CompletedTask; }, () => IsRazor),
+            new("view.zoomOut", "cmd.zoomOut", "minus", null, () => { Zoom(-10); return Task.CompletedTask; }, () => IsRazor),
+            new("view.zoomReset", "cmd.zoomReset", "monitor", null, () => { Zoom(0); return Task.CompletedTask; }, () => IsRazor),
+            new("view.theme", "cmd.toggleTheme", "moon", null, () => SetThemeModeAsync(EffectiveTheme == "dark" ? "light" : "dark")),
+            new("view.lang", "cmd.toggleLanguage", "translate", null, () => { SetLanguage(L.Language == "de" ? "en" : "de"); return Task.CompletedTask; }),
+
+            new("run.build", "cmd.build", "hammer", "Ctrl+Shift+B", async () => await Run.BuildAsync(), () => Ws.Project?.ProjectFile is not null && Run.State != RunState.Building),
+            new("run.publish", "cmd.publish", "upload", null, () => { Ui.OpenOverlay("publish"); return Task.CompletedTask; }, () => Ws.Project?.ProjectFile is not null),
+            new("run.start", "cmd.run", "play", "Ctrl+F5", () => Run.StartAsync(), () => Ws.Project?.ProjectFile is not null && Run.State == RunState.Idle && !Debug.IsActive),
+            new("run.startNoHot", "cmd.runNoHot", "playo", null, () => Run.StartAsync(false), () => Ws.Project?.ProjectFile is not null && Run.State == RunState.Idle && !Debug.IsActive),
+            new("run.debug", "cmd.debug", "bug", "F5", DebugOrContinueAsync, () => Ws.Project?.ProjectFile is not null),
+            new("run.stop", "cmd.stop", "stop", "Shift+F5", StopAsync, () => Run.State != RunState.Idle || Debug.IsActive),
+            new("run.restart", "cmd.restart", "restart", "Ctrl+Shift+F5", RestartAsync, () => Run.State == RunState.Running || Debug.IsActive),
+            new("run.browser", "cmd.openBrowser", "ext", null, () => { if (Run.Url is not null) Host.OpenExternal(Run.Url + (Active?.Doc?.PageRoute?.TrimStart('/') ?? "")); return Task.CompletedTask; }, () => Run.Url is not null),
+            new("debug.over", "cmd.stepOver", "over", "F10", () => Debug.Session.StepOverAsync(), () => Debug.IsStopped),
+            new("debug.into", "cmd.stepInto", "into", "F11", () => Debug.Session.StepIntoAsync(), () => Debug.IsStopped),
+            new("debug.out", "cmd.stepOut", "out", "Shift+F11", () => Debug.Session.StepOutAsync(), () => Debug.IsStopped),
+
+            new("go.files", "cmd.goToFile", "search", "Ctrl+P", () => { Ui.OpenCommandPalette(""); return Task.CompletedTask; }, () => Ws.HasProject),
+            new("go.commands", "cmd.commands", "zap", "Ctrl+K", () => { Ui.OpenCommandPalette(">"); return Task.CompletedTask; }),
+            new("help.shortcuts", "cmd.helpShortcuts", "zap", "Ctrl+K", () => { Ui.OpenCommandPalette(">"); return Task.CompletedTask; }),
+            new("help.docs", "cmd.helpDocs", "ext", null, () => { Host.OpenExternal("https://learn.microsoft.com/aspnet/core/blazor/"); return Task.CompletedTask; }),
+            new("help.efdocs", "cmd.helpEfDocs", "ext", null, () => { Host.OpenExternal("https://learn.microsoft.com/ef/core/"); return Task.CompletedTask; }),
+            new("help.debugger", "cmd.helpDebugger", "bug", null, () => { Host.OpenExternal("https://github.com/Samsung/netcoredbg/releases"); return Task.CompletedTask; }),
+            new("help.updates", "upd.check", "refresh", null, CheckUpdatesAsync),
+            new("help.about", "cmd.helpAbout", "info", null, AboutAsync),
+            new("settings", "cmd.settings", "gear", "Ctrl+,", () => { Ui.OpenOverlay("settings"); return Task.CompletedTask; }),
+        };
+    }
+
+    private bool HasSelection() => IsRazor && Active?.Selected is not null;
+
+    public async Task ExecuteAsync(string id)
+    {
+        var c = Commands.FirstOrDefault(x => x.Id == id);
+        if (c is null || c.Enabled?.Invoke() == false) return;
+        try
+        {
+            await c.Run();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            Ui.ShowToast(e.Message, ToastKind.Error, 6000);
+        }
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public async Task OnShortcut(string combo)
+    {
+        var id = combo switch
+        {
+            "ctrl+s" => "file.save",
+            "ctrl+shift+s" => "file.saveAll",
+            "ctrl+o" => "file.open",
+            "ctrl+n" => "file.newComponent",
+            "ctrl+w" => "file.close",
+            "ctrl+z" => "edit.undo",
+            "ctrl+y" or "ctrl+shift+z" => "edit.redo",
+            "delete" or "backspace" => "edit.delete",
+            "ctrl+d" => "edit.duplicate",
+            "ctrl+c" => "edit.copy",
+            "ctrl+x" => "edit.cut",
+            "ctrl+v" => "edit.paste",
+            "escape" => Ui.CommandPaletteOpen || Ui.Overlay is not null || Ui.Dialog is not null ? "close" : "edit.parent",
+            "alt+arrowup" => "edit.moveUp",
+            "alt+arrowdown" => "edit.moveDown",
+            "enter" => "child",
+            "ctrl+p" => "go.files",
+            "ctrl+k" or "ctrl+shift+p" => "go.commands",
+            "ctrl+comma" => "settings",
+            "ctrl+shift+b" => "run.build",
+            "ctrl+shift+n" => "tools.nuget",
+            "alt+f2" => "tools.profiler",
+            "f5" => "run.debug",
+            "ctrl+f5" => "run.start",
+            "shift+f5" => "run.stop",
+            "ctrl+shift+f5" => "run.restart",
+            "f10" => "debug.over",
+            "f11" => "debug.into",
+            "shift+f11" => "debug.out",
+            "ctrl+j" => "view.bottom",
+            "alt+f12" => "view.terminal",
+            "alt+0" => "git.commitView",
+            "alt+9" => "git.logView",
+            "ctrl+t" => "git.pull",
+            "ctrl+shift+k" => "git.push",
+            "ctrl+alt+x" => "view.toolbox",
+            "zoomin" => "view.zoomIn",
+            "zoomout" => "view.zoomOut",
+            "ctrl+tab" => "nextTab",
+            "ctrl+shift+tab" => "prevTab",
+            "f9" => "breakpoint",
+            _ => null,
+        };
+        switch (id)
+        {
+            case null: return;
+            case "close":
+                Ui.CloseCommandPalette();
+                Ui.CloseOverlay();
+                Ui.CloseDialog(DialogResult.Cancel);
+                Design.CloseContextMenu();
+                return;
+            case "child":
+                Design.SelectFirstChild();
+                return;
+            case "nextTab":
+            case "prevTab":
+                if (Ws.Documents.Count > 1 && Active is not null)
+                {
+                    var i = Ws.Documents.IndexOf(Active) + (id == "nextTab" ? 1 : -1);
+                    Ws.Activate(Ws.Documents[(i + Ws.Documents.Count) % Ws.Documents.Count]);
+                }
+                return;
+            case "breakpoint":
+                return;
+        }
+        await ExecuteAsync(id);
+    }
+
+    [JSInvokable]
+    public Task OnEditorShortcut(string combo) => OnShortcut(combo);
+
+    // ------------------------------------------------------------------
+
+    public async Task OpenProjectAsync()
+    {
+        var folder = await Host.PickFolderAsync(L["dlg.pickProject"], Ws.Project?.RootDirectory);
+        if (folder is not null) await Ws.OpenProjectAsync(folder);
+    }
+
+    private async Task CheckUpdatesAsync()
+    {
+        Ui.OpenOverlay("update");
+        await Updates.CheckAsync(manual: true);
+    }
+
+    private async Task AboutAsync()
+    {
+        var version = UpdateService.CurrentVersion;
+        await Ui.ShowDialogAsync(new DialogRequest
+        {
+            Title = "Blazor Studio " + version,
+            Message = L.F("about.text", System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription, Environment.OSVersion.VersionString),
+            OkText = L["action.ok"],
+        });
+    }
+
+    public async Task OpenSolutionAsync()
+    {
+        var file = await Host.PickFileAsync(L["cmd.openSolution"], L["dlg.solutionFilter"] + "|*.sln;*.slnx;*.csproj", Ws.RootDirectory);
+        if (file is not null) await Ws.OpenProjectAsync(file);
+    }
+
+    private Task SaveAsync()
+    {
+        if (Active is not null && Ws.Save(Active)) Ui.ShowToast(L.F("toast.saved", Active.Name), ToastKind.Success, 1400);
+        return Task.CompletedTask;
+    }
+
+    private async Task CopyAsync()
+    {
+        var text = Design.Copy();
+        if (text is not null) await JS.InvokeAsync<bool>("studio.copyText", text);
+    }
+
+    private async Task CutAsync()
+    {
+        var text = Design.Cut();
+        if (text is not null) await JS.InvokeAsync<bool>("studio.copyText", text);
+    }
+
+    private async Task PasteAsync()
+    {
+        var text = await JS.InvokeAsync<string>("studio.readClipboard");
+        Design.Paste(text);
+    }
+
+    public Task SetView(ViewMode mode)
+    {
+        if (Active is { Kind: DocumentKind.Razor } a)
+        {
+            a.View = mode;
+            Ws.Activate(a);
+        }
+        return Task.CompletedTask;
+    }
+
+    public void ToggleBottom()
+    {
+        Settings.Current.BottomCollapsed = !Settings.Current.BottomCollapsed;
+        Settings.Save();
+    }
+
+    private void Zoom(int delta)
+    {
+        if (Active is not { Kind: DocumentKind.Razor } a) return;
+        a.Zoom = delta == 0 ? 100 : Math.Clamp(a.Zoom + delta, 30, 200);
+        Ws.Activate(a);
+    }
+
+    private async Task DebugOrContinueAsync()
+    {
+        if (Debug.IsStopped) { await Debug.Session.ContinueAsync(); return; }
+        if (Debug.IsActive) return;
+        if (Debug.FindDebugger() is null && Run.State == RunState.Idle)
+        {
+            // ohne Debugger zumindest starten
+            Ui.ShowToast(L["debug.fallbackRun"], ToastKind.Info, 5000);
+            await Run.StartAsync();
+            return;
+        }
+        await Debug.StartAsync();
+    }
+
+    private async Task StopAsync()
+    {
+        if (Debug.IsActive) await Debug.StopAsync();
+        Run.Stop();
+    }
+
+    private async Task RestartAsync()
+    {
+        if (Debug.IsActive) await Debug.RestartAsync();
+        else await Run.RestartAsync();
+    }
+
+    public void Dispose()
+    {
+        Ws.Changed -= Refresh;
+        Ui.Changed -= Refresh;
+        Run.Changed -= Refresh;
+        Debug.Changed -= Refresh;
+        L.Changed -= Refresh;
+        Settings.Changed -= Refresh;
+        _ref?.Dispose();
+    }
+}

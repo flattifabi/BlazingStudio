@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="de" data-theme="dark" style="--ac:#4c8dff">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Blazor Studio</title>
+    <base href="/" />
+    <link rel="stylesheet" data-name="vs/editor/editor.main" href="_content/BlazorMonaco/lib/monaco-editor/min/vs/editor/editor.main.css" />
+    <link rel="stylesheet" href="css/studio.css" />
+</head>
+<body>
+    <div id="app">
+        <div class="boot"><div class="mark">B</div><span>Blazor Studio</span></div>
+    </div>
+
+    <div id="blazor-error-ui">
+        Ein unerwarteter Fehler ist aufgetreten / An unexpected error occurred.
+        <a href="" class="reload">↻</a>
+        <a class="dismiss">✕</a>
+    </div>
+
+    <script>var require = { paths: { vs: '_content/BlazorMonaco/lib/monaco-editor/min/vs' } };</script>
+    <script src="_content/BlazorMonaco/lib/monaco-editor/min/vs/loader.js"></script>
+    <script src="_content/BlazorMonaco/lib/monaco-editor/min/vs/editor/editor.main.js"></script>
+    <script src="js/studio.js"></script>
+    <script src="_framework/blazor.webview.js"></script>
+</body>
+</html>

@@ -1,0 +1,118 @@
+@inject UiService Ui
+@inject SettingsService Settings
+@inject DebugService Debug
+@inject Localizer L
+@inject IHostBridge Host
+
+<div class="backdrop" @onclick="Ui.CloseOverlay">
+    <div class="dialog wide" @onclick:stopPropagation="true">
+        <h2>@L["cmd.settings"]</h2>
+        <div class="settings-grid" style="margin-top:14px">
+            <label>@L["settings.language"]</label>
+            <div class="seg fill">
+                <button class="@(L.Language == "de" ? "on" : "")" @onclick='() => Shell.SetLanguage("de")'>Deutsch</button>
+                <button class="@(L.Language == "en" ? "on" : "")" @onclick='() => Shell.SetLanguage("en")'>English</button>
+            </div>
+
+            <label>@L["theme.mode"]</label>
+            <div class="seg fill">
+                @foreach (var m in new[] { "dark", "light", "system" })
+                {
+                    <button class="@(Settings.Current.ThemeMode == m ? "on" : "")" @onclick="() => Shell.SetThemeModeAsync(m)">@L["theme." + m]</button>
+                }
+            </div>
+
+            <label>@L["theme.accent"]</label>
+            <div class="swatches" style="margin:0">
+                @foreach (var a in TopBar.Accents)
+                {
+                    <button class="@(Settings.Current.Accent == a ? "on" : "")" style="background:@a" @onclick="() => Shell.SetAccentAsync(a)"></button>
+                }
+            </div>
+
+            <label>@L["settings.scheme"]</label>
+            <div class="seg fill">
+                <button class="@(Settings.Current.EditorScheme == "rider" ? "on" : "")" @onclick='() => SetScheme("rider")'>Rider</button>
+                <button class="@(Settings.Current.EditorScheme == "studio" ? "on" : "")" @onclick='() => SetScheme("studio")'>Blazor Studio</button>
+            </div>
+
+            <label>@L["settings.fontSize"]</label>
+            <div class="range">
+                <input type="range" min="11" max="20" value="@Settings.Current.EditorFontSize" @onchange="SetFont" />
+                <span class="mono">@Settings.Current.EditorFontSize px</span>
+            </div>
+
+            <label>@L["settings.minimap"]</label>
+            <span class="toggle @(Settings.Current.ShowMinimap ? "on" : "")" @onclick="ToggleMinimap"></span>
+
+            <label>@L["settings.hotReload"]</label>
+            <span class="toggle @(Settings.Current.UseHotReload ? "on" : "")" @onclick="ToggleHot"></span>
+
+            <label>@L["settings.debugger"]</label>
+            <div>
+                <div style="display:flex;gap:6px">
+                    <div class="f" style="flex:1"><input class="mono" value="@Settings.Current.DebuggerPath" placeholder="netcoredbg.exe" spellcheck="false" @onchange="SetDebugger" /></div>
+                    <button class="btn" @onclick="PickDebugger"><Icon Name="folder" /></button>
+                </div>
+                <div class="hint" style="margin-top:6px">
+                    @if (Debug.FindDebugger() is { } found)
+                    {
+                        <Icon Name="checkc" /><span class="mono">@found</span>
+                    }
+                    else
+                    {
+                        <Icon Name="info" /><span>@L["settings.debuggerHint"] <a @onclick='() => Host.OpenExternal("https://github.com/Samsung/netcoredbg/releases")' style="cursor:pointer">github.com/Samsung/netcoredbg</a></span>
+                    }
+                </div>
+            </div>
+        </div>
+        <div class="btns">
+            <button class="btn ac" @onclick="Ui.CloseOverlay">@L["action.done"]</button>
+        </div>
+    </div>
+</div>
+
+@code {
+    [CascadingParameter] public Shell Shell { get; set; } = default!;
+
+    private async Task SetScheme(string scheme)
+    {
+        Settings.Current.EditorScheme = scheme;
+        Settings.Save();
+        await Shell.ApplyThemeAsync();
+    }
+
+    private void SetFont(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var v)) Settings.Current.EditorFontSize = v;
+        Settings.Save();
+    }
+
+    private void ToggleMinimap()
+    {
+        Settings.Current.ShowMinimap = !Settings.Current.ShowMinimap;
+        Settings.Save();
+    }
+
+    private void ToggleHot()
+    {
+        Settings.Current.UseHotReload = !Settings.Current.UseHotReload;
+        Settings.Save();
+    }
+
+    private void SetDebugger(ChangeEventArgs e)
+    {
+        var v = e.Value?.ToString()?.Trim().Trim('"');
+        Settings.Current.DebuggerPath = string.IsNullOrEmpty(v) ? null : v;
+        Settings.Save();
+    }
+
+    private async Task PickDebugger()
+    {
+        var folder = await Host.PickFolderAsync("netcoredbg");
+        if (folder is null) return;
+        var exe = Path.Combine(folder, "netcoredbg.exe");
+        Settings.Current.DebuggerPath = File.Exists(exe) ? exe : folder;
+        Settings.Save();
+    }
+}

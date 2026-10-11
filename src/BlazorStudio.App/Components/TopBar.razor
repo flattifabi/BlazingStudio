@@ -1,0 +1,178 @@
+@inherits StudioComponent
+@inject IHostBridge Host
+
+<header class="top">
+    <img class="mark" src="img/logo.svg" alt="" title="Blazor Studio" />
+
+    <button class="proj" @onclick="() => _projMenu = !_projMenu">
+        <b class="ellipsis">@(Ws.Solution?.Name ?? Ws.Project?.Name ?? "Blazor Studio")</b>@if (Ws.Solution is not null && Ws.Project is not null && Ws.Solution.Name != Ws.Project.Name) { <span class="dim" style="font-size:12px">› @Ws.Project.Name</span> }<Icon Name="chevd" />
+    </button>
+    @if (_projMenu)
+    {
+        <div class="click-catcher" @onclick="() => _projMenu = false"></div>
+        <div class="pop menu-pop" style="left:40px;top:42px">
+            <button class="mi" @onclick='() => Run_("file.open")'><Icon Name="folderopen" />@L["cmd.openProject"]<kbd>Ctrl O</kbd></button>
+            <button class="mi" @onclick='() => Run_("file.openSolution")'><Icon Name="sln" />@L["cmd.openSolution"]</button>
+            <button class="mi" @onclick='() => Run_("file.newProject")'><Icon Name="foldernew" />@L["cmd.newProject"]</button>
+            @if (Ws.HasProject)
+            {
+                <button class="mi" @onclick='() => Run_("file.newComponent")'><Icon Name="filenew" />@L["cmd.newComponent"]<kbd>Ctrl N</kbd></button>
+                <button class="mi" @onclick='() => Run_("tools.nuget")'><Icon Name="package" />@L["cmd.nuget"]<kbd>Ctrl Shift N</kbd></button>
+                <button class="mi" @onclick='() => Run_("tools.ef")'><Icon Name="database" />@L["cmd.ef"]</button>
+                <button class="mi" @onclick='() => Run_("file.reveal")'><Icon Name="folder" />@L["cmd.reveal"]</button>
+                <button class="mi" @onclick='() => Run_("file.rescan")'><Icon Name="refresh" />@L["cmd.rescan"]</button>
+            }
+            @if (Settings.Current.RecentProjects.Count > 0)
+            {
+                <div class="sep"></div>
+                <div class="hdr">@L["welcome.recent"]</div>
+                @foreach (var r in Settings.Current.RecentProjects.Take(6))
+                {
+                    <button class="mi" title="@r" @onclick="() => OpenRecent(r)"><Icon Name="folder" /><span class="ellipsis" style="max-width:260px">@Path.GetFileName(r.TrimEnd('\\'))</span></button>
+                }
+            }
+            @if (Ws.HasProject)
+            {
+                <div class="sep"></div>
+                <button class="mi" @onclick='() => Run_("file.closeProject")'><Icon Name="x" />@L["cmd.closeProject"]</button>
+            }
+        </div>
+    }
+
+    <MenuBar />
+
+    @if (Ws.HasProject)
+    {
+        <span class="chip" title="@Ws.Project!.RootDirectory"><Icon Name="git" />@(GitBranch ?? Ws.Project.Name)</span>
+    }
+
+    <div class="cmd" @onclick='() => Ui.OpenCommandPalette(Ws.HasProject ? "" : ">")'>
+        <Icon Name="search" Class="sm" /><span>@L["top.search"]</span><kbd>Ctrl K</kbd>
+    </div>
+
+    <div class="cluster">
+        @if (Ws.Project?.ProjectFile is not null)
+        {
+            @if (Debug.IsActive)
+            {
+                <div class="runpill">
+                    <span class="dot dbg"></span>
+                    <span>@(Debug.IsStopped ? L["run.paused"] : L["run.debugging"])</span>
+                    @if (Run.Url is not null) { <a @onclick="OpenBrowser">@ShortUrl</a> }
+                    <button class="ibtn" title="@L["cmd.restart"]" @onclick='() => Run_("run.restart")'><Icon Name="restart" /></button>
+                    <button class="ibtn danger" title="@L["cmd.stop"] (Shift+F5)" @onclick='() => Run_("run.stop")'><Icon Name="stop" /></button>
+                </div>
+            }
+            else if (Run.State == RunState.Building)
+            {
+                <div class="runpill"><span class="dot busy"></span><span>@L["run.building"]</span>
+                    <button class="ibtn danger" title="@L["cmd.stop"]" @onclick='() => Run_("run.stop")'><Icon Name="stop" /></button>
+                </div>
+            }
+            else if (Run.State == RunState.Running)
+            {
+                <div class="runpill">
+                    <span class="dot @(Run.Url is null ? "busy" : "")"></span>
+                    @if (Run.Url is not null)
+                    {
+                        <a title="@L["cmd.openBrowser"]" @onclick="OpenBrowser">@ShortUrl</a><Icon Name="ext" Class="dim" />
+                    }
+                    else { <span class="muted">@L["run.starting"]</span> }
+                    <button class="ibtn" title="@L["cmd.profiler"] (Alt+F2)" @onclick='() => Run_("tools.profiler")'><Icon Name="activity" /></button>
+                    <button class="ibtn" title="@L["cmd.restart"]" @onclick='() => Run_("run.restart")'><Icon Name="restart" /></button>
+                    <button class="ibtn danger" title="@L["cmd.stop"] (Shift+F5)" @onclick='() => Run_("run.stop")'><Icon Name="stop" /></button>
+                </div>
+            }
+            else
+            {
+                <button class="ibtn" title="@L["cmd.build"] (Ctrl+Shift+B)" @onclick='() => Run_("run.build")'><Icon Name="hammer" /></button>
+                <button class="ibtn" title="@L["cmd.debug"] (F5)" @onclick='() => Run_("run.debug")'><Icon Name="bug" /></button>
+                <button class="btn ac" title="@L["cmd.run"] (Ctrl+F5)" @onclick='() => Run_("run.start")'><Icon Name="play" />@L["run.start"]</button>
+            }
+        }
+        @if (Ws.Project?.ProjectFile is not null)
+        {
+            <button class="ibtn" title="@L["cmd.ef"]" @onclick='() => Ui.OpenOverlay("ef")'><Icon Name="database" /></button>
+            <button class="ibtn" title="@L["cmd.nuget"] (Ctrl+Shift+N)" @onclick='() => Ui.OpenOverlay("nuget")'><Icon Name="package" /></button>
+        }
+        <button class="ibtn @(_themePop ? "on" : "")" title="@L["top.appearance"]" @onclick="() => _themePop = !_themePop">
+            <Icon Name="@(Shell.EffectiveTheme == "light" ? "sun" : "moon")" />
+        </button>
+        <button class="ibtn" title="@L["cmd.settings"]" @onclick='() => Ui.OpenOverlay("settings")'><Icon Name="gear" /></button>
+    </div>
+
+    @if (_themePop)
+    {
+        <div class="click-catcher" @onclick="() => _themePop = false"></div>
+        <div class="pop theme-pop">
+            <div class="tp-h">@L["theme.mode"]</div>
+            <div class="tmodes">
+                @foreach (var m in new[] { "dark", "light", "system" })
+                {
+                    <button class="@(Settings.Current.ThemeMode == m ? "on" : "")" @onclick="() => Shell.SetThemeModeAsync(m)">@L["theme." + m]</button>
+                }
+            </div>
+            <div class="tp-h">@L["theme.accent"]</div>
+            <div class="swatches">
+                @foreach (var a in Accents)
+                {
+                    <button class="@(Settings.Current.Accent == a ? "on" : "")" style="background:@a" title="@a" @onclick="() => Shell.SetAccentAsync(a)"></button>
+                }
+            </div>
+            <div class="tp-h">@L["settings.language"]</div>
+            <div class="tmodes" style="grid-template-columns:1fr 1fr;margin-bottom:0">
+                <button class="@(L.Language == "de" ? "on" : "")" @onclick='() => Shell.SetLanguage("de")'>Deutsch</button>
+                <button class="@(L.Language == "en" ? "on" : "")" @onclick='() => Shell.SetLanguage("en")'>English</button>
+            </div>
+        </div>
+    }
+</header>
+
+@code {
+    [CascadingParameter] public Shell Shell { get; set; } = default!;
+
+    private bool _projMenu;
+    private bool _themePop;
+
+    public static readonly string[] Accents = { "#4c8dff", "#14b8a6", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#64748b" };
+
+    private string ShortUrl => Run.Url?.Replace("https://", "").Replace("http://", "").TrimEnd('/') ?? "";
+
+    private string? GitBranch
+    {
+        get
+        {
+            var dir = Ws.Project?.RootDirectory;
+            for (var i = 0; i < 4 && dir is not null; i++)
+            {
+                var head = Path.Combine(dir, ".git", "HEAD");
+                if (File.Exists(head))
+                {
+                    var t = Workspace.ReadText(head)?.Trim();
+                    return t?.StartsWith("ref: refs/heads/", StringComparison.Ordinal) == true ? t[16..] : t?[..Math.Min(7, t.Length)];
+                }
+                dir = Path.GetDirectoryName(dir);
+            }
+            return null;
+        }
+    }
+
+    private async Task Run_(string id)
+    {
+        _projMenu = false;
+        await Shell.ExecuteAsync(id);
+    }
+
+    private async Task OpenRecent(string folder)
+    {
+        _projMenu = false;
+        await Ws.OpenProjectAsync(folder);
+    }
+
+    private void OpenBrowser()
+    {
+        if (Run.Url is null) return;
+        var route = Ws.Active?.Doc?.PageRoute;
+        Host.OpenExternal(Run.Url.TrimEnd('/') + (route is not null && !route.Contains('{') ? route : "/"));
+    }
+}

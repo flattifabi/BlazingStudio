@@ -1,0 +1,110 @@
+@inject Workspace Ws
+@inject UiService Ui
+@inject Localizer L
+@inject IJSRuntime JS
+
+<div class="backdrop" @onclick="Ui.CloseOverlay">
+    <div class="dialog" @onclick:stopPropagation="true">
+        <h2>@L["newComp.title"]</h2>
+        <p>@L["newComp.text"]</p>
+        <div class="opt-cards" style="margin-bottom:12px">
+            <button class="opt-card @(!_isPage ? "on" : "")" @onclick="() => _isPage = false"><b>@L["newComp.component"]</b><small>@L["newComp.componentHint"]</small></button>
+            <button class="opt-card @(_isPage ? "on" : "")" @onclick="() => _isPage = true"><b>@L["newComp.page"]</b><small>@L["newComp.pageHint"]</small></button>
+        </div>
+        <div class="row2">
+            <label>@L["newComp.name"]</label>
+            <div class="f"><input id="nc-name" value="@_name" placeholder="ProductCard" spellcheck="false" @oninput="OnName" @onkeydown="Key" /></div>
+        </div>
+        @if (_isPage)
+        {
+            <div class="row2">
+                <label>@L["newComp.route"]</label>
+                <div class="f"><span class="u">/</span><input value="@_route" placeholder="products" spellcheck="false" @oninput="e => _route = e.Value?.ToString() ?? string.Empty" /></div>
+            </div>
+        }
+        <div class="row2">
+            <label>@L["newComp.folder"]</label>
+            <Dropdown Value="@_folder" Mono="true" Options='Folders.Select(f => new Dropdown.Option(f, Rel(f), null, "folder"))' ValueChanged="v => _folder = v ?? _folder" />
+        </div>
+        <label class="check"><input type="checkbox" checked="@_codeBehind" @onchange="e => _codeBehind = (bool)(e.Value ?? false)" />@L["newComp.codeBehind"]</label>
+        <label class="check"><input type="checkbox" checked="@_css" @onchange="e => _css = (bool)(e.Value ?? false)" />@L["newComp.scopedCss"]</label>
+        <div class="btns">
+            <button class="btn ghost" @onclick="Ui.CloseOverlay">@L["action.cancel"]</button>
+            <button class="btn ac" disabled="@(_name.Trim().Length == 0)" @onclick="Create">@L["action.create"]</button>
+        </div>
+    </div>
+</div>
+
+@code {
+    /// <summary>Ordner, der beim Öffnen vorausgewählt wird (z. B. aus dem Dateibaum).</summary>
+    public static string? PresetFolder;
+
+    private string _name = "";
+    private string _route = "";
+    private string _folder = "";
+    private bool _isPage;
+    private bool _codeBehind = true;
+    private bool _css = true;
+
+    private List<string> Folders { get; set; } = new();
+
+    protected override void OnInitialized()
+    {
+        var root = Ws.Project!.RootDirectory;
+        Folders = new List<string> { root };
+        Collect(Ws.Project.Tree, Folders);
+        _folder = PresetFolder
+                  ?? Folders.FirstOrDefault(f => f.EndsWith(Path.Combine("Components", "Pages"), StringComparison.OrdinalIgnoreCase) && _isPage)
+                  ?? (Ws.Active is not null ? Path.GetDirectoryName(Ws.Active.Path) : null)
+                  ?? Folders.FirstOrDefault(f => f.EndsWith("Components", StringComparison.OrdinalIgnoreCase))
+                  ?? root;
+        if (!Folders.Contains(_folder)) Folders.Add(_folder);
+        PresetFolder = null;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if (first) await JS.InvokeVoidAsync("studio.focusSelector", "#nc-name", false);
+    }
+
+    private static void Collect(FileNode node, List<string> list)
+    {
+        foreach (var c in node.Children.Where(c => c.IsDirectory))
+        {
+            if (c.Name.Equals("wwwroot", StringComparison.OrdinalIgnoreCase) || c.Name.Equals("Properties", StringComparison.OrdinalIgnoreCase)) continue;
+            list.Add(c.FullPath);
+            Collect(c, list);
+        }
+    }
+
+    private string Rel(string f)
+    {
+        var r = Path.GetRelativePath(Ws.Project!.RootDirectory, f);
+        return r == "." ? "/ (" + Ws.Project.Name + ")" : r.Replace('\\', '/');
+    }
+
+    private void OnName(ChangeEventArgs e)
+    {
+        var v = e.Value?.ToString() ?? "";
+        _name = v.Length > 0 ? char.ToUpperInvariant(v[0]) + v[1..] : v;
+        if (_isPage && (_route.Length == 0 || _route == Workspace.ToKebab(_name.Length > 1 ? _name[..^1] : "")))
+            _route = Workspace.ToKebab(_name);
+    }
+
+    private void Key(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") Create();
+        if (e.Key == "Escape") Ui.CloseOverlay();
+    }
+
+    private void Create()
+    {
+        if (_name.Trim().Length == 0) return;
+        var path = Ws.CreateComponent(_folder, _name, _isPage ? (_route.Length == 0 ? Workspace.ToKebab(_name) : _route) : null, _codeBehind, _css);
+        if (path is not null)
+        {
+            Ui.CloseOverlay();
+            Ui.ShowToast(L.F("toast.created", Path.GetFileName(path)), ToastKind.Success);
+        }
+    }
+}

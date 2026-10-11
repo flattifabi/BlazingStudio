@@ -1,0 +1,146 @@
+@* Eigenes Dropdown statt <select>: Popup im App-Stil, Suche bei langen Listen, Tastatur, optional Icon/Detail. *@
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<button type="button" class="dd @Class @(_open ? "open" : "") @(Value is null || Value.Length == 0 ? "empty" : "")" @ref="_trigger" title="@Title"
+        disabled="@Disabled" @onclick="Toggle" @onkeydown="TriggerKey" @onkeydown:preventDefault="_open">
+    @if (Label is not null) { <span class="dd-label">@Label</span> }
+    @if (Current?.Icon is { } ic) { <Icon Name="@ic" Class="sm" /> }
+    <span class="dd-value @(Mono ? "mono" : "")">@(Current?.Text ?? Placeholder ?? "—")</span>
+    <Icon Name="chevd" Class="dd-caret" />
+</button>
+
+@if (_open)
+{
+    <div class="click-catcher" style="z-index:150" @onclick="Close"></div>
+    <div class="dd-pop" style="@_popStyle" @onkeydown="PopKey">
+        @if (Searchable)
+        {
+            <div class="dd-search">
+                <Icon Name="search" Class="sm dim" />
+                <input id="@_searchId" value="@_query" placeholder="…" spellcheck="false" @oninput="e => { _query = e.Value?.ToString() ?? string.Empty; _index = 0; }" />
+            </div>
+        }
+        <div class="dd-list">
+            @{ var list = Filtered.ToList(); }
+            @for (var i = 0; i < list.Count; i++)
+            {
+                var o = list[i];
+                var idx = i;
+                if (o.Group is not null && (i == 0 || list[i - 1].Group != o.Group))
+                {
+                    <div class="dd-group">@o.Group</div>
+                }
+                <button type="button" class="dd-opt @(idx == _index ? "hi" : "") @(o.Value == Value ? "sel" : "") @(o.Danger ? "danger" : "")"
+                        @onclick="() => Pick(o)" @onmousemove="() => _index = idx">
+                    @if (o.Icon is not null) { <Icon Name="@o.Icon" Class="sm" /> }
+                    <span class="dd-t @(Mono ? "mono" : "")">@o.Text</span>
+                    @if (o.Detail is not null) { <span class="dd-d">@o.Detail</span> }
+                    @if (o.Value == Value) { <Icon Name="check" Class="sm dd-check" /> }
+                </button>
+            }
+            @if (list.Count == 0) { <div class="dd-empty">—</div> }
+        </div>
+    </div>
+}
+
+@code {
+    public sealed record Option(string? Value, string Text, string? Detail = null, string? Icon = null, string? Group = null, bool Danger = false);
+
+    [Parameter] public string? Value { get; set; }
+
+    [Parameter] public IEnumerable<Option> Options { get; set; } = Array.Empty<Option>();
+
+    [Parameter] public EventCallback<string?> ValueChanged { get; set; }
+
+    [Parameter] public string? Placeholder { get; set; }
+
+    /// <summary>Kleines Präfix-Label im Feld (wie „Pos“, „DbContext“).</summary>
+    [Parameter] public string? Label { get; set; }
+
+    [Parameter] public string? Class { get; set; }
+
+    [Parameter] public string? Title { get; set; }
+
+    [Parameter] public bool Mono { get; set; }
+
+    [Parameter] public bool Disabled { get; set; }
+
+    /// <summary>null = automatisch ab 10 Einträgen.</summary>
+    [Parameter] public bool? Search { get; set; }
+
+    private ElementReference _trigger;
+    private bool _open;
+    private string _query = "";
+    private int _index;
+    private string _popStyle = "";
+    private readonly string _searchId = "dds" + Guid.NewGuid().ToString("N")[..6];
+
+    private Option? Current => Options.FirstOrDefault(o => o.Value == Value) ?? (string.IsNullOrEmpty(Value) ? null : new Option(Value, Value));
+
+    private bool Searchable => Search ?? Options.Count() >= 10;
+
+    private IEnumerable<Option> Filtered => _query.Length == 0 ? Options :
+        Options.Where(o => o.Text.Contains(_query, StringComparison.OrdinalIgnoreCase) || (o.Detail?.Contains(_query, StringComparison.OrdinalIgnoreCase) ?? false));
+
+    private async Task Toggle()
+    {
+        if (_open) { Close(); return; }
+        await OpenAsync();
+    }
+
+    private async Task OpenAsync()
+    {
+        var r = await JS.InvokeAsync<Rect?>("studio.rectOf", _trigger);
+        if (r is null) return;
+        var count = Math.Min(Options.Count(), 12);
+        var height = Math.Min(360, count * 30 + (Searchable ? 44 : 0) + 10);
+        var below = r.ViewportHeight - (r.Y + r.Height) > height + 8 || r.Y < height;
+        var top = below ? r.Y + r.Height + 4 : r.Y - height - 4;
+        var width = Math.Max(r.Width, 180);
+        var left = Math.Min(r.X, r.ViewportWidth - width - 8);
+        _popStyle = string.Create(CultureInfo.InvariantCulture, $"left:{left:0}px;top:{top:0}px;min-width:{width:0}px;max-height:{height:0}px");
+        _query = "";
+        var list = Options.ToList();
+        _index = Math.Max(0, list.FindIndex(o => o.Value == Value));
+        _open = true;
+        StateHasChanged();
+        await Task.Yield();
+        if (Searchable) await JS.InvokeVoidAsync("studio.focusSelector", "#" + _searchId, false);
+        await JS.InvokeVoidAsync("studio.scrollIntoView", ".dd-opt.hi");
+    }
+
+    private void Close()
+    {
+        _open = false;
+        _query = "";
+    }
+
+    private async Task Pick(Option o)
+    {
+        Close();
+        if (o.Value != Value) await ValueChanged.InvokeAsync(o.Value);
+    }
+
+    private async Task TriggerKey(KeyboardEventArgs e)
+    {
+        if (!_open && e.Key is "ArrowDown" or "Enter" or " ") await OpenAsync();
+        else if (_open) await PopKey(e);
+    }
+
+    private async Task PopKey(KeyboardEventArgs e)
+    {
+        var list = Filtered.ToList();
+        switch (e.Key)
+        {
+            case "ArrowDown": _index = Math.Min(_index + 1, list.Count - 1); await JS.InvokeVoidAsync("studio.scrollIntoView", ".dd-opt.hi"); break;
+            case "ArrowUp": _index = Math.Max(_index - 1, 0); await JS.InvokeVoidAsync("studio.scrollIntoView", ".dd-opt.hi"); break;
+            case "Enter": if (list.Count > 0) await Pick(list[Math.Clamp(_index, 0, list.Count - 1)]); break;
+            case "Escape" or "Tab": Close(); break;
+        }
+    }
+
+    private sealed record Rect(double X, double Y, double Width, double Height, double ViewportWidth, double ViewportHeight);
+
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}

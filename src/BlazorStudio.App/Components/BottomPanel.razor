@@ -1,0 +1,321 @@
+@implements IDisposable
+@inject RunService Run
+@inject DebugService Debug
+@inject Workspace Ws
+@inject SettingsService Settings
+@inject Localizer L
+@inject IHostBridge Host
+@inject IJSRuntime JS
+@inject TerminalService Term
+
+<section class="island bottom">
+    <div class="split-y" data-splitter="bottom" style="top:0;height:5px"></div>
+    <div class="btabs rider">
+        <b class="ptitle" @onclick="() => { if (Settings.Current.BottomCollapsed) Shell.ToggleBottom(); }">@Title</b>
+        @switch (Tab)
+        {
+            case BottomTab.Terminal:
+                @foreach (var t in Term.Sessions)
+                {
+                    var term = t;
+                    <button class="sub @(Term.Active == term ? "on" : "")" @onclick="() => Term.Select(term)">
+                        @term.Name
+                        @if (term.Busy) { <Icon Name="refresh" Class="spin sm" /> }
+                        <span class="x" title="@L["action.close"]" @onclick:stopPropagation="true" @onclick="() => Term.Close(term)"><Icon Name="x" /></span>
+                    </button>
+                }
+                <button class="ibtn sm" title="@L["term.new"]" @onclick="() => Term.Open()"><Icon Name="plus" /></button>
+                break;
+            case BottomTab.Problems:
+                @if (Run.ErrorCount > 0) { <span class="cnt err">@Run.ErrorCount</span> }
+                @if (Run.WarningCount > 0) { <span class="cnt">@Run.WarningCount</span> }
+                break;
+            case BottomTab.Debug:
+                @if (Debug.IsStopped) { <span class="cnt">●</span> }
+                break;
+        }
+        <span class="grow"></span>
+        @if (Run.HotReload && Run.State == RunState.Running)
+        {
+            <span class="hint" style="padding-right:6px;align-items:center"><Icon Name="flame" Class="sm" />Hot Reload</span>
+        }
+        @if (Tab == BottomTab.Output)
+        {
+            <button class="ibtn sm" title="@L["bottom.clear"]" @onclick="Run.ClearOutput"><Icon Name="trash" /></button>
+        }
+        @if (Tab == BottomTab.Terminal && Term.Active is { } at)
+        {
+            @if (at.Busy) { <button class="ibtn sm" title="@L["term.interrupt"]" @onclick="at.Interrupt"><Icon Name="stop" /></button> }
+            <button class="ibtn sm" title="@L["term.clear"]" @onclick="at.Clear"><Icon Name="trash" /></button>
+        }
+        <button class="ibtn sm" title="@L["cmd.toggleBottom"] (Ctrl+J)" @onclick="Shell.ToggleBottom"><Icon Name="@(Settings.Current.BottomCollapsed ? "chevu" : "chevd")" /></button>
+    </div>
+
+    @if (!Settings.Current.BottomCollapsed)
+    {
+        @switch (Tab)
+        {
+            case BottomTab.Output:
+                <div class="bpane" style="flex-direction:column">
+                    <div class="term scroll" @ref="_term">
+                        @if (Run.Lines.Count == 0)
+                        {
+                            <span class="l-muted">@L["bottom.outputEmpty"]</span>
+                        }
+                        @foreach (var line in Run.Lines.TakeLast(1500))
+                        {
+                            <div class="l-@line.Kind.ToString().ToLowerInvariant()">@RenderLine(line.Text)</div>
+                        }
+                    </div>
+                </div>
+                break;
+
+            case BottomTab.Problems:
+                <div class="bpane problems scroll" style="flex-direction:column">
+                    @{ var parse = ParseProblems().ToList(); }
+                    @if (Run.Diagnostics.Count == 0 && parse.Count == 0)
+                    {
+                        <div class="empty-hint">@L["bottom.noProblems"]</div>
+                    }
+                    @foreach (var p in parse)
+                    {
+                        var item = p;
+                        <div class="prob" @onclick="() => OpenAt(item.Path, item.Line)">
+                            <span class="sev e">!</span><span class="code">Razor</span>
+                            <span class="msg">@item.Message</span><span class="loc">@Path.GetFileName(item.Path):@item.Line</span>
+                        </div>
+                    }
+                    @foreach (var d in Run.Diagnostics.OrderBy(d => d.Severity))
+                    {
+                        var diag = d;
+                        <div class="prob" title="@diag.File" @onclick="() => OpenAt(diag.File, diag.Line)">
+                            <span class="sev @(diag.Severity == BlazorStudio.Core.Build.DiagnosticSeverity.Error ? "e" : "w")">@(diag.Severity == BlazorStudio.Core.Build.DiagnosticSeverity.Error ? "✕" : "!")</span>
+                            <span class="code">@diag.Code</span>
+                            <span class="msg">@diag.Message</span>
+                            <span class="loc">@Path.GetFileName(diag.File):@diag.Line</span>
+                        </div>
+                    }
+                </div>
+                break;
+
+            case BottomTab.Debug:
+                <div class="bpane">
+                    @if (!Debug.IsActive)
+                    {
+                        <div class="empty-hint">
+                            @L["bottom.debugIdle"]
+                            @if (Debug.FindDebugger() is null) { <br /><span class="dim">@L["bottom.debuggerMissing"]</span> }
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="vars">
+                            <div class="card">
+                                <h5>@L["debug.locals"]</h5>
+                                <div class="scroll">
+                                    @if (!Debug.IsStopped) { <div class="empty-hint">@L["debug.runningHint"]</div> }
+                                    @foreach (var v in Debug.Session.Locals)
+                                    {
+                                        <VariableRow Variable="v" Depth="0" />
+                                    }
+                                </div>
+                            </div>
+                            <div class="card">
+                                <h5>@L["debug.callStack"]</h5>
+                                <div class="scroll">
+                                    @foreach (var f in Debug.Session.Frames)
+                                    {
+                                        var frame = f;
+                                        <div class="vr click @(frame == Debug.Session.CurrentFrame ? "cur" : "")" title="@frame.File" @onclick="() => SelectFrame(frame)">
+                                            <span class="v">@ShortFrame(frame.Name)</span>
+                                            <span class="t">@(frame.File is null ? L["debug.external"] : $"{Path.GetFileName(frame.File)}:{frame.Line}")</span>
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                            <div class="card">
+                                <h5>@L["debug.watch"]</h5>
+                                <div class="scroll">
+                                    @foreach (var w in Debug.Watches)
+                                    {
+                                        var watch = w;
+                                        <div class="vr">
+                                            <span class="n">@watch.Expression</span>
+                                            <span class="v">@(watch.Result?.Error ?? watch.Result?.Value ?? "…")</span>
+                                            <button class="ibtn sm" style="margin-left:auto" @onclick="() => Debug.RemoveWatch(watch)"><Icon Name="x" /></button>
+                                        </div>
+                                    }
+                                    <div class="vr">
+                                        <Icon Name="plus" Class="sm dim" />
+                                        <input placeholder="@L["debug.addWatch"]" @bind="_watch" @onkeydown="WatchKey" />
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                </div>
+                break;
+
+            case BottomTab.Terminal:
+                <div class="bpane" style="flex-direction:column"><TerminalPanel /></div>
+                break;
+
+            case BottomTab.NuGet:
+                <div class="bpane" style="flex-direction:column"><NuGetDialog Embedded="true" /></div>
+                break;
+
+            case BottomTab.Git:
+                <div class="bpane" style="flex-direction:column"><GitPanel /></div>
+                break;
+        }
+    }
+</section>
+
+@code {
+    [CascadingParameter] public Shell Shell { get; set; } = default!;
+
+    /// <summary>Andere Komponenten können einen Reiter öffnen.</summary>
+    public static Action<BottomTab>? Show;
+
+    /// <summary>Aktueller Reiter (für die Werkzeugleiste).</summary>
+    public static BottomTab Current { get; private set; } = BottomTab.Output;
+
+    public static event Action? TabChanged;
+
+    private BottomTab Tab
+    {
+        get => Current;
+        set
+        {
+            if (Current == value) return;
+            Current = value;
+            TabChanged?.Invoke();
+        }
+    }
+
+    private string Title => Tab switch
+    {
+        BottomTab.Output => L["bottom.build"],
+        BottomTab.Problems => L["bottom.problems"],
+        BottomTab.Debug => L["bottom.debug"],
+        BottomTab.Terminal => L["bottom.terminal"],
+        BottomTab.NuGet => "NuGet",
+        BottomTab.Git => "Git",
+        _ => "",
+    };
+    private ElementReference _term;
+    private string _watch = "";
+    private bool _scroll;
+    private BlazorStudio.Core.Debugging.DebugState _lastState;
+
+    protected override void OnInitialized()
+    {
+        Run.Changed += Refresh;
+        Run.OutputAdded += OnOutput;
+        Debug.Changed += OnDebug;
+        Term.Changed += OnTerm;
+        Show = t => InvokeAsync(() => Select(t));
+    }
+
+    private void Refresh() => InvokeAsync(StateHasChanged);
+
+    private void OnTerm()
+    {
+        if (Tab == BottomTab.Terminal) InvokeAsync(StateHasChanged);
+    }
+
+    private void OnOutput()
+    {
+        _scroll = true;
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void OnDebug()
+    {
+        if (Debug.State != _lastState)
+        {
+            _lastState = Debug.State;
+            if (Debug.State == BlazorStudio.Core.Debugging.DebugState.Stopped) Tab = BottomTab.Debug;
+        }
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void Select(BottomTab t)
+    {
+        Tab = t;
+        TabChanged?.Invoke();
+        if (Settings.Current.BottomCollapsed) Shell.ToggleBottom();
+        if (t == BottomTab.Output) _scroll = true;
+        StateHasChanged();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if (_scroll && Tab == BottomTab.Output && !Settings.Current.BottomCollapsed)
+        {
+            _scroll = false;
+            await JS.InvokeVoidAsync("studio.scrollToBottom", _term);
+        }
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex UrlRegex = new(@"https?://[^\s'""]+");
+
+    private RenderFragment RenderLine(string text) => b =>
+    {
+        var last = 0;
+        var i = 0;
+        foreach (System.Text.RegularExpressions.Match m in UrlRegex.Matches(text))
+        {
+            b.AddContent(i++, text[last..m.Index]);
+            var url = m.Value;
+            b.OpenElement(i++, "span");
+            b.AddAttribute(i++, "class", "lk");
+            b.AddAttribute(i++, "onclick", EventCallback.Factory.Create(this, () => Host.OpenExternal(url)));
+            b.AddContent(i++, url);
+            b.CloseElement();
+            last = m.Index + m.Length;
+        }
+        b.AddContent(i, text[last..]);
+    };
+
+    private sealed record ParseProblem(string Path, int Line, string Message);
+
+    private IEnumerable<ParseProblem> ParseProblems() =>
+        Ws.Documents.Where(d => d.Kind == DocumentKind.Razor)
+            .SelectMany(d => d.Diagnostics.Select(x => new ParseProblem(d.Path, d.LineOf(x.Start), L.Diagnostic(x))));
+
+    private void OpenAt(string file, int line)
+    {
+        var path = Path.IsPathRooted(file) ? file : Path.Combine(Ws.Project?.RootDirectory ?? "", file);
+        if (File.Exists(path)) Ws.Open(path, line);
+    }
+
+    private async Task SelectFrame(BlazorStudio.Core.Debugging.StackFrameInfo f)
+    {
+        await Debug.Session.SelectFrameAsync(f);
+        if (f.File is not null && File.Exists(f.File)) Ws.Open(f.File, f.Line);
+    }
+
+    private static string ShortFrame(string name)
+    {
+        var bang = name.IndexOf('!');
+        var n = bang >= 0 ? name[(bang + 1)..] : name;
+        return n.Length > 70 ? n[..69] + "…" : n;
+    }
+
+    private void WatchKey(KeyboardEventArgs e)
+    {
+        if (e.Key != "Enter") return;
+        Debug.AddWatch(_watch);
+        _watch = "";
+    }
+
+    public void Dispose()
+    {
+        Run.Changed -= Refresh;
+        Run.OutputAdded -= OnOutput;
+        Debug.Changed -= OnDebug;
+        Term.Changed -= OnTerm;
+        Show = null;
+    }
+}

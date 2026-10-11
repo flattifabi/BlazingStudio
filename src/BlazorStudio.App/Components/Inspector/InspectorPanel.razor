@@ -1,0 +1,159 @@
+﻿@implements IDisposable
+@inject Workspace Ws
+@inject DesignActions Design
+@inject Localizer L
+
+@if (Session is null)
+{
+    <div class="ins-empty"><Icon Name="sparkle" /><span>@L["inspector.noRazor"]</span></div>
+}
+else if (Session.Selected is not { } node)
+{
+    <div class="ihead">
+        <div class="ititle">
+            <div class="iic"><Icon Name="page" /></div>
+            <div class="t"><b>@Session.Name</b><small>@(Session.Doc?.PageRoute is { } r ? L.F("inspector.pageAt", r) : L["inspector.component"])</small></div>
+        </div>
+    </div>
+    <div class="scroll" style="flex:1">
+        <DocumentSettings Session="Session" />
+    </div>
+}
+else
+{
+    <div class="ihead">
+        <div class="ititle">
+            <div class="iic @(node.Kind == NodeKind.Component ? "c" : node.Kind is NodeKind.Control or NodeKind.Code or NodeKind.Expression ? "r" : "")"><Icon Name="@LayersTree.IconOf(node)" /></div>
+            <div class="t">
+                <b>@Title(node)</b>
+                <small>@Subtitle(node)</small>
+            </div>
+            @if (Definition?.FilePath is { } file)
+            {
+                <button class="ibtn sm" title="@L["inspector.openComponent"]" @onclick="() => Ws.Open(file)"><Icon Name="ext" /></button>
+            }
+            <button class="ibtn sm" title="@L["cmd.selectParent"] (Esc)" @onclick="Design.SelectParent"><Icon Name="chevu" /></button>
+            <button class="ibtn sm" title="@L["cmd.duplicate"] (Ctrl+D)" @onclick="Design.Duplicate"><Icon Name="copy" /></button>
+            <button class="ibtn sm danger" title="@L["cmd.delete"] (Entf)" @onclick="Design.Delete"><Icon Name="trash" /></button>
+        </div>
+        @if (node.IsTagLike)
+        {
+            <div class="seg fill itabs">
+                <button class="@(_tab == "design" ? "on" : "")" @onclick='() => _tab = "design"'>@L["inspector.tabDesign"]</button>
+                <button class="@(_tab == "props" ? "on" : "")" @onclick='() => _tab = "props"'>@L["inspector.tabProps"]</button>
+                <button class="@(_tab == "events" ? "on" : "")" @onclick='() => _tab = "events"'>@L["inspector.tabEvents"]
+                    @if (EventCount(node) > 0) { <span class="cnt" style="margin-left:2px">@EventCount(node)</span> }
+                </button>
+            </div>
+        }
+    </div>
+    <div class="scroll" style="flex:1">
+        @if (Session.HasErrors)
+        {
+            <div class="sec"><div class="hint warn"><Icon Name="alert" />@L["designer.readonlyToast"]</div></div>
+        }
+        @if (node.IsTagLike)
+        {
+            @switch (_tab)
+            {
+                case "design": <DesignTab Session="Session" Node="node" /> break;
+                case "props": <PropsTab Session="Session" Node="node" Definition="Definition" /> break;
+                default: <EventsTab Session="Session" Node="node" Definition="Definition" /> break;
+            }
+        }
+        else
+        {
+            <NodeTextEditor Session="Session" Node="node" />
+        }
+    </div>
+}
+
+@code {
+    private string _tab = "design";
+    private DocumentSession? _subscribed;
+    private string? _lastKind;
+
+    private DocumentSession? Session => Ws.Active is { Kind: DocumentKind.Razor } s ? s : null;
+
+    private ComponentDefinition? Definition => Session?.Selected is { } n ? Ws.DefinitionForNode(n) : null;
+
+    protected override void OnInitialized()
+    {
+        Ws.Changed += OnWorkspace;
+        Subscribe();
+    }
+
+    private void OnWorkspace()
+    {
+        Subscribe();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void Subscribe()
+    {
+        if (_subscribed == Session) return;
+        if (_subscribed is not null)
+        {
+            _subscribed.Changed -= OnDoc;
+            _subscribed.SelectionChanged -= OnSel;
+        }
+        _subscribed = Session;
+        if (_subscribed is not null)
+        {
+            _subscribed.Changed += OnDoc;
+            _subscribed.SelectionChanged += OnSel;
+        }
+    }
+
+    private void OnDoc(ChangeOrigin _) => InvokeAsync(StateHasChanged);
+
+    private void OnSel() => InvokeAsync(() =>
+    {
+        // Bei Komponenten zuerst die Eigenschaften zeigen
+        var kind = Session?.Selected?.Kind.ToString();
+        if (kind != _lastKind)
+        {
+            _lastKind = kind;
+            if (Session?.Selected is { Kind: NodeKind.Component } && Definition is { Parameters.Count: > 0 }) _tab = "props";
+        }
+        StateHasChanged();
+    });
+
+    private static string Title(DesignNode n) => n.Kind switch
+    {
+        NodeKind.Control => "@" + n.Name,
+        NodeKind.Code => "C#",
+        NodeKind.Expression => L_Expression,
+        NodeKind.Text => "Text",
+        _ => n.Name,
+    };
+
+    private const string L_Expression = "\u0040(…)";
+
+    private string Subtitle(DesignNode n)
+    {
+        var parent = n.Parent is { IsRoot: false } p ? CanvasRenderer.LabelOf(p) : Session?.Name ?? "";
+        var kind = n.Kind switch
+        {
+            NodeKind.Element => L["kind.element"],
+            NodeKind.Component => Definition?.Source == ComponentSource.Blazor ? L["kind.blazor"] : Definition is null ? L["kind.unknownComponent"] : L["kind.component"],
+            NodeKind.Control => L["kind.control"],
+            NodeKind.Code => L["kind.code"],
+            NodeKind.Expression => L["kind.expression"],
+            _ => L["kind.text"],
+        };
+        return $"{kind} · {L.F("inspector.in", parent)}";
+    }
+
+    private static int EventCount(DesignNode n) => n.Attributes.Count(a => a.Name.StartsWith("\u0040on", StringComparison.Ordinal) && !a.Name.Contains(':'));
+
+    public void Dispose()
+    {
+        Ws.Changed -= OnWorkspace;
+        if (_subscribed is not null)
+        {
+            _subscribed.Changed -= OnDoc;
+            _subscribed.SelectionChanged -= OnSel;
+        }
+    }
+}

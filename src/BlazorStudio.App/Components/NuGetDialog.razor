@@ -1,0 +1,329 @@
+@inherits StudioComponent
+@inject NuGetService NuGet
+@inject IHostBridge Host
+@inject IJSRuntime JS
+
+<div class="@(Embedded ? "ng-embed" : "backdrop")" style="@(Embedded ? "" : "padding-top:5vh")" @onclick="() => { if (!Embedded) Ui.CloseOverlay(); }">
+    <div class="@(Embedded ? "nuget embedded" : "dialog nuget")" @onclick:stopPropagation="true">
+        <div class="ng-head">
+            <div class="iic"><Icon Name="package" /></div>
+            <div class="t">
+                <h2>@L["nuget.title"]</h2>
+                @if (Ws.Solution is { } sln && sln.AllProjects.Count(x => x.Project is not null) > 1)
+                {
+                    <div style="width:220px"><Dropdown Class="sm" Value="@NuGet.CurrentProject" Options='sln.AllProjects.Where(x => x.Project is not null).Select(x => new Dropdown.Option(x.Path, x.Name, null, "cube"))' ValueChanged="v => ChangeProject(new ChangeEventArgs { Value = v })" /></div>
+                }
+                else
+                {
+                    <small class="dim">@(NuGet.CurrentProject is { } p ? Path.GetFileName(p) : "")</small>
+                }
+            </div>
+            <div class="seg">
+                <button class="@(_tab == Tab.Browse ? "on" : "")" @onclick="() => SetTab(Tab.Browse)">@L["nuget.browse"]</button>
+                <button class="@(_tab == Tab.Installed ? "on" : "")" @onclick="() => SetTab(Tab.Installed)">@L["nuget.installedTab"] <span class="dim">@NuGet.Installed.Count</span></button>
+                <button class="@(_tab == Tab.Updates ? "on" : "")" @onclick="() => SetTab(Tab.Updates)">
+                    @L["nuget.updates"] @if (NuGet.UpdateCount > 0) { <span class="cnt">@NuGet.UpdateCount</span> }
+                </button>
+            </div>
+            @if (!Embedded) { <button class="ibtn" title="@L["action.close"]" @onclick="Ui.CloseOverlay"><Icon Name="x" /></button> }
+        </div>
+
+        <div class="ng-bar">
+            <div class="f" style="flex:1">
+                <Icon Name="search" Class="sm dim" />
+                <input id="ng-search" value="@_query" placeholder="@L["nuget.searchPlaceholder"]" spellcheck="false"
+                       @oninput="OnQuery" @onkeydown="OnKey" />
+                @if (_loading) { <Icon Name="refresh" Class="sm dim spin" /> }
+            </div>
+            <label class="check" style="margin:0"><input type="checkbox" checked="@NuGet.IncludePrerelease" @onchange="TogglePrerelease" />@L["nuget.prerelease"]</label>
+            @if (_tab == Tab.Updates && NuGet.UpdateCount > 0)
+            {
+                <button class="btn ac sm" disabled="@(NuGet.BusyPackage is not null)" @onclick="NuGet.UpdateAllAsync"><Icon Name="up" />@L["nuget.updateAll"]</button>
+            }
+            <button class="ibtn" title="@L["nuget.refresh"]" @onclick="() => NuGet.RefreshAsync()"><Icon Name="refresh" /></button>
+        </div>
+
+        <div class="ng-body">
+            <div class="ng-list scroll">
+                @if (_error is not null)
+                {
+                    <div class="hint warn" style="margin:12px"><Icon Name="alert" />@_error</div>
+                }
+                @foreach (var item in Items)
+                {
+                    var it = item;
+                    var installed = NuGet.Find(it.Id);
+                    <div class="ng-item @(_selected?.Id == it.Id ? "on" : "")" @onclick="() => Select(it)">
+                        <PackageIcon Url="@it.IconUrl" Id="@it.Id" />
+                        <div class="ng-main">
+                            <div class="ng-title">
+                                <b>@it.Id</b>
+                                @if (it.Verified) { <span title="@L["nuget.verified"]" class="ng-verified"><Icon Name="checkc" /></span> }
+                                @if (it.Authors is not null) { <span class="dim ellipsis">@L.F("nuget.by", it.Authors)</span> }
+                            </div>
+                            <div class="ng-desc">@it.Description</div>
+                        </div>
+                        <div class="ng-side">
+                            @if (installed is not null)
+                            {
+                                <span class="mono">@installed.Version</span>
+                                @if (installed.HasUpdate) { <span class="ng-up">↑ @installed.Latest</span> }
+                                else { <span class="ng-ok">@L["nuget.installedBadge"]</span> }
+                            }
+                            else
+                            {
+                                <span class="mono">@it.Version</span>
+                            }
+                            @if (it.TotalDownloads > 0) { <span class="dim">@Downloads(it.TotalDownloads) ⭳</span> }
+                        </div>
+                    </div>
+                }
+                @if (!_loading && !Items.Any() && _error is null)
+                {
+                    <div class="empty-hint">@(_tab == Tab.Updates ? L["nuget.noUpdates"] : _tab == Tab.Installed ? L["nuget.noneInstalled"] : L["nuget.noResults"])</div>
+                }
+            </div>
+
+            <div class="ng-detail scroll">
+                @if (_selected is { } s)
+                {
+                    var installed = NuGet.Find(s.Id);
+                    <div class="ng-dhead">
+                        <PackageIcon Url="@s.IconUrl" Id="@s.Id" Large="true" />
+                        <div style="min-width:0">
+                            <h3>@s.Id</h3>
+                            <div class="dim">@(_details?.Authors ?? s.Authors)</div>
+                        </div>
+                    </div>
+                    <div class="row2" style="margin-top:14px">
+                        <label>@L["nuget.version"]</label>
+                        <Dropdown Value="@_version" Mono="true" Options='_versions.Select((v, i) => new Dropdown.Option(v, v, (installed?.Version == v ? "✓ " : "") + (i == 0 ? L["nuget.latest"] : (v.Contains("-") ? "pre" : null))))' ValueChanged="v => _version = v" />
+                    </div>
+                    <div class="ng-actions">
+                        @if (NuGet.BusyPackage == s.Id)
+                        {
+                            <button class="btn wide" disabled><Icon Name="refresh" Class="spin" />@L["nuget.working"]</button>
+                        }
+                        else if (installed is null)
+                        {
+                            <button class="btn ac wide" disabled="@(NuGet.BusyPackage is not null || NuGet.CurrentProject is null)" @onclick="() => NuGet.InstallAsync(s.Id, _version)"><Icon Name="plus" />@L["nuget.install"]</button>
+                        }
+                        else
+                        {
+                            @if (_version is not null && _version != installed.Version)
+                            {
+                                <button class="btn ac wide" disabled="@(NuGet.BusyPackage is not null)" @onclick="() => NuGet.InstallAsync(s.Id, _version)">
+                                    <Icon Name="@(NuGetCompare(_version, installed.Version) > 0 ? "up" : "down")" />@L.F("nuget.changeTo", _version)
+                                </button>
+                            }
+                            <button class="btn wide" disabled="@(NuGet.BusyPackage is not null)" @onclick="() => Uninstall(s.Id)"><Icon Name="trash" />@L["nuget.uninstall"]</button>
+                        }
+                    </div>
+                    @if (installed is not null)
+                    {
+                        <div class="hint" style="margin-top:8px"><Icon Name="checkc" />@L.F("nuget.installedVersion", installed.Version)</div>
+                    }
+                    <div class="sec" style="padding:14px 0 0;border:0">
+                        <h4>@L["nuget.description"]</h4>
+                        <p class="ng-text">@(_details?.Description ?? s.Description)</p>
+                    </div>
+                    <div class="ng-meta">
+                        @if (_details?.LicenseExpression is { } lic) { <span><b>@L["nuget.license"]</b> @lic</span> }
+                        @if (s.TotalDownloads > 0) { <span><b>@L["nuget.downloads"]</b> @s.TotalDownloads.ToString("N0", CultureInfo.CurrentCulture)</span> }
+                        @if ((_details?.ProjectUrl ?? s.ProjectUrl) is { Length: > 0 } url)
+                        {
+                            <a @onclick="() => Host.OpenExternal(url)"><Icon Name="ext" Class="sm" />@L["nuget.projectSite"]</a>
+                        }
+                        <a @onclick='() => Host.OpenExternal($"https://www.nuget.org/packages/{s.Id}/{_version}")'><Icon Name="ext" Class="sm" />nuget.org</a>
+                    </div>
+                    @if (s.Tags.Count > 0)
+                    {
+                        <div class="tokens" style="margin-top:10px">
+                            @foreach (var t in s.Tags.Take(12)) { <span class="tok" style="padding-left:7px" @onclick="() => SearchFor(t)">@t</span> }
+                        </div>
+                    }
+                    @if (_details?.Dependencies is { Count: > 0 } deps)
+                    {
+                        <div class="sec" style="padding:14px 0 0;border:0">
+                            <h4>@L["nuget.dependencies"]</h4>
+                            @foreach (var d in deps) { <div class="mono dim" style="font-size:12px;padding:1px 0">@d</div> }
+                        </div>
+                    }
+                }
+                else
+                {
+                    <div class="ins-empty"><Icon Name="package" /><span>@L["nuget.pick"]</span></div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    /// <summary>Im unteren Panel statt als Dialog.</summary>
+    [Parameter] public bool Embedded { get; set; }
+
+    private enum Tab { Browse, Installed, Updates }
+
+    private Tab _tab = Tab.Browse;
+    private string _query = "";
+    private bool _loading;
+    private string? _error;
+    private List<PackageSummary> _results = new();
+    private PackageSummary? _selected;
+    private PackageDetails? _details;
+    private List<string> _versions = new();
+    private string? _version;
+    private CancellationTokenSource? _searchCts;
+
+    private async Task ChangeProject(ChangeEventArgs e)
+    {
+        NuGet.TargetProject = e.Value?.ToString();
+        await NuGet.RefreshAsync();
+    }
+
+    private static int NuGetCompare(string a, string b) => BlazorStudio.Core.NuGet.NuGetClient.CompareVersions(a, b);
+
+    protected override async Task OnInitializedAsync()
+    {
+        NuGet.Changed += Refresh;
+        _ = NuGet.RefreshAsync();
+        await SearchAsync("blazor");
+    }
+
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if (first) await JS.InvokeVoidAsync("studio.focusSelector", "#ng-search", false);
+    }
+
+    private IEnumerable<PackageSummary> Items => _tab switch
+    {
+        Tab.Browse => _results,
+        Tab.Installed => NuGet.Installed.Where(i => _query.Length == 0 || i.Id.Contains(_query, StringComparison.OrdinalIgnoreCase)).Select(ToSummary),
+        _ => NuGet.Installed.Where(i => i.HasUpdate).Select(ToSummary),
+    };
+
+    /// <summary>Installierte Pakete mit Metadaten aus der letzten Suche anreichern.</summary>
+    private PackageSummary ToSummary(InstalledInfo i) =>
+        _results.FirstOrDefault(r => r.Id.Equals(i.Id, StringComparison.OrdinalIgnoreCase)) is { } r
+            ? r with { Version = i.Latest ?? i.Version }
+            : new PackageSummary(i.Id, i.Latest ?? i.Version, null, null, 0, null, null, false, Array.Empty<string>());
+
+    private void SetTab(Tab t)
+    {
+        _tab = t;
+        if (t != Tab.Browse && _selected is not null && !NuGet.IsInstalled(_selected.Id)) _selected = null;
+    }
+
+    private async Task OnQuery(ChangeEventArgs e)
+    {
+        _query = e.Value?.ToString() ?? "";
+        if (_tab != Tab.Browse) return;
+        _searchCts?.Cancel();
+        var cts = _searchCts = new CancellationTokenSource();
+        try
+        {
+            await Task.Delay(350, cts.Token);
+            await SearchAsync(_query.Trim().Length == 0 ? "blazor" : _query.Trim(), cts.Token);
+        }
+        catch (TaskCanceledException) { }
+    }
+
+    private async Task OnKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape" && !Embedded) Ui.CloseOverlay();
+        if (e.Key == "Enter" && _tab == Tab.Browse) await SearchAsync(_query.Trim().Length == 0 ? "blazor" : _query.Trim());
+    }
+
+    private async Task SearchFor(string tag)
+    {
+        _tab = Tab.Browse;
+        _query = tag;
+        await SearchAsync(tag);
+    }
+
+    private async Task SearchAsync(string q, CancellationToken ct = default)
+    {
+        _loading = true;
+        _error = null;
+        StateHasChanged();
+        try
+        {
+            _results = (await NuGet.Client.SearchAsync(q, NuGet.IncludePrerelease, 40, ct)).ToList();
+        }
+        catch (Exception ex) when (ex is HttpRequestException or System.Text.Json.JsonException or TaskCanceledException { CancellationToken.IsCancellationRequested: false })
+        {
+            _error = L.F("nuget.offline", ex.Message);
+        }
+        catch (TaskCanceledException)
+        {
+            return;
+        }
+        finally
+        {
+            _loading = false;
+        }
+        StateHasChanged();
+    }
+
+    private async Task Select(PackageSummary p)
+    {
+        _selected = p;
+        _details = null;
+        _versions = new List<string> { p.Version };
+        _version = p.Version;
+        StateHasChanged();
+        try
+        {
+            var installed = NuGet.Find(p.Id);
+            var versions = await NuGet.Client.GetVersionsAsync(p.Id, NuGet.IncludePrerelease || installed?.Version.Contains('-') == true);
+            if (_selected != p) return;
+            if (versions.Count > 0) _versions = versions.Take(80).ToList();
+            if (installed is not null && !_versions.Contains(installed.Version)) _versions.Add(installed.Version);
+            _version = _versions.FirstOrDefault() ?? p.Version;
+            StateHasChanged();
+            _details = await NuGet.Client.GetDetailsAsync(p.Id, _version);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or System.Text.Json.JsonException or TaskCanceledException)
+        {
+            _error = L.F("nuget.offline", ex.Message);
+        }
+    }
+
+    private async Task TogglePrerelease(ChangeEventArgs e)
+    {
+        NuGet.IncludePrerelease = e.Value is true;
+        if (_tab == Tab.Browse) await SearchAsync(_query.Trim().Length == 0 ? "blazor" : _query.Trim());
+        _ = NuGet.RefreshAsync();
+        if (_selected is { } s) await Select(s);
+    }
+
+    private async Task Uninstall(string id)
+    {
+        var r = await Ui.ShowDialogAsync(new DialogRequest
+        {
+            Title = L.F("nuget.confirmRemoveTitle", id),
+            Message = L["nuget.confirmRemoveText"],
+            OkText = L["nuget.uninstall"],
+            CancelText = L["action.cancel"],
+            Danger = true,
+        });
+        if (r == DialogResult.Ok) await NuGet.UninstallAsync(id);
+    }
+
+    private static string Downloads(long n) => n switch
+    {
+        >= 1_000_000_000 => (n / 1_000_000_000d).ToString("0.#", CultureInfo.InvariantCulture) + " Mrd",
+        >= 1_000_000 => (n / 1_000_000d).ToString("0.#", CultureInfo.InvariantCulture) + " M",
+        >= 1_000 => (n / 1_000d).ToString("0.#", CultureInfo.InvariantCulture) + " k",
+        _ => n.ToString(CultureInfo.InvariantCulture),
+    };
+
+    public override void Dispose()
+    {
+        base.Dispose();
+        NuGet.Changed -= Refresh;
+        NuGet.TargetProject = null;
+        _searchCts?.Cancel();
+    }
+}

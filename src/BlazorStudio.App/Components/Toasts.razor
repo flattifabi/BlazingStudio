@@ -1,0 +1,13 @@
+@inject UiService Ui
+
+<div class="toasts">
+    @foreach (var t in Ui.Toasts.ToList())
+    {
+        var toast = t;
+        <div class="toast @toast.Kind.ToString().ToLowerInvariant()">
+            <Icon Name="@(toast.Kind switch { ToastKind.Success => "checkc", ToastKind.Warning => "alert", ToastKind.Error => "alertc", _ => "info" })" />
+            <span>@toast.Text</span>
+            <button class="x" @onclick="() => Ui.DismissToast(toast.Id)"><Icon Name="x" Class="sm" /></button>
+        </div>
+    }
+</div>

@@ -1,0 +1,92 @@
+@* Ein Event bzw. Callback: Handler-Methode wählen, neu anlegen oder als Lambda eintragen. *@
+@inject Localizer L
+
+<div class="ev @(Value is null ? "" : "set")">
+    <code title="@ArgsType">@Name</code>
+    @if (Value is null)
+    {
+        <button class="add" @onclick="() => OnCreate.InvokeAsync()">+ @L["events.newHandler"]</button>
+        @if (Methods.Any())
+        {
+            <div style="flex:0 0 40px" title="@L["events.pickExisting"]">
+                <Dropdown Class="sm" Value="@null" Placeholder="…" Mono="true" Options='Methods.Select(m => new Dropdown.Option(m.Expression, m.Expression, m.Signature, "braces"))' ValueChanged="PickValue" />
+            </div>
+        }
+    }
+    else if (IsLambda)
+    {
+        <div class="f set">
+            <input class="mono" value="@Value" spellcheck="false" @onchange="e => OnSet.InvokeAsync(string.IsNullOrWhiteSpace(e.Value?.ToString()) ? null : e.Value!.ToString())" />
+            <span class="clr" @onclick="() => OnSet.InvokeAsync(null)"><Icon Name="x" /></span>
+        </div>
+    }
+    else
+    {
+        <Dropdown Class="sm set grow" Mono="true" Value="@Clean(Value)" Options="MethodOptions" ValueChanged="PickValue" />
+        @if (OnGoTo.HasDelegate)
+        {
+            <button class="ibtn sm" title="@L["events.goTo"]" @onclick="() => OnGoTo.InvokeAsync(Clean(Value))"><Icon Name="ext" /></button>
+        }
+    }
+</div>
+@if (Value is not null && Modifiers.Count > 0)
+{
+    <div class="mods">
+        @foreach (var m in Modifiers)
+        {
+            var mod = m;
+            <button class="@(ActiveModifiers.Contains(mod) ? "on" : "")" @onclick="() => OnToggleModifier.InvokeAsync(mod)">:@mod</button>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public string Name { get; set; } = "";
+
+    [Parameter] public string? ArgsType { get; set; }
+
+    [Parameter] public string? Value { get; set; }
+
+    [Parameter] public IEnumerable<BindingCandidate> Methods { get; set; } = Array.Empty<BindingCandidate>();
+
+    [Parameter] public IReadOnlyList<string> Modifiers { get; set; } = Array.Empty<string>();
+
+    [Parameter] public IReadOnlyCollection<string> ActiveModifiers { get; set; } = Array.Empty<string>();
+
+    [Parameter] public EventCallback<string?> OnSet { get; set; }
+
+    [Parameter] public EventCallback OnCreate { get; set; }
+
+    [Parameter] public EventCallback<string> OnToggleModifier { get; set; }
+
+    [Parameter] public EventCallback<string?> OnGoTo { get; set; }
+
+    private bool IsLambda => Value is not null && (Value.Contains("=>") || Value.Contains('(') && !Value.TrimStart('@').All(c => char.IsLetterOrDigit(c) || c == '_'));
+
+    private static string? Clean(string? v) => v?.Trim().TrimStart('@');
+
+    private IEnumerable<Dropdown.Option> MethodOptions
+    {
+        get
+        {
+            var list = Methods.Select(m => new Dropdown.Option(m.Expression, m.Expression, m.Signature, "braces")).ToList();
+            if (Value is not null && !list.Any(o => o.Value == Clean(Value))) list.Insert(0, new Dropdown.Option(Clean(Value), Value));
+            list.Add(new Dropdown.Option("__new", "+ " + L["events.newMethod"], null, "plus", L["events.actions"]));
+            list.Add(new Dropdown.Option("__lambda", "λ " + L["events.lambda"], null, null, L["events.actions"]));
+            list.Add(new Dropdown.Option("__none", L["events.remove"], null, "x", L["events.actions"], Danger: true));
+            return list;
+        }
+    }
+
+    private async Task PickValue(string? v)
+    {
+        switch (v)
+        {
+            case null or "": return;
+            case "__new": await OnCreate.InvokeAsync(); return;
+            case "__none": await OnSet.InvokeAsync(null); return;
+            case "__lambda": await OnSet.InvokeAsync("() => { }"); return;
+            default: await OnSet.InvokeAsync(v); return;
+        }
+    }
+}

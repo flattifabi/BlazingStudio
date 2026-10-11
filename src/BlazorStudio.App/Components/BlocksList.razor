@@ -1,0 +1,16 @@
+@inject DesignActions Design
+@inject Localizer L
+
+<div class="scroll" style="flex:1">
+    <div class="blocks">
+        @foreach (var b in BuiltInCatalog.Blocks)
+        {
+            var key = b.Key;
+            <div class="block" draggable="true" data-bs-palette="@key" title="@L["insert.hint"]" @onclick="() => Design.InsertAtSelection(key)">
+                <Icon Name="@b.Icon" />
+                <span>@L.Label(b)</span>
+            </div>
+        }
+    </div>
+    <div class="empty-hint">@L["blocks.hint"]</div>
+</div>

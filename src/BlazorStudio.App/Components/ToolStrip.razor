@@ -1,0 +1,76 @@
+@* Werkzeugleiste ganz links wie in Rider: oben Fenster der linken/rechten Seite, unten die Werkzeuge im unteren Panel. *@
+@inherits StudioComponent
+@inject GitService Git
+
+<nav class="strip">
+    <button class="@(!Settings.Current.ToolboxCollapsed ? "on" : "")" title="@L["strip.toolbox"]" @onclick="ToggleToolbox"><Icon Name="blocks" /></button>
+    <button class="@(SidePanel.CurrentTab == "files" ? "on" : "")" title="@L["strip.solution"]" @onclick='() => SidePanel.ShowTab?.Invoke("files")'><Icon Name="sln" /></button>
+    <button class="@(SidePanel.CurrentTab == "layers" ? "on" : "")" title="@L["strip.layers"]" @onclick='() => SidePanel.ShowTab?.Invoke("layers")'><Icon Name="layers" /></button>
+    <button class="@(IsOn(BottomTab.Git) && GitPanel.View == "changes" ? "on" : "")" title="@L["strip.commit"] (Ctrl+K)" @onclick='() => ToggleGit("changes")'>
+        <Icon Name="commit" />
+        @if (Git.Status.Changes.Count > 0) { <i class="badge">@(Git.Status.Changes.Count > 99 ? "99+" : Git.Status.Changes.Count)</i> }
+    </button>
+    <hr />
+    <button title="NuGet" class="@(IsOn(BottomTab.NuGet) ? "on" : "")" @onclick="() => Toggle(BottomTab.NuGet)"><Icon Name="package" /></button>
+
+    <span class="grow"></span>
+
+    <button class="@(IsOn(BottomTab.Output) ? "on" : "")" title="@L["bottom.build"]" @onclick="() => Toggle(BottomTab.Output)">
+        <Icon Name="hammer" />
+        @if (Run.State is RunState.Building) { <i class="dot run"></i> }
+    </button>
+    <button class="@(IsOn(BottomTab.Problems) ? "on" : "")" title="@L["bottom.problems"]" @onclick="() => Toggle(BottomTab.Problems)">
+        <Icon Name="alertc" />
+        @if (Run.ErrorCount > 0) { <i class="badge err">@Run.ErrorCount</i> }
+    </button>
+    <button class="@(IsOn(BottomTab.Debug) ? "on" : "")" title="@L["bottom.debug"]" @onclick="() => Toggle(BottomTab.Debug)">
+        <Icon Name="bug" />
+        @if (Debug.IsStopped) { <i class="dot warn"></i> }
+    </button>
+    <button class="@(IsOn(BottomTab.Terminal) ? "on" : "")" title="@L["bottom.terminal"] (Alt+F12)" @onclick="() => Toggle(BottomTab.Terminal)"><Icon Name="terminal" /></button>
+    <button class="@(IsOn(BottomTab.Git) && GitPanel.View != "changes" ? "on" : "")" title="Git" @onclick='() => ToggleGit("log")'><Icon Name="git" /></button>
+</nav>
+
+@code {
+    [CascadingParameter] public Shell Shell { get; set; } = default!;
+
+    protected override void OnStudioInitialized()
+    {
+        Git.Changed += Refresh;
+        BottomPanel.TabChanged += Refresh;
+        SidePanel.TabChanged += Refresh;
+        GitPanel.ViewChanged += Refresh;
+        _ = Git.RefreshAsync();
+    }
+
+    private bool IsOn(BottomTab t) => BottomPanel.Current == t && !Settings.Current.BottomCollapsed;
+
+    /// <summary>Wie in Rider: Klick auf das aktive Werkzeug klappt das Panel ein.</summary>
+    private void Toggle(BottomTab t)
+    {
+        if (IsOn(t)) Shell.ToggleBottom();
+        else BottomPanel.Show?.Invoke(t);
+    }
+
+    private void ToggleGit(string view)
+    {
+        if (IsOn(BottomTab.Git) && GitPanel.View == view) { Shell.ToggleBottom(); return; }
+        GitPanel.Request(view);
+        BottomPanel.Show?.Invoke(BottomTab.Git);
+    }
+
+    private void ToggleToolbox()
+    {
+        Settings.Current.ToolboxCollapsed = !Settings.Current.ToolboxCollapsed;
+        Settings.Save();
+    }
+
+    public override void Dispose()
+    {
+        base.Dispose();
+        Git.Changed -= Refresh;
+        BottomPanel.TabChanged -= Refresh;
+        SidePanel.TabChanged -= Refresh;
+        GitPanel.ViewChanged -= Refresh;
+    }
+}

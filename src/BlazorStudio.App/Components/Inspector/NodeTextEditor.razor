@@ -1,0 +1,92 @@
+@* Bearbeitung von Text-, Ausdrucks-, Kontroll- und Code-Knoten. *@
+@inject DesignActions Design
+@inject Localizer L
+
+<div class="sec">
+    @switch (Node.Kind)
+    {
+        case NodeKind.Control:
+            <h4>@(Node.Name is "foreach" or "for" or "while" ? L["node.loop"] : L["node.condition"])</h4>
+            <div class="bound">
+                <span class="at">@@</span>
+                <input value="@Node.Text" spellcheck="false" @onchange="e => SetText(e.Value?.ToString())" />
+            </div>
+            <div class="hint" style="margin-top:8px"><Icon Name="info" />@(Node.Name switch
+            {
+                "foreach" => L["node.foreachHint"],
+                "if" or "else if" => L["node.ifHint"],
+                _ => L["node.controlHint"],
+            })</div>
+            @if (Node.Name == "if" && !HasElse)
+            {
+                <button class="btn dashed  wide" style="margin-top:10px" @onclick="AddElse"><Icon Name="plus" />@L["node.addElse"]</button>
+            }
+            break;
+        case NodeKind.Expression:
+            <h4>@L["kind.expression"]</h4>
+            <div class="bound">
+                <span class="at">@@</span>
+                <input value="@Node.Text.TrimStart('@')" spellcheck="false" @onchange="e => SetExpression(e.Value?.ToString())" />
+            </div>
+            <div class="hint" style="margin-top:8px"><Icon Name="info" />@L["node.expressionHint"]</div>
+            break;
+        case NodeKind.Code:
+            <h4>C#</h4>
+            <div class="f area"><textarea rows="10" class="mono" spellcheck="false" @onchange="e => SetText(e.Value?.ToString())">@Node.Text</textarea></div>
+            break;
+        default:
+            <h4>Text</h4>
+            <div class="f area"><textarea rows="4" @oninput="e => SetText(e.Value?.ToString())">@System.Net.WebUtility.HtmlDecode(Node.Text.Trim())</textarea></div>
+            break;
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public DocumentSession Session { get; set; } = default!;
+
+    [Parameter, EditorRequired] public DesignNode Node { get; set; } = default!;
+
+    private bool HasElse
+    {
+        get
+        {
+            var siblings = Node.Parent?.Children;
+            if (siblings is null) return false;
+            var i = siblings.IndexOf(Node) + 1;
+            while (i < siblings.Count && siblings[i].IsContinuation)
+            {
+                if (siblings[i].Name == "else") return true;
+                i++;
+            }
+            return false;
+        }
+    }
+
+    private void SetText(string? text)
+    {
+        if (text is null) return;
+        Design.Mutate(Node, n => n.Text = Node.Kind == NodeKind.Text ? System.Net.WebUtility.HtmlEncode(text).Replace("&#39;", "'").Replace("&quot;", "\"") : text.Trim(), "node:" + Node.Id);
+    }
+
+    private void SetExpression(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return;
+        var e = text.Trim().TrimStart('@');
+        var simple = e.All(c => char.IsLetterOrDigit(c) || c is '_' or '.') || (e.StartsWith('(') && e.EndsWith(')'));
+        Design.Mutate(Node, n => n.Text = "\u0040" + (simple ? e : "(" + e + ")"));
+    }
+
+    private void AddElse()
+    {
+        Design.Mutate(Node, n =>
+        {
+            var siblings = n.Parent!.Children;
+            var i = siblings.IndexOf(n) + 1;
+            while (i < siblings.Count && siblings[i].IsContinuation) i++;
+            var els = new DesignNode { Kind = NodeKind.Control, Name = "else", Text = "else", IsContinuation = true };
+            els.AddChild(new DesignNode { Kind = NodeKind.Element, Name = "p" });
+            els.Children[0].AddChild(DesignNode.TextNode("…"));
+            n.Parent.AddChild(els, i);
+        });
+    }
+}

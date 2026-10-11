@@ -1,0 +1,61 @@
+@implements IDisposable
+@inject Workspace Ws
+@inject Localizer L
+
+<aside class="side">
+    <section class="island">
+        <div class="sh">
+            <div class="seg">
+                <button class="@(_tab == "layers" ? "on" : "")" @onclick='() => _tab = "layers"'><Icon Name="layers" />@L["side.layers"]</button>
+                <button class="@(_tab == "files" ? "on" : "")" @onclick='() => _tab = "files"'><Icon Name="sln" />@L["side.solution"]</button>
+            </div>
+        </div>
+        @switch (_tab)
+        {
+            case "layers": <LayersTree /> break;
+            case "files": <SolutionExplorer /> break;
+            default: <LayersTree /> break;
+        }
+    </section>
+    <div class="vsplit" data-splitter="layers"></div>
+    <section class="island">
+        <InspectorPanel />
+    </section>
+</aside>
+
+@code {
+    /// <summary>Aktueller Reiter (layers/files) – für die Werkzeugleiste.</summary>
+    public static string CurrentTab { get; private set; } = "layers";
+
+    public static Action<string>? ShowTab;
+
+    public static event Action? TabChanged;
+
+    private string _tab
+    {
+        get => CurrentTab;
+        set
+        {
+            CurrentTab = value;
+            TabChanged?.Invoke();
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        Ws.Changed += Refresh;
+        ShowTab = t => InvokeAsync(() =>
+        {
+            _tab = t;
+            StateHasChanged();
+        });
+    }
+
+    private void Refresh() => InvokeAsync(StateHasChanged);
+
+    public void Dispose()
+    {
+        Ws.Changed -= Refresh;
+        ShowTab = null;
+    }
+}

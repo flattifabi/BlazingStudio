@@ -1,0 +1,106 @@
+@inject Workspace Ws
+@inject UiService Ui
+@inject RunService Run
+@inject Localizer L
+@inject IHostBridge Host
+
+<div class="backdrop" @onclick="() => { if (!_busy) Ui.CloseOverlay(); }">
+    <div class="dialog wide" @onclick:stopPropagation="true">
+        <h2>@L["newProj.title"]</h2>
+        <p>@L["newProj.text"]</p>
+        <div class="opt-cards" style="margin-bottom:12px">
+            @foreach (var t in Templates)
+            {
+                var tpl = t;
+                <button class="opt-card @(_template == tpl.Id ? "on" : "")" @onclick="() => _template = tpl.Id"><b>@L[tpl.LabelKey]</b><small>@L[tpl.HintKey]</small></button>
+            }
+        </div>
+        @if (_template == "blazor")
+        {
+            <div class="row2">
+                <label>@L["newProj.interactivity"]</label>
+                <div class="seg fill">
+                    @foreach (var i in new[] { "Server", "WebAssembly", "Auto", "None" })
+                    {
+                        var mode = i;
+                        <button class="@(_interactivity == mode ? "on" : "")" @onclick="() => _interactivity = mode">@mode</button>
+                    }
+                </div>
+            </div>
+        }
+        <div class="row2">
+            <label>@L["newProj.name"]</label>
+            <div class="f"><input value="@_name" placeholder="MeinShop" spellcheck="false" @oninput="e => _name = e.Value?.ToString() ?? string.Empty" /></div>
+        </div>
+        <div class="row2">
+            <label>@L["newProj.location"]</label>
+            <div style="display:flex;gap:6px">
+                <div class="f" style="flex:1"><input class="mono" value="@_location" spellcheck="false" @onchange="e => _location = e.Value?.ToString() ?? string.Empty" /></div>
+                <button class="btn" @onclick="Pick"><Icon Name="folder" />@L["action.browse"]</button>
+            </div>
+        </div>
+        <label class="check"><input type="checkbox" checked="@_sampleContent" @onchange="e => _sampleContent = (bool)(e.Value ?? false)" />@L["newProj.sample"]</label>
+        @if (_busy) { <div class="hint" style="margin-top:8px"><Icon Name="refresh" Class="spin" />@L["newProj.creating"]</div> }
+        <div class="btns">
+            <button class="btn ghost" disabled="@_busy" @onclick="Ui.CloseOverlay">@L["action.cancel"]</button>
+            <button class="btn ac" disabled="@(_busy || _name.Trim().Length == 0 || _location.Trim().Length == 0)" @onclick="Create">@L["action.create"]</button>
+        </div>
+    </div>
+</div>
+
+@code {
+    private sealed record Tpl(string Id, string LabelKey, string HintKey);
+
+    private static readonly Tpl[] Templates =
+    {
+        new("blazor", "newProj.web", "newProj.webHint"),
+        new("blazorwasm", "newProj.wasm", "newProj.wasmHint"),
+    };
+
+    private string _template = "blazor";
+    private string _interactivity = "Server";
+    private string _name = "";
+    private string _location = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "source", "repos");
+    private bool _sampleContent = true;
+    private bool _busy;
+
+    private async Task Pick()
+    {
+        var f = await Host.PickFolderAsync(L["newProj.location"], _location);
+        if (f is not null) _location = f;
+    }
+
+    private async Task Create()
+    {
+        var name = _name.Trim();
+        if (name.Any(c => !char.IsLetterOrDigit(c) && c is not ('.' or '_' or '-')))
+        {
+            Ui.ShowToast(L["toast.badProjectName"], ToastKind.Warning);
+            return;
+        }
+        var target = Path.Combine(_location.Trim(), name);
+        if (Directory.Exists(target) && Directory.EnumerateFileSystemEntries(target).Any())
+        {
+            Ui.ShowToast(L.F("toast.exists", target), ToastKind.Warning);
+            return;
+        }
+        _busy = true;
+        Directory.CreateDirectory(_location.Trim());
+        var args = new List<string> { "new", _template, "-n", name, "-o", target };
+        if (_template == "blazor")
+        {
+            args.AddRange(new[] { "--interactivity", _interactivity });
+            if (!_sampleContent) args.Add("--empty");
+        }
+        else if (!_sampleContent) args.Add("--empty");
+        var code = await Run.ExecAsync(_location.Trim(), args.ToArray());
+        _busy = false;
+        if (code != 0)
+        {
+            Ui.ShowToast(L["toast.projectFailed"], ToastKind.Error, 7000);
+            return;
+        }
+        Ui.CloseOverlay();
+        await Ws.OpenProjectAsync(target);
+    }
+}

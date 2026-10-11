@@ -1,0 +1,12 @@
+@inject DebugService Debug
+@inject Localizer L
+
+<div class="dbgbar">
+    <span class="grip">⋮⋮</span>
+    <button class="ibtn g1" title="@L["cmd.continue"] (F5)" @onclick="() => Debug.Session.ContinueAsync()"><Icon Name="play" /></button>
+    <button class="ibtn" title="@L["cmd.stepOver"] (F10)" @onclick="() => Debug.Session.StepOverAsync()"><Icon Name="over" /></button>
+    <button class="ibtn" title="@L["cmd.stepInto"] (F11)" @onclick="() => Debug.Session.StepIntoAsync()"><Icon Name="into" /></button>
+    <button class="ibtn" title="@L["cmd.stepOut"] (Shift+F11)" @onclick="() => Debug.Session.StepOutAsync()"><Icon Name="out" /></button>
+    <button class="ibtn" title="@L["cmd.restart"]" @onclick="() => Debug.RestartAsync()"><Icon Name="restart" /></button>
+    <button class="ibtn g2" title="@L["cmd.stop"] (Shift+F5)" @onclick="() => Debug.StopAsync()"><Icon Name="stop" /></button>
+</div>

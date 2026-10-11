@@ -1,0 +1,24 @@
+<span class="fi @Css">@Label</span>
+
+@code {
+    [Parameter, EditorRequired] public string Path { get; set; } = "";
+
+    private (string Css, string Label) Info => System.IO.Path.GetExtension(Path).ToLowerInvariant() switch
+    {
+        ".razor" => ("razor", "\u0040"),
+        ".cs" => ("cs", "C#"),
+        ".css" or ".scss" => ("css", "#"),
+        ".js" or ".mjs" => ("js", "JS"),
+        ".ts" => ("js", "TS"),
+        ".json" => ("json", "{}"),
+        ".html" or ".htm" or ".cshtml" => ("html", "<>"),
+        ".csproj" or ".slnx" or ".sln" or ".xml" or ".props" => ("xml", "⚙"),
+        ".md" => ("md", "M"),
+        ".sql" => ("json", "DB"),
+        _ => ("txt", "·"),
+    };
+
+    private string Css => Info.Css;
+
+    private string Label => Info.Label;
+}

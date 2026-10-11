@@ -1,0 +1,95 @@
+@inject Workspace Ws
+@inject Localizer L
+
+<div class="chips" @onclick="FocusInput">
+    @foreach (var c in Classes)
+    {
+        var cls = c;
+        <span class="cc @(cls.Contains('@') ? "dyn" : "")" title="@(Ws.Project?.Css.Find(cls) is { } info ? info.SourceFile + (info.Preview is null ? "" : "\n" + info.Preview) : "")">
+            @cls
+            <button @onclick="() => Remove(cls)" @onclick:stopPropagation="true"><Icon Name="x" /></button>
+        </span>
+    }
+    <input @ref="_input" value="@_text" placeholder="@(Classes.Count == 0 ? L["inspector.addClass"] : "")" spellcheck="false"
+           @oninput="OnInput" @onkeydown="OnKey" @onfocus="() => _open = true" @onblur="OnBlur" />
+    @if (_open && Suggestions.Count > 0)
+    {
+        <div class="ac-list">
+            @for (var i = 0; i < Suggestions.Count; i++)
+            {
+                var s = Suggestions[i];
+                var idx = i;
+                <div class="@(idx == _index ? "on" : "")" @onmousedown="() => Add(s.Name)" @onmousedown:preventDefault="true">
+                    <span>@s.Name</span><small>@s.SourceFile</small>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public IReadOnlyList<string> Classes { get; set; } = Array.Empty<string>();
+
+    [Parameter] public EventCallback<IReadOnlyList<string>> OnChange { get; set; }
+
+    private ElementReference _input;
+    private string _text = "";
+    private bool _open;
+    private int _index;
+
+    private List<CssClassInfo> Suggestions =>
+        (Ws.Project?.Css.Search(_text.Trim(), 30) ?? Enumerable.Empty<CssClassInfo>())
+            .Where(s => !Classes.Contains(s.Name))
+            .Take(_text.Trim().Length == 0 ? 8 : 30)
+            .ToList();
+
+    private void OnInput(ChangeEventArgs e)
+    {
+        var v = e.Value?.ToString() ?? "";
+        if (v.EndsWith(' ') && v.Trim().Length > 0)
+        {
+            _ = Add(v.Trim());
+            return;
+        }
+        _text = v;
+        _index = 0;
+        _open = true;
+    }
+
+    private async Task OnKey(KeyboardEventArgs e)
+    {
+        var list = Suggestions;
+        switch (e.Key)
+        {
+            case "ArrowDown": _index = Math.Min(_index + 1, list.Count - 1); break;
+            case "ArrowUp": _index = Math.Max(_index - 1, 0); break;
+            case "Enter" or "Tab":
+                if (list.Count > 0 && _open && _text.Length > 0) await Add(list[Math.Clamp(_index, 0, list.Count - 1)].Name);
+                else if (_text.Trim().Length > 0) await Add(_text.Trim());
+                break;
+            case "Backspace" when _text.Length == 0 && Classes.Count > 0:
+                await Remove(Classes[^1]);
+                break;
+            case "Escape": _open = false; break;
+        }
+    }
+
+    private async Task Add(string cls)
+    {
+        _text = "";
+        _index = 0;
+        var parts = cls.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        await OnChange.InvokeAsync(Classes.Concat(parts).Distinct().ToList());
+    }
+
+    private Task Remove(string cls) => OnChange.InvokeAsync(Classes.Where(c => c != cls).ToList());
+
+    private async Task OnBlur()
+    {
+        await Task.Delay(120);
+        _open = false;
+        if (_text.Trim().Length > 0) await Add(_text.Trim());
+    }
+
+    private async Task FocusInput() => await _input.FocusAsync();
+}

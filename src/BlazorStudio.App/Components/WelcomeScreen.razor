@@ -1,0 +1,56 @@
+@inherits StudioComponent
+
+<div class="welcome">
+    <div class="welcome-inner">
+        <div>
+            <img class="mark big" src="img/logo.svg" alt="Blazor Studio" />
+            <h1>Blazor Studio</h1>
+            <p class="lead">@L["welcome.lead"]</p>
+            <div class="actions">
+                <button class="wa" @onclick="Shell.OpenProjectAsync">
+                    <span class="ic"><Icon Name="folderopen" /></span>
+                    <span><b>@L["cmd.openProject"]</b><small>@L["welcome.openHint"]</small></span>
+                </button>
+                <button class="wa" @onclick="Shell.OpenSolutionAsync">
+                    <span class="ic"><Icon Name="sln" /></span>
+                    <span><b>@L["cmd.openSolution"]</b><small>@L["welcome.solutionHint"]</small></span>
+                </button>
+                <button class="wa" @onclick='() => Ui.OpenOverlay("newProject")'>
+                    <span class="ic"><Icon Name="sparkle" /></span>
+                    <span><b>@L["cmd.newProject"]</b><small>@L["welcome.newHint"]</small></span>
+                </button>
+            </div>
+            <div class="features">
+                <div class="feat"><Icon Name="move" /><span><b>@L["feat.dnd"]</b>@L["feat.dndText"]</span></div>
+                <div class="feat"><Icon Name="bindi" /><span><b>@L["feat.binding"]</b>@L["feat.bindingText"]</span></div>
+                <div class="feat"><Icon Name="monitor" /><span><b>@L["feat.responsive"]</b>@L["feat.responsiveText"]</span></div>
+                <div class="feat"><Icon Name="bug" /><span><b>@L["feat.debug"]</b>@L["feat.debugText"]</span></div>
+            </div>
+        </div>
+        <div class="recent">
+            <h3>@L["welcome.recent"]</h3>
+            @if (Settings.Current.RecentProjects.Count == 0)
+            {
+                <p class="dim">@L["welcome.noRecent"]</p>
+            }
+            @foreach (var r in Settings.Current.RecentProjects)
+            {
+                <button class="ri" @onclick="() => Ws.OpenProjectAsync(r)">
+                    <Icon Name="folder" />
+                    <span style="min-width:0"><span class="n">@Path.GetFileName(r.TrimEnd('\\'))</span><small>@r</small></span>
+                    <span class="x ibtn sm" title="@L["action.remove"]" @onclick="() => Remove(r)" @onclick:stopPropagation="true"><Icon Name="x" /></span>
+                </button>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    [CascadingParameter] public Shell Shell { get; set; } = default!;
+
+    private void Remove(string r)
+    {
+        Settings.Current.RecentProjects.Remove(r);
+        Settings.Save();
+    }
+}

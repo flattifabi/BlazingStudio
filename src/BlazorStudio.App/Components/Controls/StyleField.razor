@@ -1,0 +1,83 @@
+@* Eingabe für CSS-Werte: Zahl + Einheit, Pfeiltasten (Shift = 10er), Ziehen am Label, Leeren-Knopf. *@
+<div class="f @(string.IsNullOrEmpty(Value) ? "" : "set")" title="@Property">
+    @if (Label is not null)
+    {
+        <label @onpointerdown="StartScrub" @onpointermove="Scrub" @onpointerup="EndScrub">@Label</label>
+    }
+    <input value="@Value" placeholder="@Placeholder" spellcheck="false" list="@ListId"
+           @oninput="e => Emit(e.Value?.ToString())" @onkeydown="Key" />
+    @if (Options is { Count: > 0 })
+    {
+        <datalist id="@ListId">
+            @foreach (var o in Options) { <option value="@o"></option> }
+        </datalist>
+    }
+    @if (Unit is not null && IsNumberOnly) { <span class="u">@Unit</span> }
+    @if (!string.IsNullOrEmpty(Value))
+    {
+        <span class="clr" @onclick="() => OnChange.InvokeAsync(null)"><Icon Name="x" /></span>
+    }
+</div>
+
+@code {
+    [Parameter] public string? Label { get; set; }
+
+    [Parameter] public string? Property { get; set; }
+
+    [Parameter] public string? Value { get; set; }
+
+    [Parameter] public string? Placeholder { get; set; }
+
+    /// <summary>Einheit, die an reine Zahlen angehängt wird (null = keine).</summary>
+    [Parameter] public string? Unit { get; set; } = "px";
+
+    [Parameter] public IReadOnlyList<string>? Options { get; set; }
+
+    [Parameter] public EventCallback<string?> OnChange { get; set; }
+
+    private readonly string _id = "dl" + Guid.NewGuid().ToString("N")[..6];
+    private string? ListId => Options is { Count: > 0 } ? _id : null;
+    private bool _scrubbing;
+    private double _scrubStartX;
+    private double _scrubStartValue;
+
+    private bool IsNumberOnly => string.IsNullOrEmpty(Value) || double.TryParse(Value, NumberStyles.Float, CultureInfo.InvariantCulture, out _);
+
+    private Task Emit(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return OnChange.InvokeAsync(null);
+        var v = raw.Trim();
+        if (Unit is not null && double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) && d != 0) v += Unit;
+        return OnChange.InvokeAsync(v);
+    }
+
+    private async Task Key(KeyboardEventArgs e)
+    {
+        if (e.Key is not ("ArrowUp" or "ArrowDown")) return;
+        var (num, unit) = CssValue.Split(Value);
+        num ??= 0;
+        var step = e.ShiftKey ? 10 : e.AltKey ? 0.1 : 1;
+        var next = Math.Round(num.Value + (e.Key == "ArrowUp" ? step : -step), 2);
+        if (unit.Length == 0) unit = Unit ?? "";
+        await OnChange.InvokeAsync(next.ToString(CultureInfo.InvariantCulture) + (next == 0 && Unit == "px" ? "" : unit));
+    }
+
+    private void StartScrub(PointerEventArgs e)
+    {
+        _scrubbing = true;
+        _scrubStartX = e.ClientX;
+        _scrubStartValue = CssValue.Split(Value).Number ?? 0;
+    }
+
+    private async Task Scrub(PointerEventArgs e)
+    {
+        if (!_scrubbing || e.Buttons != 1) { _scrubbing = false; return; }
+        var delta = Math.Round((e.ClientX - _scrubStartX) / 3);
+        var (_, unit) = CssValue.Split(Value);
+        if (unit.Length == 0) unit = Unit ?? "";
+        var v = Math.Max(Property is "width" or "height" or "font-size" or "gap" or "border-radius" or "padding" or "line-height" ? 0 : double.MinValue, _scrubStartValue + delta);
+        await OnChange.InvokeAsync(v.ToString(CultureInfo.InvariantCulture) + unit);
+    }
+
+    private void EndScrub() => _scrubbing = false;
+}

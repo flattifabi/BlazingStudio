@@ -1,0 +1,36 @@
+.product-card {
+    border: 1px solid #eceef5;
+    border-radius: 12px;
+    padding: 16px;
+    background: #fafbfc;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.product-card.compact {
+    padding: 10px;
+}
+
+.product-image {
+    height: 90px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, #eef1f6, #e3e8f2);
+    margin-bottom: 6px;
+}
+
+.product-card h3 {
+    margin: 0;
+    font-size: 16px;
+}
+
+.product-card p {
+    margin: 0;
+    color: #6b7089;
+    font-size: 13px;
+}
+
+.price {
+    font-weight: 700;
+    color: var(--primary);
+}

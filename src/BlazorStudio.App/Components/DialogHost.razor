@@ -1,0 +1,43 @@
+@inject UiService Ui
+@inject IJSRuntime JS
+
+@if (Ui.Dialog is { } d)
+{
+    <div class="backdrop" @onclick="() => Ui.CloseDialog(DialogResult.Cancel)">
+        <div class="dialog" @onclick:stopPropagation="true">
+            <h2>@d.Title</h2>
+            @if (d.Message is not null) { <p>@d.Message</p> }
+            @if (d.InputValue is not null)
+            {
+                <div class="f" style="margin-bottom:6px">
+                    <input id="dialog-input" class="mono" value="@d.InputValue" placeholder="@d.InputPlaceholder" spellcheck="false"
+                           @oninput="e => d.InputValue = e.Value?.ToString()" @onkeydown="e => Key(e, d)" />
+                </div>
+            }
+            <div class="btns">
+                @if (d.AltText is not null) { <button class="btn left" @onclick="() => Ui.CloseDialog(DialogResult.Alt)">@d.AltText</button> }
+                @if (d.CancelText is not null) { <button class="btn ghost" @onclick="() => Ui.CloseDialog(DialogResult.Cancel)">@d.CancelText</button> }
+                <button class="btn @(d.Danger ? "danger" : "ac")" @onclick="() => Ui.CloseDialog(DialogResult.Ok)">@d.OkText</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private DialogRequest? _focused;
+
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if (Ui.Dialog is { InputValue: not null } d && _focused != d)
+        {
+            _focused = d;
+            await JS.InvokeVoidAsync("studio.focusSelector", "#dialog-input", true);
+        }
+    }
+
+    private void Key(KeyboardEventArgs e, DialogRequest d)
+    {
+        if (e.Key == "Enter") Ui.CloseDialog(DialogResult.Ok);
+        if (e.Key == "Escape") Ui.CloseDialog(DialogResult.Cancel);
+    }
+}

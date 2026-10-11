@@ -1,0 +1,64 @@
+﻿@* Textinhalt eines Elements: fester Text oder gebundener Ausdruck (@member). *@
+@inject DesignActions Design
+@inject Localizer L
+
+<div class="param">
+    <div class="ph">
+        <b>@L["props.content"]</b><span class="t">@L["props.contentHint"]</span>
+        <button class="bind @(IsBound ? "on" : "")" @onclick="ToggleBind"><Icon Name="bindi" />@(IsBound ? L["inspector.bound"] : L["inspector.bind"])</button>
+    </div>
+    @if (IsBound)
+    {
+        <div class="bound">
+            <span class="at">@@</span>
+            <input list="contentlist" value="@BoundExpr" spellcheck="false" @onchange="e => SetExpression(e.Value?.ToString())" />
+            <datalist id="contentlist">
+                @foreach (var c in BindingScope.ForValue(Candidates, "string")) { <option value="@c.Expression">@c.Type</option> }
+            </datalist>
+        </div>
+    }
+    else
+    {
+        <div class="f area">
+            <textarea rows="2" spellcheck="true" @oninput="e => Design.SetText(Node.Id, e.Value?.ToString() ?? string.Empty)">@System.Net.WebUtility.HtmlDecode(Node.InnerText.Trim())</textarea>
+        </div>
+        <div class="hint" style="margin-top:4px"><Icon Name="info" />@L["props.doubleClickHint"]</div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public DesignNode Node { get; set; } = default!;
+
+    [Parameter] public IReadOnlyList<BindingCandidate> Candidates { get; set; } = Array.Empty<BindingCandidate>();
+
+    private bool IsBound => Node.Children.Count == 1 && Node.Children[0].Kind == NodeKind.Expression;
+
+    private string BoundExpr => IsBound ? Node.Children[0].Text.TrimStart('@').Trim('(', ')') : "";
+
+    private void ToggleBind()
+    {
+        if (IsBound)
+        {
+            Design.Mutate(Node, n =>
+            {
+                n.Children.Clear();
+                n.AddChild(DesignNode.TextNode("Text"));
+            });
+            return;
+        }
+        var first = BindingScope.ForValue(Candidates, "string").FirstOrDefault()?.Expression ?? "value";
+        SetExpression(first);
+    }
+
+    private void SetExpression(string? expr)
+    {
+        if (string.IsNullOrWhiteSpace(expr)) return;
+        var e = expr.Trim().TrimStart('@');
+        var text = e.All(c => char.IsLetterOrDigit(c) || c is '_' or '.') ? "\u0040" + e : "\u0040(" + e + ")";
+        Design.Mutate(Node, n =>
+        {
+            foreach (var c in n.Children.ToList()) c.Detach();
+            n.AddChild(new DesignNode { Kind = NodeKind.Expression, Text = text });
+        }, "content:" + Node.Id);
+    }
+}

@@ -1,0 +1,45 @@
+@* Kleiner Verlauf als SVG (Werte von links alt nach rechts neu). *@
+<svg class="spark" viewBox="0 0 @W @H" preserveAspectRatio="none" aria-hidden="true">
+    @if (Values.Count > 1)
+    {
+        <path d="@Area" class="spark-area" style="fill:@Color" />
+        <path d="@Line" class="spark-line" style="stroke:@Color" />
+    }
+</svg>
+
+@code {
+    [Parameter] public IReadOnlyList<double> Values { get; set; } = Array.Empty<double>();
+
+    [Parameter] public string Color { get; set; } = "var(--ac)";
+
+    /// <summary>Fester Maximalwert (z. B. 100 für Prozent); sonst automatisch.</summary>
+    [Parameter] public double? Max { get; set; }
+
+    private const int W = 180;
+    private const int H = 40;
+
+    private IEnumerable<(double X, double Y)> Points
+    {
+        get
+        {
+            var max = Max ?? Math.Max(1e-9, Values.Max() * 1.15);
+            var n = Math.Max(1, ProfilerService.HistoryLength - 1);
+            var offset = ProfilerService.HistoryLength - Values.Count;
+            for (var i = 0; i < Values.Count; i++)
+                yield return ((offset + i) * (double)W / n, H - 2 - Math.Clamp(Values[i] / max, 0, 1) * (H - 4));
+        }
+    }
+
+    private static string F(double v) => v.ToString("0.#", CultureInfo.InvariantCulture);
+
+    private string Line => "M" + string.Join(" L", Points.Select(p => $"{F(p.X)},{F(p.Y)}"));
+
+    private string Area
+    {
+        get
+        {
+            var pts = Points.ToList();
+            return $"M{F(pts[0].X)},{H} L" + string.Join(" L", pts.Select(p => $"{F(p.X)},{F(p.Y)}")) + $" L{F(pts[^1].X)},{H} Z";
+        }
+    }
+}

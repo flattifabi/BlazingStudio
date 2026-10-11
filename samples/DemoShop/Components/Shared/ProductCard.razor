@@ -1,0 +1,11 @@
+<div class="product-card @VariantClass">
+    <div class="product-image"></div>
+    <h3>@(Title ?? Product.Name)</h3>
+    <p>@Product.Description</p>
+    @if (ShowPrice)
+    {
+        <div class="price">€ @Product.Price.ToString("0.00")</div>
+    }
+    <button class="btn btn-primary btn-sm" @onclick="AddAsync">In den Warenkorb</button>
+    @ChildContent
+</div>

@@ -1,0 +1,448 @@
+@inject Workspace Ws
+@inject DesignActions Design
+@inject Localizer L
+
+@* ---------- Zustand & Breakpoint ---------- *@
+<div class="sec">
+    <h4>@L["design.state"]</h4>
+    <div class="states">
+        @foreach (var s in States)
+        {
+            var st = s;
+            <button class="st2 @(Session.DesignState == st ? "on" : "")" @onclick="() => SetState(st)">
+                @(st.Length == 0 ? L["design.normal"] : ":" + st)
+                @if (st.Length > 0 && HasRuleFor(st)) { <i></i> }
+            </button>
+        }
+    </div>
+    <div class="scope">
+        <Icon Name="monitor" Class="sm" />
+        @if (Media is null)
+        {
+            <span>@L["design.scopeBase"]</span>
+        }
+        else
+        {
+            <span>@((MarkupString)L.F("design.scopeFrom", $"<b>{DesignerView.BreakpointName(Breakpoint)} (≥ {Breakpoint}px)</b>"))</span>
+        }
+        @if (UseRule)
+        {
+            <span class="dim">→ <span class="mono">@Selector</span> @L["design.inFile"] @(Session.Name).css</span>
+        }
+    </div>
+    @if (UseRule && PrimaryClass is null)
+    {
+        <div class="hint warn" style="margin-top:8px">
+            <Icon Name="alert" /><span>@L["design.needsClass"]
+                <button class="btn sm" style="margin-top:6px" @onclick="CreateClass">@L["design.createClass"]</button></span>
+        </div>
+    }
+    else if (UseRule && Inline.Count > 0)
+    {
+        <div class="hint warn" style="margin-top:8px">
+            <Icon Name="alert" /><span>@L["design.inlineWins"]
+                <button class="btn sm" style="margin-top:6px" @onclick="ExtractToClass">@L["design.extract"]</button></span>
+        </div>
+    }
+</div>
+
+@* ---------- Klassen ---------- *@
+<div class="sec">
+    <h4>@L["design.classes"]<span class="r">@(Ws.Project?.Css.Classes.Count ?? 0) @L["design.known"]</span></h4>
+    <ClassChips Classes="Node.Classes" OnChange="SetClasses" />
+</div>
+
+@if (!UseRule || PrimaryClass is not null)
+{
+    @* ---------- Layout ---------- *@
+    <div class="sec">
+        <h4>@L["design.layout"]</h4>
+        <div class="seg fill" style="margin-bottom:10px">
+            @foreach (var d in new[] { "block", "flex", "grid", "inline", "inline-block", "none" })
+            {
+                var disp = d;
+                <button class="@(Display == disp ? "on" : "")" title="display: @disp" @onclick='() => Toggle("display", disp)'>@(disp == "inline-block" ? "i-block" : disp)</button>
+            }
+        </div>
+        @if (IsFlex)
+        {
+            var row = !(Get("flex-direction") ?? "row").StartsWith("column", StringComparison.Ordinal);
+            <div class="flexrow">
+                <div class="matrix @(row ? "" : "col")" title="justify-content / align-items">
+                    @for (var y = 0; y < 3; y++)
+                    {
+                        for (var x = 0; x < 3; x++)
+                        {
+                            var (jx, ay) = row ? (x, y) : (y, x);
+                            var j = Align[jx];
+                            var a = Align[ay];
+                            var on = (Get("justify-content") ?? "flex-start") == j && (Get("align-items") ?? "stretch") == a;
+                            <button class="@(on ? "on" : "")" title="@j / @a" @onclick='() => SetMany(("justify-content", j == "flex-start" ? null : j), ("align-items", a))'></button>
+                        }
+                    }
+                </div>
+                <div class="stack">
+                    <div class="seg fill">
+                        <button class="@(row ? "on" : "")" title="row" @onclick='() => Set("flex-direction", null)'><Icon Name="row" /></button>
+                        <button class="@(!row ? "on" : "")" title="column" @onclick='() => Set("flex-direction", "column")'><Icon Name="col" /></button>
+                        <button class="@(Get("justify-content") == "space-between" ? "on" : "")" title="space-between" @onclick='() => Toggle("justify-content", "space-between")'>↔</button>
+                    </div>
+                    <StyleField Label="Gap" Property="gap" Value="@Get("gap")" Placeholder="0" OnChange='v => Set("gap", v)' />
+                    <Dropdown Value='@(Get("flex-wrap") ?? "nowrap")' Options='new[] { new Dropdown.Option("nowrap", L["design.noWrap"]), new Dropdown.Option("wrap", L["design.wrap"]) }' ValueChanged='v => Set("flex-wrap", v == "nowrap" ? null : v)' />
+                </div>
+            </div>
+        }
+        else if (Display is "grid" or "inline-grid")
+        {
+            <div class="lab">@L["design.columns"]</div>
+            <div class="seg fill">
+                @foreach (var c in new[] { 1, 2, 3, 4, 6 })
+                {
+                    var cols = c;
+                    var val = cols == 1 ? "1fr" : $"repeat({cols}, 1fr)";
+                    <button class="@(Get("grid-template-columns") == val ? "on" : "")" @onclick='() => Set("grid-template-columns", val)'>@cols</button>
+                }
+                <button class="@(Get("grid-template-columns")?.Contains("auto-fill") == true ? "on" : "")" title="auto-fill" @onclick='() => Set("grid-template-columns", "repeat(auto-fill, minmax(200px, 1fr))")'>auto</button>
+            </div>
+            <div class="g2" style="margin-top:6px">
+                <StyleField Label="Gap" Property="gap" Value="@Get("gap")" Placeholder="0" OnChange='v => Set("gap", v)' />
+                <StyleField Label="↕" Property="align-items" Value="@Get("align-items")" Unit="@null" Placeholder="stretch" Options='CssCatalog.ValuesFor("align-items")' OnChange='v => Set("align-items", v)' />
+            </div>
+        }
+        <div class="g2" style="margin-top:8px">
+            <Dropdown Label="Pos" Title="position" Class='@(Get("position") is null ? "" : "set")' Value='@(Get("position") ?? "static")' Options='Opts("static", "relative", "absolute", "fixed", "sticky")' ValueChanged='v => Set("position", v == "static" ? null : v)' />
+            <Dropdown Label="Ovf" Title="overflow" Class='@(Get("overflow") is null ? "" : "set")' Value='@(Get("overflow") ?? "visible")' Options='Opts("visible", "hidden", "auto", "scroll", "clip")' ValueChanged='v => Set("overflow", v == "visible" ? null : v)' />
+        </div>
+        @if (Get("position") is "absolute" or "fixed" or "sticky" or "relative")
+        {
+            <div class="g4" style="margin-top:6px">
+                <StyleField Label="T" Property="top" Value="@Get("top")" OnChange='v => Set("top", v)' />
+                <StyleField Label="R" Property="right" Value="@Get("right")" OnChange='v => Set("right", v)' />
+                <StyleField Label="B" Property="bottom" Value="@Get("bottom")" OnChange='v => Set("bottom", v)' />
+                <StyleField Label="L" Property="left" Value="@Get("left")" OnChange='v => Set("left", v)' />
+            </div>
+        }
+        @if (Node.Parent is { } parent && IsFlexParent(parent))
+        {
+            <div class="lab">@L["design.inFlex"]</div>
+            <div class="g3">
+                <StyleField Label="Grow" Property="flex-grow" Value="@Get("flex-grow")" Unit="@null" Placeholder="0" OnChange='v => Set("flex-grow", v)' />
+                <StyleField Label="Shr" Property="flex-shrink" Value="@Get("flex-shrink")" Unit="@null" Placeholder="1" OnChange='v => Set("flex-shrink", v)' />
+                <StyleField Label="Ord" Property="order" Value="@Get("order")" Unit="@null" Placeholder="0" OnChange='v => Set("order", v)' />
+            </div>
+        }
+    </div>
+
+    @* ---------- Abstände & Größe ---------- *@
+    <div class="sec">
+        <h4>@L["design.spacing"]</h4>
+        <BoxModel Margin='Box("margin")' Padding='Box("padding")' Core="@CoreLabel" OnChange="SetBox" />
+        <div class="g2" style="margin-top:8px">
+            <StyleField Label="W" Property="width" Value="@Get("width")" Placeholder="auto" Options='CssCatalog.ValuesFor("width")' OnChange='v => Set("width", v)' />
+            <StyleField Label="H" Property="height" Value="@Get("height")" Placeholder="auto" Options='CssCatalog.ValuesFor("height")' OnChange='v => Set("height", v)' />
+            <StyleField Label="↤W" Property="min-width" Value="@Get("min-width")" Placeholder="min" OnChange='v => Set("min-width", v)' />
+            <StyleField Label="W↦" Property="max-width" Value="@Get("max-width")" Placeholder="max" Options='CssCatalog.ValuesFor("max-width")' OnChange='v => Set("max-width", v)' />
+        </div>
+    </div>
+
+    @* ---------- Typografie ---------- *@
+    <div class="sec">
+        <h4>@L["design.typography"]</h4>
+        <div class="g2">
+            <StyleField Label="Aa" Property="font-size" Value="@Get("font-size")" Placeholder="16" Options='CssCatalog.ValuesFor("font-size")' OnChange='v => Set("font-size", v)' />
+            <Dropdown Title="font-weight" Placeholder="@L["design.weight"]" Class='@(Get("font-weight") is null ? "" : "set")' Value='@Get("font-weight")' Options='Weights.Select(w => new Dropdown.Option(w.Value, w.Value + " · " + w.Name)).Prepend(new Dropdown.Option(null, L["design.weight"]))' ValueChanged='v => Set("font-weight", v)' />
+            <StyleField Label="↕" Property="line-height" Value="@Get("line-height")" Unit="@null" Placeholder="1.5" OnChange='v => Set("line-height", v)' />
+            <StyleField Label="A↔" Property="letter-spacing" Value="@Get("letter-spacing")" Placeholder="0" OnChange='v => Set("letter-spacing", v)' />
+        </div>
+        <div class="lab">@L["design.textColor"]</div>
+        <ColorField Value="@Get("color")" Placeholder="inherit" OnChange='v => Set("color", v)' />
+        <div class="g2" style="margin-top:6px">
+            <div class="seg fill">
+                @foreach (var (val, icon) in new[] { ("left", "aleft"), ("center", "acenter"), ("right", "aright"), ("justify", "ajustify") })
+                {
+                    var v = val;
+                    <button class="@(Get("text-align") == v ? "on" : "")" title="text-align: @v" @onclick='() => Toggle("text-align", v)'><Icon Name="@icon" /></button>
+                }
+            </div>
+            <div class="seg fill">
+                <button class="@(Get("font-style") == "italic" ? "on" : "")" title="italic" @onclick='() => Toggle("font-style", "italic")'><i>I</i></button>
+                <button class="@(Get("text-decoration") == "underline" ? "on" : "")" title="underline" @onclick='() => Toggle("text-decoration", "underline")'><u>U</u></button>
+                <button class="@(Get("text-transform") == "uppercase" ? "on" : "")" title="uppercase" @onclick='() => Toggle("text-transform", "uppercase")'>AB</button>
+            </div>
+        </div>
+        <div style="margin-top:6px">
+            <StyleField Label="Ff" Property="font-family" Value="@Get("font-family")" Unit="@null" Placeholder="inherit" Options='CssCatalog.ValuesFor("font-family")' OnChange='v => Set("font-family", v)' />
+        </div>
+    </div>
+
+    @* ---------- Füllung ---------- *@
+    <div class="sec">
+        <h4>@L["design.fill"]@if (Ws.Project?.Css.Tokens.Any(t => t.IsColor) == true) { <span class="r">@L["design.tokens"]</span> }</h4>
+        <ColorField Value="@(Get("background-color") ?? Get("background"))" Placeholder="transparent" ShowTokens="true" OnChange="SetBackground" />
+        <div class="lab">@L["design.opacity"]<span class="t">@(Get("opacity") ?? "1")</span></div>
+        <div class="range">
+            <input type="range" min="0" max="100" value="@OpacityPercent" @oninput='e => Set("opacity", e.Value?.ToString() == "100" ? null : (int.Parse(e.Value?.ToString() ?? "100") / 100.0).ToString(CultureInfo.InvariantCulture))' />
+        </div>
+    </div>
+
+    @* ---------- Rahmen & Effekte ---------- *@
+    <div class="sec">
+        <h4>@L["design.border"]</h4>
+        <div class="lab">@L["design.radius"]<span class="t">@(Get("border-radius") ?? "0")</span></div>
+        <div class="range">
+            <input type="range" min="0" max="40" value="@(CssValue.Split(Get("border-radius")).Number ?? 0)" @oninput='e => Set("border-radius", e.Value?.ToString() == "0" ? null : e.Value + "px")' />
+            <div style="width:84px"><StyleField Property="border-radius" Value="@Get("border-radius")" Placeholder="0" OnChange='v => Set("border-radius", v)' /></div>
+        </div>
+        <div class="g3" style="margin-top:8px">
+            <StyleField Label="W" Property="border-width" Value="@BorderPart(0)" Placeholder="0" OnChange="v => SetBorder(0, v)" />
+            <Dropdown Title="border-style" Value="@BorderPart(1)" Placeholder="—" Options='new[] { "", "solid", "dashed", "dotted", "double", "none" }.Select(x => new Dropdown.Option(x, x.Length == 0 ? "—" : x))' ValueChanged="v => SetBorder(1, v)" />
+            <ColorField Value="@BorderPart(2)" Placeholder="color" OnChange="v => SetBorder(2, v)" />
+        </div>
+        <div class="lab">@L["design.shadow"]</div>
+        <Dropdown Class='@(Get("box-shadow") is null ? "" : "set")' Value='@Get("box-shadow")' Placeholder="@L["design.none"]" Options="ShadowOptions" ValueChanged='v => Set("box-shadow", v)' />
+        <div class="g2" style="margin-top:6px">
+            <Dropdown Label="Cur" Title="cursor" Class='@(Get("cursor") is null ? "" : "set")' Value='@Get("cursor")' Placeholder="auto" Options='Opts("pointer", "default", "text", "move", "grab", "not-allowed").Prepend(new Dropdown.Option(null, "auto"))' ValueChanged='v => Set("cursor", v)' />
+            <StyleField Label="Tr" Property="transition" Value="@Get("transition")" Unit="@null" Placeholder="none" Options='CssCatalog.ValuesFor("transition")' OnChange='v => Set("transition", v)' />
+        </div>
+    </div>
+
+    @* ---------- Weitere Eigenschaften ---------- *@
+    <div class="sec">
+        <h4>@L["design.allStyles"]<span class="r">@CurrentStyle.Count</span></h4>
+        <div class="prop-more">
+            @foreach (var kv in CurrentStyle.Items.Where(i => !Covered.Contains(i.Key)))
+            {
+                var prop = kv.Key;
+                <div class="kv">
+                    <code title="@prop">@prop</code>
+                    <StyleField Property="@prop" Value="@kv.Value" Unit="@null" Options="CssCatalog.ValuesFor(prop)" OnChange="v => Set(prop, v)" />
+                    <button class="ibtn sm" @onclick="() => Set(prop, null)"><Icon Name="x" /></button>
+                </div>
+            }
+            <div class="kv">
+                <div class="f"><input list="cssprops" placeholder="@L["design.property"]" value="@_newProp" @onchange='e => _newProp = e.Value?.ToString() ?? ""' spellcheck="false" /></div>
+                <div class="f"><input placeholder="@L["design.value"]" value="@_newValue" @onchange="AddCustom" spellcheck="false" /></div>
+                <span></span>
+            </div>
+            <datalist id="cssprops">@foreach (var p in CssCatalog.Properties) { <option value="@p.Name"></option> }</datalist>
+        </div>
+        @if (!UseRule && Inline.Count > 0)
+        {
+            <button class="btn dashed  wide" style="margin-top:12px" @onclick="ExtractToClass"><Icon Name="sparkle" />@L.F("design.extractTo", Session.Name + ".css")</button>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public DocumentSession Session { get; set; } = default!;
+
+    [Parameter, EditorRequired] public DesignNode Node { get; set; } = default!;
+
+    private static readonly string[] States = { "", "hover", "focus", "active", "disabled" };
+    private static readonly string[] Align = { "flex-start", "center", "flex-end" };
+    private static readonly (string Value, string Name)[] Weights = { ("300", "Light"), ("400", "Regular"), ("500", "Medium"), ("600", "Semibold"), ("700", "Bold"), ("800", "Extra") };
+    private static readonly (string Name, string Value)[] Shadows =
+    {
+        ("small", "0 1px 2px rgba(0,0,0,.08)"), ("soft", "0 4px 14px rgba(0,0,0,.12)"), ("strong", "0 12px 32px rgba(0,0,0,.18)"), ("ring", "0 0 0 3px rgba(76,141,255,.35)"),
+    };
+    private static readonly HashSet<string> Covered = new()
+    {
+        "display", "flex-direction", "justify-content", "align-items", "gap", "flex-wrap", "grid-template-columns", "position", "overflow", "top", "right", "bottom", "left",
+        "flex-grow", "flex-shrink", "order", "margin", "margin-top", "margin-right", "margin-bottom", "margin-left", "padding", "padding-top", "padding-right", "padding-bottom",
+        "padding-left", "width", "height", "min-width", "max-width", "font-size", "font-weight", "line-height", "letter-spacing", "color", "text-align", "font-style", "text-decoration",
+        "text-transform", "font-family", "background", "background-color", "opacity", "border-radius", "border", "box-shadow", "cursor", "transition",
+    };
+
+    private static IEnumerable<Dropdown.Option> Opts(params string[] values) => values.Select(v => new Dropdown.Option(v, v));
+
+    private IEnumerable<Dropdown.Option> ShadowOptions
+    {
+        get
+        {
+            var list = Shadows.Select(x => new Dropdown.Option(x.Value, L["shadow." + x.Name], x.Value)).Prepend(new Dropdown.Option(null, L["design.none"])).ToList();
+            if (Get("box-shadow") is { } cur && Shadows.All(x => x.Value != cur)) list.Add(new Dropdown.Option(cur, cur));
+            return list;
+        }
+    }
+
+    private string _newProp = "";
+    private string _newValue = "";
+
+    // ------------------------------------------------------------------
+    // Ziel: Inline-Style oder Regel in .razor.css (Zustand / Breakpoint)
+    // ------------------------------------------------------------------
+
+    /// <summary>Mobile-first: größter Bootstrap-Breakpoint, der in die Gerätebreite passt.</summary>
+    private int Breakpoint => new[] { 1400, 1200, 992, 768, 576 }.FirstOrDefault(b => Session.DeviceWidth >= b);
+
+    private string? Media => Breakpoint > 0 ? $"(min-width: {Breakpoint}px)" : null;
+
+    private bool UseRule => Session.DesignState.Length > 0 || Media is not null;
+
+    private string? PrimaryClass => Node.Classes.FirstOrDefault(c => !c.Contains('@'));
+
+    private string Selector => "." + (PrimaryClass ?? "?") + (Session.DesignState.Length > 0 ? ":" + Session.DesignState : "");
+
+    private StyleDeclarations _inline = new();
+    private StyleDeclarations _current = new();
+    private string _cssText = "";
+    private static readonly Dictionary<string, (DateTime Stamp, string Text)> DiskCss = new(StringComparer.OrdinalIgnoreCase);
+
+    private StyleDeclarations Inline => _inline;
+
+    private DocumentSession? CssSession => Ws.Documents.FirstOrDefault(d => d.Path.Equals(Session.Path + ".css", StringComparison.OrdinalIgnoreCase));
+
+    private string CssText => _cssText;
+
+    private StyleDeclarations CurrentStyle => _current;
+
+    private string? Get(string prop) => _current.Get(prop);
+
+    protected override void OnParametersSet() => Recompute();
+
+    /// <summary>Stilwerte einmal pro Render berechnen statt pro Feld (sonst sehr langsam).</summary>
+    private void Recompute()
+    {
+        _inline = Node.GetStyle();
+        _cssText = CssSession?.Text ?? ReadCssFromDisk(Session.Path + ".css");
+        _current = UseRule ? CssRuleEditor.Get(_cssText, Selector, Media) : _inline;
+    }
+
+    private static string ReadCssFromDisk(string path)
+    {
+        if (!File.Exists(path)) return "";
+        var stamp = File.GetLastWriteTimeUtc(path);
+        if (DiskCss.TryGetValue(path, out var c) && c.Stamp == stamp) return c.Text;
+        var text = Workspace.ReadText(path) ?? "";
+        DiskCss[path] = (stamp, text);
+        return text;
+    }
+
+    private bool HasRuleFor(string state) =>
+        PrimaryClass is not null && CssRuleEditor.Get(CssText, "." + PrimaryClass + ":" + state, Media).Count > 0;
+
+    private void Write(Action<StyleDeclarations> change, string key)
+    {
+        if (!UseRule)
+        {
+            Design.Mutate(Node, n =>
+            {
+                var s = n.GetStyle();
+                change(s);
+                n.SetStyle(s);
+            }, "style:" + Node.Id + ":" + key);
+            return;
+        }
+        if (PrimaryClass is null) return;
+        var css = Ws.ScopedCssSession(Session);
+        var decls = CssRuleEditor.Get(css.Text, Selector, Media);
+        change(decls);
+        css.SetText(CssRuleEditor.Set(css.Text, Selector, Media, decls), ChangeOrigin.Code);
+        Recompute();
+        StateHasChanged();
+    }
+
+    private void Set(string prop, string? value) => Write(s => s.Set(prop, CssValue.WithUnit(value, prop)), prop);
+
+    private void SetMany(params (string Prop, string? Value)[] values) =>
+        Write(s => { foreach (var (p, v) in values) s.Set(p, v); }, string.Join(',', values.Select(v => v.Prop)));
+
+    private void Toggle(string prop, string value) => Set(prop, Get(prop) == value ? null : value);
+
+    private void SetState(string st)
+    {
+        Session.DesignState = Session.DesignState == st ? "" : st;
+        Ws.Activate(Session);
+    }
+
+    private void SetClasses(IReadOnlyList<string> classes) => Design.Mutate(Node, n => n.SetClasses(classes), "class:" + Node.Id);
+
+    private void CreateClass()
+    {
+        var name = DocumentEditor.SuggestClassName(Node).Replace("-style", "");
+        var used = Session.Doc!.AllNodes().SelectMany(n => n.Classes).ToHashSet();
+        var candidate = name;
+        for (var i = 2; used.Contains(candidate); i++) candidate = name + "-" + i;
+        Design.Mutate(Node, n => n.AddClass(candidate));
+    }
+
+    private void ExtractToClass()
+    {
+        var cls = PrimaryClass ?? DocumentEditor.SuggestClassName(Node);
+        var css = Ws.ScopedCssSession(Session);
+        var existing = CssRuleEditor.Get(css.Text, "." + cls, null);
+        foreach (var kv in Inline.Items) existing.Set(kv.Key, kv.Value);
+        css.SetText(CssRuleEditor.Set(css.Text, "." + cls, null, existing), ChangeOrigin.Code);
+        Design.Mutate(Node, n =>
+        {
+            n.RemoveAttribute("style");
+            if (!n.Classes.Contains(cls)) n.AddClass(cls);
+        });
+    }
+
+    // ------------------------------------------------------------------
+
+    private string? Display => Get("display");
+
+    private bool IsFlex => Display is "flex" or "inline-flex";
+
+    private static bool IsFlexParent(DesignNode p)
+    {
+        var d = p.GetStyle().Get("display");
+        return d is "flex" or "inline-flex";
+    }
+
+    private BoxValues Box(string prop) => BoxValues.From(CurrentStyle, prop);
+
+    private void SetBox((string Property, BoxValues Values) e) => Write(s => e.Values.ApplyTo(s, e.Property), e.Property);
+
+    private string CoreLabel
+    {
+        get
+        {
+            var w = Get("width") ?? "auto";
+            var h = Get("height") ?? "auto";
+            return $"{Short(w)} × {Short(h)}";
+        }
+    }
+
+    private static string Short(string v) => v.EndsWith("px", StringComparison.Ordinal) ? v[..^2] : v;
+
+    private int OpacityPercent => (int)Math.Round((double.TryParse(Get("opacity"), NumberStyles.Float, CultureInfo.InvariantCulture, out var o) ? o : 1) * 100);
+
+    private void SetBackground(string? v) => Write(s =>
+    {
+        s.Remove("background");
+        s.Set("background-color", v);
+    }, "background");
+
+    private string BorderPart(int i)
+    {
+        var b = Get("border");
+        if (string.IsNullOrWhiteSpace(b)) return "";
+        var parts = b.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
+        string? width = parts.FirstOrDefault(p => char.IsDigit(p[0]) || p is "thin" or "medium" or "thick");
+        string? style = parts.FirstOrDefault(p => p is "solid" or "dashed" or "dotted" or "double" or "none" or "groove" or "ridge");
+        string? color = parts.FirstOrDefault(p => p != width && p != style);
+        return (i switch { 0 => width, 1 => style, _ => color }) ?? "";
+    }
+
+    private void SetBorder(int i, string? value)
+    {
+        var parts = new[] { BorderPart(0), BorderPart(1), BorderPart(2) };
+        parts[i] = i == 0 ? CssValue.WithUnit(value, "border-width") ?? "" : value ?? "";
+        if (parts[1].Length == 0 && (parts[0].Length > 0 || parts[2].Length > 0)) parts[1] = "solid";
+        if (parts[0].Length == 0 && parts[1].Length > 0 && parts[1] != "none") parts[0] = "1px";
+        var joined = string.Join(' ', parts.Where(p => p.Length > 0));
+        Set("border", joined.Length == 0 ? null : joined);
+    }
+
+    private void AddCustom(ChangeEventArgs e)
+    {
+        var v = e.Value?.ToString();
+        if (string.IsNullOrWhiteSpace(_newProp) || string.IsNullOrWhiteSpace(v)) { _newValue = v ?? ""; return; }
+        Set(_newProp.Trim(), v.Trim());
+        _newProp = "";
+        _newValue = "";
+    }
+}

@@ -1,0 +1,74 @@
+@* Generisches Kontextmenü (Ui.ShowMenu) mit Untermenüs. *@
+@implements IDisposable
+@inject UiService Ui
+
+@if (Ui.Menu is { } m)
+{
+    <div class="click-catcher" @onclick="Ui.CloseMenu" @oncontextmenu="Ui.CloseMenu" @oncontextmenu:preventDefault="true"></div>
+    <div class="pop menu-pop ctxmenu pmenu" id="pmenu" style="left:@Px(m.X)px;top:@Px(m.Y)px" @onkeydown="Key">
+        @RenderItems(m.Items, 0)
+    </div>
+}
+
+@code {
+    private int _openSub = -1;
+
+    protected override void OnInitialized() => Ui.Changed += OnChanged;
+
+    private void OnChanged()
+    {
+        _openSub = -1;
+        InvokeAsync(StateHasChanged);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if (Ui.Menu is not null) await JS.InvokeVoidAsync("studio.fitMenu", "pmenu");
+    }
+
+    [Inject] private IJSRuntime JS { get; set; } = default!;
+
+    private RenderFragment RenderItems(IReadOnlyList<MenuEntry> items, int depth) => __builder =>
+    {
+        for (var idx = 0; idx < items.Count; idx++)
+        {
+            var it = items[idx];
+            var index = idx;
+            if (it.IsSeparator)
+            {
+                <div class="sep"></div>
+                continue;
+            }
+            if (it.Children is { Count: > 0 } children)
+            {
+                <div class="mi sub @(_openSub == index && depth == 0 ? "open" : "")" @onmouseenter="() => _openSub = depth == 0 ? index : _openSub">
+                    @if (it.Icon is not null) { <Icon Name="@it.Icon" /> } else { <span class="i"></span> }
+                    <span class="grow">@it.Text</span>
+                    <Icon Name="chev" Class="sm" />
+                    <div class="pop menu-pop subpop">@RenderItems(children, depth + 1)</div>
+                </div>
+                continue;
+            }
+            <button class="mi @(it.Danger ? "danger" : "")" disabled="@it.Disabled" @onmouseenter="() => { if (depth == 0) _openSub = -1; }" @onclick="() => Invoke(it)">
+                @if (it.Checked) { <Icon Name="check" /> } else if (it.Icon is not null) { <Icon Name="@it.Icon" /> } else { <span class="i"></span> }
+                <span class="grow">@it.Text</span>
+                @if (it.Keys is not null) { <kbd>@it.Keys</kbd> }
+            </button>
+        }
+    };
+
+    private async Task Invoke(MenuEntry it)
+    {
+        Ui.CloseMenu();
+        if (it.Action is not null) await it.Action();
+    }
+
+    private void Key(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape") Ui.CloseMenu();
+    }
+
+    private static string Px(double v) => Math.Round(v).ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    public void Dispose() => Ui.Changed -= OnChanged;
+}

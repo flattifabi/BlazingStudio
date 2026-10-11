@@ -1,0 +1,42 @@
+@page "/load"
+
+<PageTitle>Last-Test</PageTitle>
+
+<h1>Last-Test</h1>
+<p>Primzahlen bis @Limit: @count · Bericht: @report.Length Zeichen</p>
+
+@code {
+    private const int Limit = 300_000;
+    private int count;
+    private string report = "";
+
+    protected override void OnInitialized()
+    {
+        count = CountPrimes(Limit);
+        report = BuildReport(2_000);
+    }
+
+    /// <summary>Absichtlich langsam (CPU).</summary>
+    private static int CountPrimes(int max)
+    {
+        var n = 0;
+        for (var i = 2; i < max; i++)
+        {
+            var prime = true;
+            for (var d = 2; d * d <= i; d++)
+            {
+                if (i % d == 0) { prime = false; break; }
+            }
+            if (prime) n++;
+        }
+        return n;
+    }
+
+    /// <summary>Absichtlich verschwenderisch (Speicher).</summary>
+    private static string BuildReport(int lines)
+    {
+        var s = "";
+        for (var i = 0; i < lines; i++) s += $"Zeile {i}: {Guid.NewGuid()}\n";
+        return s;
+    }
+}

@@ -1,0 +1,58 @@
+@inject Workspace Ws
+
+<div class="f @(string.IsNullOrEmpty(Value) ? "" : "set")">
+    @if (CssValue.ToInputColor(Value) is { } hex)
+    {
+        <input type="color" value="@hex" @oninput="e => OnChange.InvokeAsync(e.Value?.ToString())" />
+    }
+    else
+    {
+        <span class="swatch" style="background:@(Resolve(Value) ?? "transparent")"></span>
+    }
+    <input class="mono" value="@Value" placeholder="@Placeholder" spellcheck="false" @onchange="e => OnChange.InvokeAsync(Clean(e.Value?.ToString()))" />
+    @if (!string.IsNullOrEmpty(Value))
+    {
+        <span class="clr" @onclick="() => OnChange.InvokeAsync(null)"><Icon Name="x" /></span>
+    }
+    @if (CssValue.ToInputColor(Value) is null)
+    {
+        <input type="color" style="width:14px;opacity:.6" title="Picker" @oninput="e => OnChange.InvokeAsync(e.Value?.ToString())" />
+    }
+</div>
+@if (ShowTokens && Tokens.Count > 0)
+{
+    <div class="tokens">
+        @foreach (var t in Tokens.Take(12))
+        {
+            var token = t;
+            <span class="tok @(Value == $"var({token.Name})" ? "on" : "")" title="@token.Value · @token.SourceFile" @onclick='() => OnChange.InvokeAsync($"var({token.Name})")'>
+                <i style="background:@token.Value"></i>@token.Name
+            </span>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public string? Value { get; set; }
+
+    [Parameter] public string? Placeholder { get; set; }
+
+    [Parameter] public bool ShowTokens { get; set; }
+
+    [Parameter] public EventCallback<string?> OnChange { get; set; }
+
+    private IReadOnlyList<CssToken> Tokens => Ws.Project?.Css.Tokens.Where(t => t.IsColor).ToList() ?? (IReadOnlyList<CssToken>)Array.Empty<CssToken>();
+
+    private string? Resolve(string? v)
+    {
+        if (string.IsNullOrEmpty(v)) return null;
+        if (v.StartsWith("var(", StringComparison.Ordinal))
+        {
+            var name = v[4..].TrimEnd(')').Split(',')[0].Trim();
+            return Ws.Project?.Css.Tokens.FirstOrDefault(t => t.Name == name)?.Value ?? v;
+        }
+        return v;
+    }
+
+    private static string? Clean(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
+}

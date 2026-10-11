@@ -1,0 +1,135 @@
+@* Update verfügbar: Release-Notes, Jetzt aktualisieren / Überspringen / Später. *@
+@implements IDisposable
+@inject UpdateService Updates
+@inject UiService Ui
+@inject Localizer L
+@inject IHostBridge Host
+@inject Workspace Ws
+
+<div class="backdrop" @onclick="Close">
+    <div class="dialog upd" @onclick:stopPropagation="true">
+        <div class="upd-head">
+            <img src="img/logo.svg" alt="" />
+            <div>
+                @if (Updates.Available is { } u)
+                {
+                    <h2>@L.F("upd.title", u.Version)</h2>
+                    <p class="dim">@L.F("upd.current", UpdateService.CurrentVersion)@(u.Published > DateTimeOffset.MinValue ? " · " + u.Published.LocalDateTime.ToString("d") : "")</p>
+                }
+                else if (Updates.Checking)
+                {
+                    <h2>@L["upd.checking"]</h2>
+                }
+                else
+                {
+                    <h2>@L["upd.upToDate"]</h2>
+                    <p class="dim">@L.F("upd.current", UpdateService.CurrentVersion)</p>
+                }
+            </div>
+        </div>
+
+        @if (Updates.Available is { } info)
+        {
+            <div class="upd-notes scroll">
+                @if (string.IsNullOrWhiteSpace(info.Notes))
+                {
+                    <span class="dim">@L["upd.noNotes"]</span>
+                }
+                else
+                {
+                    @foreach (var line in info.Notes.Replace("\r", "").Split('\n'))
+                    {
+                        var t = line.TrimEnd();
+                        if (t.StartsWith("#")) { <h4>@t.TrimStart('#', ' ')</h4> }
+                        else if (t.StartsWith("- ") || t.StartsWith("* ")) { <div class="li">@t[2..]</div> }
+                        else if (t.Length == 0) { <div class="sp"></div> }
+                        else { <div>@t</div> }
+                    }
+                }
+            </div>
+
+            @if (Updates.DownloadProgress is { } p)
+            {
+                <div class="upd-progress">
+                    <div class="bar"><i style="width:@((p * 100).ToString("0.0", System.Globalization.CultureInfo.InvariantCulture))%"></i></div>
+                    <span class="dim">@(p >= 1 ? L["upd.starting"] : L.F("upd.downloading", Math.Round(p * 100)))</span>
+                </div>
+            }
+            @if (Updates.LastError is { } err)
+            {
+                <div class="hint warn" style="margin-top:10px"><Icon Name="alertc" /><span>@err</span></div>
+            }
+            @if (!Updates.CanInstall)
+            {
+                <div class="hint" style="margin-top:10px"><Icon Name="info" /><span>@L["upd.manualHint"]</span></div>
+            }
+
+            <div class="btns">
+                <button class="btn ghost" @onclick="() => Host.OpenExternal(info.PageUrl.Length > 0 ? info.PageUrl : Updates.ReleasesPage)"><Icon Name="ext" />@L["upd.releasePage"]</button>
+                <span class="grow"></span>
+                <button class="btn ghost" disabled="@_busy" @onclick="() => { Updates.Skip(info); Close(); }">@L["upd.skip"]</button>
+                <button class="btn ghost" disabled="@_busy" @onclick="Close">@L["upd.later"]</button>
+                @if (Updates.CanInstall)
+                {
+                    <button class="btn ac" disabled="@_busy" @onclick="InstallAsync"><Icon Name="down" />@L["upd.install"]</button>
+                }
+                else
+                {
+                    <button class="btn ac" @onclick="() => Host.OpenExternal(info.SetupUrl ?? Updates.ReleasesPage)"><Icon Name="down" />@L["upd.download"]</button>
+                }
+            </div>
+        }
+        else
+        {
+            @if (Updates.LastError is { } err)
+            {
+                <div class="hint warn"><Icon Name="alertc" /><span>@L["upd.checkFailed"] @err</span></div>
+            }
+            <div class="btns">
+                <button class="btn ghost" @onclick="() => Host.OpenExternal(Updates.ReleasesPage)"><Icon Name="ext" />@L["upd.releasePage"]</button>
+                <span class="grow"></span>
+                <button class="btn ac" @onclick="Close">@L["action.ok"]</button>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private bool _busy;
+
+    protected override void OnInitialized() => Updates.Changed += Refresh;
+
+    private void Refresh() => InvokeAsync(StateHasChanged);
+
+    private void Close()
+    {
+        if (!_busy) Ui.CloseOverlay();
+    }
+
+    private async Task InstallAsync()
+    {
+        // Ungespeicherte Änderungen vorher klären
+        if (Ws.Documents.Any(d => d.IsDirty))
+        {
+            var r = await Ui.ShowDialogAsync(new DialogRequest
+            {
+                Title = L["upd.unsavedTitle"],
+                Message = L["upd.unsavedText"],
+                OkText = L["upd.saveAndUpdate"],
+                AltText = L["action.dontSave"],
+                CancelText = L["action.cancel"],
+            });
+            if (r == DialogResult.Cancel) return;
+            if (r == DialogResult.Ok) Ws.SaveAll();
+        }
+        _busy = true;
+        if (await Updates.DownloadAndStartAsync())
+        {
+            await Task.Delay(400);
+            Host.ExitForUpdate();
+        }
+        _busy = false;
+    }
+
+    public void Dispose() => Updates.Changed -= Refresh;
+}

@@ -1,0 +1,166 @@
+@implements IDisposable
+@inject UiService Ui
+@inject Workspace Ws
+@inject DesignActions Design
+@inject Localizer L
+@inject IJSRuntime JS
+
+@if (Ui.CommandPaletteOpen)
+{
+    <div class="backdrop" @onclick="Ui.CloseCommandPalette">
+        <div class="palette" @onclick:stopPropagation="true">
+            <div class="pin">
+                <Icon Name="@(IsCommands ? "zap" : "search")" />
+                <input id="palette-input" value="@_query" placeholder="@(IsCommands ? L["palette.commands"] : L["palette.files"])" spellcheck="false"
+                       @oninput="e => { _query = e.Value?.ToString() ?? string.Empty; _index = 0; }" @onkeydown="Key" />
+            </div>
+            <div class="plist">
+                @{ var items = Items().ToList(); var group = ""; }
+                @if (items.Count == 0) { <div class="empty-hint">@L["palette.nothing"]</div> }
+                @for (var i = 0; i < items.Count; i++)
+                {
+                    var it = items[i];
+                    var idx = i;
+                    if (it.Group != group)
+                    {
+                        group = it.Group;
+                        <div class="pg">@group</div>
+                    }
+                    <div class="pi @(idx == _index ? "on" : "")" @onclick="() => Run(it)" @onmousemove="() => _index = idx">
+                        @if (it.File is not null) { <FileIcon Path="@it.File" /> } else { <Icon Name="@it.Icon" /> }
+                        <span class="n">@it.Label</span>
+                        <span class="d">@it.Detail</span>
+                        @if (it.Keys is not null) { <kbd>@it.Keys</kbd> }
+                    </div>
+                }
+            </div>
+            <div class="pfoot">
+                <span><kbd>↑↓</kbd> @L["palette.navigate"]</span>
+                <span><kbd>Enter</kbd> @L["palette.run"]</span>
+                <span><kbd>&gt;</kbd> @L["palette.commandsHint"]</span>
+                <span><kbd>+</kbd> @L["palette.insertHint"]</span>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [CascadingParameter] public Shell Shell { get; set; } = default!;
+
+    private string _query = "";
+    private int _index;
+    private bool _wasOpen;
+
+    private sealed record Item(string Group, string Label, string? Detail, string Icon, string? Keys, string? File, Func<Task> Action);
+
+    private bool IsCommands => _query.StartsWith('>');
+
+    protected override void OnInitialized() => Ui.Changed += OnUi;
+
+    private void OnUi() => InvokeAsync(async () =>
+    {
+        if (Ui.CommandPaletteOpen && !_wasOpen)
+        {
+            _query = Ui.CommandPaletteMode;
+            _index = 0;
+            _wasOpen = true;
+            StateHasChanged();
+            await Task.Delay(30);
+            await JS.InvokeVoidAsync("studio.focusSelector", "#palette-input", false);
+        }
+        else if (!Ui.CommandPaletteOpen && _wasOpen)
+        {
+            _wasOpen = false;
+            StateHasChanged();
+        }
+    });
+
+    private IEnumerable<Item> Items()
+    {
+        var q = _query.Trim();
+        if (q.StartsWith('>'))
+        {
+            var cq = q[1..].Trim();
+            foreach (var c in Shell.Commands)
+            {
+                if (c.Enabled?.Invoke() == false) continue;
+                var label = L[c.LabelKey];
+                if (cq.Length > 0 && !Fuzzy(label, cq) && !c.Id.Contains(cq, StringComparison.OrdinalIgnoreCase)) continue;
+                var id = c.Id;
+                yield return new Item(L["palette.groupCommands"], label, null, c.Icon, c.Keys, null, () => Shell.ExecuteAsync(id));
+            }
+            yield break;
+        }
+
+        if (q.StartsWith('+'))
+        {
+            var iq = q[1..].Trim();
+            foreach (var d in Ws.AllComponents.Concat(BuiltInCatalog.Blocks))
+            {
+                var label = L.Label(d);
+                if (iq.Length > 0 && !Fuzzy(label, iq) && !Fuzzy(d.TagName, iq)) continue;
+                var key = d.Key;
+                yield return new Item(L["palette.groupInsert"], label, d.TagName, d.Icon, null, null, () => { Design.InsertAtSelection(key); return Task.CompletedTask; });
+            }
+            yield break;
+        }
+
+        if (Ws.Project is null) yield break;
+        var count = 0;
+        var root = Ws.Project.RootDirectory;
+        var files = ProjectIndex.EnumerateFiles(root)
+            .Where(f => !f.Contains(Path.DirectorySeparatorChar + "lib" + Path.DirectorySeparatorChar))
+            .Select(f => (Path: f, Rel: Path.GetRelativePath(root, f), Name: Path.GetFileName(f)))
+            .Where(f => q.Length == 0 ? Ws.Documents.Any(d => d.Path == f.Path) || f.Name.EndsWith(".razor", StringComparison.OrdinalIgnoreCase) : Fuzzy(f.Name, q) || Fuzzy(f.Rel, q))
+            .OrderBy(f => f.Name.StartsWith(q, StringComparison.OrdinalIgnoreCase) ? 0 : f.Name.Contains(q, StringComparison.OrdinalIgnoreCase) ? 1 : 2)
+            .ThenBy(f => f.Name.Length);
+        foreach (var f in files)
+        {
+            if (count++ > 60) break;
+            var path = f.Path;
+            yield return new Item(L["palette.groupFiles"], f.Name, Path.GetDirectoryName(f.Rel), "files", null, f.Path, () => { Ws.Open(path); return Task.CompletedTask; });
+        }
+        // Auch Befehle anbieten, wenn der Text passt
+        if (q.Length > 1)
+        {
+            foreach (var c in Shell.Commands.Where(c => c.Enabled?.Invoke() != false && Fuzzy(L[c.LabelKey], q)).Take(5))
+            {
+                var id = c.Id;
+                yield return new Item(L["palette.groupCommands"], L[c.LabelKey], null, c.Icon, c.Keys, null, () => Shell.ExecuteAsync(id));
+            }
+        }
+    }
+
+    private static bool Fuzzy(string text, string query)
+    {
+        if (text.Contains(query, StringComparison.OrdinalIgnoreCase)) return true;
+        var i = 0;
+        foreach (var c in text)
+        {
+            if (i < query.Length && char.ToLowerInvariant(c) == char.ToLowerInvariant(query[i])) i++;
+        }
+        return i == query.Length && query.Length >= 2;
+    }
+
+    private async Task Key(KeyboardEventArgs e)
+    {
+        var items = Items().ToList();
+        switch (e.Key)
+        {
+            case "ArrowDown": _index = Math.Min(_index + 1, items.Count - 1); break;
+            case "ArrowUp": _index = Math.Max(_index - 1, 0); break;
+            case "Enter":
+                if (items.Count > 0) await Run(items[Math.Clamp(_index, 0, items.Count - 1)]);
+                break;
+            case "Escape": Ui.CloseCommandPalette(); break;
+        }
+    }
+
+    private async Task Run(Item it)
+    {
+        Ui.CloseCommandPalette();
+        await it.Action();
+    }
+
+    public void Dispose() => Ui.Changed -= OnUi;
+}

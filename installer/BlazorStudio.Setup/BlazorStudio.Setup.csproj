@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Setup/Uninstaller für Blazor Studio. Läuft auf .NET Framework 4.8 (in Windows 10/11 enthalten),
+    damit das Setup keine eigene Runtime mitschleppen muss.
+
+    Zwei Varianten aus demselben Code (siehe build-installer.ps1):
+      Uninstall.exe : -p:SetupKind=Uninstall                   (ohne Nutzlast)
+      Setup.exe     : -p:SetupKind=Setup -p:PayloadDir=<dir>   (bettet payload.zip + Uninstall.exe ein)
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RootNamespace>BlazorStudio.Setup</RootNamespace>
+    <SetupKind Condition="'$(SetupKind)' == ''">Setup</SetupKind>
+    <AssemblyName Condition="'$(SetupKind)' == 'Uninstall'">Uninstall</AssemblyName>
+    <AssemblyName Condition="'$(SetupKind)' != 'Uninstall'">BlazorStudio-Setup</AssemblyName>
+    <DefineConstants Condition="'$(SetupKind)' == 'Uninstall'">$(DefineConstants);UNINSTALLER</DefineConstants>
+    <ApplicationIcon>..\..\branding\logo.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Product>Blazor Studio</Product>
+    <Company>Blazor Studio</Company>
+    <Copyright>© 2026 Blazor Studio</Copyright>
+    <Version Condition="'$(Version)' == ''">1.0.0</Version>
+    <AssemblyTitle Condition="'$(SetupKind)' == 'Uninstall'">Blazor Studio deinstallieren</AssemblyTitle>
+    <AssemblyTitle Condition="'$(SetupKind)' != 'Uninstall'">Blazor Studio Setup</AssemblyTitle>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- Jede Variante in eigene Ordner bauen, damit sie sich nicht gegenseitig überschreiben -->
+    <BaseIntermediateOutputPath>obj\$(SetupKind)\</BaseIntermediateOutputPath>
+    <OutputPath>bin\$(SetupKind)\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj\**;bin\**</DefaultItemExcludes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="Microsoft.CSharp" />
+    <Resource Include="..\..\branding\logo-512.png" Link="Assets\logo.png" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(SetupKind)' != 'Uninstall' And '$(PayloadDir)' != ''">
+    <EmbeddedResource Include="$(PayloadDir)\payload.zip" LogicalName="payload.zip" />
+    <EmbeddedResource Include="$(PayloadDir)\Uninstall.exe" LogicalName="Uninstall.exe" />
+  </ItemGroup>
+
+</Project>

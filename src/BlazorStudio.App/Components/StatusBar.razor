@@ -1,0 +1,86 @@
+@inherits StudioComponent
+@inject UpdateService Updates
+
+<footer class="status">
+    @if (Debug.IsActive)
+    {
+        <span class="warn">● @(Debug.IsStopped ? L.F("status.paused", StopLocation) : L["run.debugging"])</span>
+    }
+    else if (Run.State == RunState.Running)
+    {
+        <span class="ok">● @L["status.running"]</span>
+        @if (Run.HotReload) { <span class="ok"><Icon Name="flame" /> Hot Reload</span> }
+    }
+    else if (Run.State == RunState.Building)
+    {
+        <span class="warn">● @L["run.building"]</span>
+    }
+    else
+    {
+        <span>@L["status.ready"]</span>
+    }
+
+    @if (Run.ErrorCount + Run.WarningCount > 0)
+    {
+        <button class="@(Run.ErrorCount > 0 ? "err" : "warn")" @onclick="() => BottomPanel.Show?.Invoke(BottomTab.Problems)">
+            ✗ @Run.ErrorCount &nbsp; ⚠ @Run.WarningCount
+        </button>
+    }
+
+    @if (Updates.Available is { } upd)
+    {
+        <button class="upd-pill" title="@L["upd.pillTitle"]" @onclick='() => Ui.OpenOverlay("update")'>
+            <Icon Name="down" />@L.F("upd.pill", upd.Version)
+            @if (Updates.DownloadProgress is { } dp) { <span>· @Math.Round(dp * 100) %</span> }
+        </button>
+    }
+
+    @if (Ws.Active is { } d)
+    {
+        @if (d.Kind == DocumentKind.Razor && d.HasErrors)
+        {
+            <span class="warn"><Icon Name="alert" /> @L["status.parseErrors"]</span>
+        }
+        <span class="r">
+            @if (d.Kind == DocumentKind.Razor && d.Selected is { } sel)
+            {
+                <span class="mono">@CanvasRenderer.LabelOf(sel)</span>
+            }
+            <span>@L.F("status.cursor", Ws.CursorLine, Ws.CursorColumn)</span>
+            <span>@LanguageName(d)</span>
+            <span>UTF-8</span>
+            @if (d.IsDirty) { <span>● @L["status.unsaved"]</span> }
+        </span>
+    }
+</footer>
+
+
+@code {
+    protected override void OnStudioInitialized()
+    {
+        Ws.CursorChanged += Refresh;
+        Updates.Changed += Refresh;
+    }
+
+    public override void Dispose()
+    {
+        base.Dispose();
+        Ws.CursorChanged -= Refresh;
+        Updates.Changed -= Refresh;
+    }
+
+    private string StopLocation => Debug.Session.CurrentFrame is { } f ? $"{Path.GetFileName(f.File)}:{f.Line}" : "";
+
+    private static string LanguageName(DocumentSession d) => d.Kind switch
+    {
+        DocumentKind.Razor => "Razor",
+        DocumentKind.CSharp => "C#",
+        DocumentKind.Css => "CSS",
+        DocumentKind.JavaScript => "JavaScript",
+        DocumentKind.Json => "JSON",
+        DocumentKind.Html => "HTML",
+        DocumentKind.Xml => "XML",
+        DocumentKind.Markdown => "Markdown",
+        _ => "Text",
+    };
+}

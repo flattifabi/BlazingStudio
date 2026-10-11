@@ -1,0 +1,222 @@
+@implements IAsyncDisposable
+@inject Workspace Ws
+@inject DesignActions Design
+@inject Localizer L
+@inject IJSRuntime JS
+
+<div class="scroll" style="flex:1" @ref="_el">
+    @if (Session?.Doc is { } doc)
+    {
+        <div class="tree">
+            @if (doc.Directives.Count > 0)
+            {
+                <div class="row nested" style="padding-left:6px" title="@string.Join("\n", doc.Directives)">
+                    <span class="ch"></span><Icon Name="at" Class="k r" />
+                    <span class="tg2">@L.F("layers.directives", doc.Directives.Count)</span>
+                    <em>@(doc.PageRoute ?? "")</em>
+                </div>
+            }
+            @RenderRows(doc.Root.Children, 0, "")
+            @if (doc.CodeBlocks.Count > 0)
+            {
+                <div class="row nested" style="padding-left:6px" @onclick="OpenCode">
+                    <span class="ch"></span><Icon Name="braces" Class="k" />
+                    <span class="tg2">@@code</span><em>@L.F("layers.members", Ws.MembersFor(Session).Count)</em>
+                </div>
+            }
+            @if (doc.Root.Children.Count == 0)
+            {
+                <div class="empty-hint">@L["layers.empty"]</div>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="empty-hint">@L["layers.noRazor"]</div>
+    }
+</div>
+
+@code {
+    private ElementReference _el;
+    private DotNetObjectReference<LayersTree>? _ref;
+    private readonly HashSet<string> _collapsed = new();
+    private DocumentSession? _subscribed;
+    private bool _attached;
+
+    private DocumentSession? Session => Ws.Active is { Kind: DocumentKind.Razor } s ? s : null;
+
+    protected override void OnInitialized()
+    {
+        Ws.Changed += OnWorkspace;
+        Subscribe();
+    }
+
+    private void OnWorkspace()
+    {
+        Subscribe();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void Subscribe()
+    {
+        if (_subscribed == Session) return;
+        if (_subscribed is not null)
+        {
+            _subscribed.Changed -= OnDoc;
+            _subscribed.SelectionChanged -= OnSel;
+        }
+        _subscribed = Session;
+        if (_subscribed is not null)
+        {
+            _subscribed.Changed += OnDoc;
+            _subscribed.SelectionChanged += OnSel;
+        }
+    }
+
+    private void OnDoc(ChangeOrigin _) => InvokeAsync(StateHasChanged);
+
+    private void OnSel() => InvokeAsync(async () =>
+    {
+        // Vorfahren der Auswahl aufklappen
+        if (Session?.Selected is { } s)
+            foreach (var a in s.Ancestors()) _collapsed.Remove(a.Id);
+        StateHasChanged();
+        await Task.Yield();
+        if (Session?.SelectedId is { } id) await JS.InvokeVoidAsync("studio.scrollIntoView", $"[data-bs-outline='{id}']");
+    });
+
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if (!_attached)
+        {
+            _ref = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("studio.attachOutline", _el, _ref);
+            _attached = true;
+        }
+    }
+
+    private RenderFragment RenderRows(IReadOnlyList<DesignNode> nodes, int depth, string path) => __builder =>
+    {
+        foreach (var node in nodes)
+        {
+            if (node.Kind == NodeKind.Text && node.Text.Trim().Length == 0) continue;
+            if (node.Kind == NodeKind.Comment) continue;
+            var n = node;
+            var hasKids = n.Children.Any(c => !(c.Kind == NodeKind.Text && c.Text.Trim().Length == 0)) && !n.IsTextOnly;
+            var open = !_collapsed.Contains(n.Id);
+            var selected = Session?.SelectedId == n.Id;
+            <div class="row @(selected ? "on" : "")" style="padding-left:@(6 + depth * 14)px" draggable="true"
+                 data-bs-outline="@n.Id" data-bs-container="@(n.CanHaveChildren ? "1" : "0")" data-bs-path="@path"
+                 @onclick="() => Session?.SelectNode(n)" @oncontextmenu="e => Design.RequestContextMenu(n.Id, e.ClientX, e.ClientY)" @oncontextmenu:preventDefault="true">
+                <span class="ch @(open ? "open" : "")" @onclick="() => Toggle(n)" @onclick:stopPropagation="true">
+                    @if (hasKids) { <Icon Name="chev" /> }
+                </span>
+                <Icon Name="@IconOf(n)" Class="@("k " + KindClass(n))" />
+                <span class="tg2">@Title(n)</span>
+                <em>@Detail(n)</em>
+                <span class="acts">
+                    <button title="@L["cmd.duplicate"]" @onclick="() => { Session?.SelectNode(n); Design.Duplicate(); }" @onclick:stopPropagation="true"><Icon Name="copy" /></button>
+                    <button title="@L["cmd.delete"]" @onclick="() => { Session?.SelectNode(n); Design.Delete(); }" @onclick:stopPropagation="true"><Icon Name="trash" /></button>
+                </span>
+            </div>
+            if (hasKids && open)
+            {
+                @RenderRows(n.Children, depth + 1, path.Length == 0 ? n.Id : path + "|" + n.Id)
+            }
+        }
+    };
+
+    private void Toggle(DesignNode n)
+    {
+        if (!_collapsed.Remove(n.Id)) _collapsed.Add(n.Id);
+    }
+
+    private void OpenCode()
+    {
+        if (Session is null) return;
+        if (Ws.CodeBehindPath(Session) is { } cb) Ws.Open(cb);
+        else if (Session.View == ViewMode.Design) { Session.View = ViewMode.Split; Ws.Activate(Session); }
+    }
+
+    private static string Title(DesignNode n) => n.Kind switch
+    {
+        NodeKind.Text => "\"" + Trunc(n.Text.Trim(), 28) + "\"",
+        NodeKind.Expression => Trunc(n.Text, 28),
+        NodeKind.Control => "@" + n.Name,
+        NodeKind.Code => "@{ }",
+        _ => n.Name,
+    };
+
+    private static string Detail(DesignNode n)
+    {
+        switch (n.Kind)
+        {
+            case NodeKind.Control:
+                var h = n.Text.StartsWith(n.Name, StringComparison.Ordinal) ? n.Text[n.Name.Length..].Trim() : n.Text;
+                return Trunc(h, 34);
+            case NodeKind.Code:
+                return Trunc(n.Text.Replace("\n", " ").Trim(), 30);
+            case NodeKind.Element or NodeKind.Component:
+                var cls = n.Classes.Where(c => !c.Contains('@')).ToList();
+                var parts = new List<string>();
+                if (cls.Count > 0) parts.Add("." + string.Join('.', cls));
+                var id = n.GetAttribute("id");
+                if (!string.IsNullOrEmpty(id)) parts.Add("#" + id);
+                if (n.IsTextOnly) parts.Add("\"" + Trunc(n.InnerText.Trim(), 20) + "\"");
+                return string.Join(' ', parts);
+        }
+        return "";
+    }
+
+    private static string Trunc(string s, int max) => s.Length > max ? s[..(max - 1)] + "…" : s;
+
+    public static string IconOf(DesignNode n) => n.Kind switch
+    {
+        NodeKind.Text => "text",
+        NodeKind.Expression => "at",
+        NodeKind.Code => "braces",
+        NodeKind.Control => n.Name is "foreach" or "for" or "while" ? "loop" : "zap",
+        NodeKind.Component => "puzzle",
+        _ => n.Name.ToLowerInvariant() switch
+        {
+            "h1" or "h2" or "h3" or "h4" or "h5" or "h6" => "heading",
+            "p" or "span" or "strong" or "em" or "small" => "text",
+            "a" => "link",
+            "button" => "button",
+            "input" or "textarea" => "input",
+            "select" => "select",
+            "form" => "form",
+            "img" or "picture" or "figure" => "image",
+            "video" or "audio" => "video",
+            "ul" or "ol" or "li" => "list",
+            "section" or "header" or "footer" or "main" or "article" or "aside" => "section",
+            "nav" => "row",
+            "label" => "type",
+            "table" or "tr" or "td" or "th" or "thead" or "tbody" => "grid",
+            "svg" => "sparkle",
+            _ => "square",
+        },
+    };
+
+    private static string KindClass(DesignNode n) => n.Kind switch
+    {
+        NodeKind.Component => "c",
+        NodeKind.Control or NodeKind.Expression or NodeKind.Code => "r",
+        _ => "",
+    };
+
+    [JSInvokable]
+    public void OnDrop(string kind, string payload, string? targetId, string position) => Design.Drop(kind, payload, targetId, position);
+
+    public async ValueTask DisposeAsync()
+    {
+        Ws.Changed -= OnWorkspace;
+        if (_subscribed is not null)
+        {
+            _subscribed.Changed -= OnDoc;
+            _subscribed.SelectionChanged -= OnSel;
+        }
+        _ref?.Dispose();
+        await Task.CompletedTask;
+    }
+}

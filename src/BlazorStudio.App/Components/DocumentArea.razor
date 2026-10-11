@@ -1,0 +1,46 @@
+@inherits StudioComponent
+
+<section class="island doc">
+    @if (Ws.Documents.Count > 0)
+    {
+        <div class="tabs">
+            @foreach (var d in Ws.Documents)
+            {
+                var doc = d;
+                <div class="tab @(doc == Ws.Active ? "on" : "")" title="@doc.Path"
+                     @onclick="() => Ws.Activate(doc)" @onmouseup="e => OnMouseUp(e, doc)">
+                    <FileIcon Path="@doc.Path" />
+                    <span>@doc.Name</span>
+                    @if (doc.IsDirty) { <span class="mod"></span> }
+                    <span class="x" title="@L["cmd.closeTab"]" @onclick="() => Ws.CloseAsync(doc)" @onclick:stopPropagation="true"><Icon Name="x" /></span>
+                </div>
+            }
+        </div>
+    }
+    <div class="docbody">
+        @if (Ws.Active is null)
+        {
+            <div class="empty-doc">
+                <Icon Name="files" Class="dim" />
+                <span>@L["doc.empty"]</span>
+                <div class="keys">
+                    <span>@L["cmd.goToFile"]</span><span><kbd>Ctrl P</kbd></span>
+                    <span>@L["cmd.commands"]</span><span><kbd>Ctrl K</kbd></span>
+                    <span>@L["cmd.newComponent"]</span><span><kbd>Ctrl N</kbd></span>
+                    <span>@L["cmd.debug"]</span><span><kbd>F5</kbd></span>
+                </div>
+            </div>
+        }
+        @foreach (var d in Ws.Documents)
+        {
+            <DocumentView @key="d" Session="d" IsActive="d == Ws.Active" />
+        }
+    </div>
+</section>
+
+@code {
+    private async Task OnMouseUp(MouseEventArgs e, DocumentSession doc)
+    {
+        if (e.Button == 1) await Ws.CloseAsync(doc);
+    }
+}

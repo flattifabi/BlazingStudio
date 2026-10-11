@@ -1,0 +1,272 @@
+@inherits StudioComponent
+@inject EfService Ef
+@inject NuGetService NuGet
+
+<div class="backdrop" style="padding-top:5vh" @onclick="() => { if (Ef.Busy is null) Ui.CloseOverlay(); }">
+    <div class="dialog nuget ef" @onclick:stopPropagation="true">
+        <div class="ng-head">
+            <div class="iic"><Icon Name="database" /></div>
+            <div class="t">
+                <h2>Entity Framework Core</h2>
+                <small class="dim">@(Ef.ToolVersion is { } v ? "dotnet-ef " + v : Ef.ToolChecked ? L["ef.toolMissing"] : L["ef.checking"])</small>
+            </div>
+            <div class="seg">
+                <button class="@(_tab == "migrations" ? "on" : "")" @onclick='() => _tab = "migrations"'>@L["ef.migrations"]</button>
+                <button class="@(_tab == "context" ? "on" : "")" @onclick='() => _tab = "context"'>@L["ef.context"]</button>
+                <button class="@(_tab == "scaffold" ? "on" : "")" @onclick='() => _tab = "scaffold"'>@L["ef.scaffold"]</button>
+            </div>
+            <button class="ibtn" title="@L["action.close"]" disabled="@(Ef.Busy is not null)" @onclick="Ui.CloseOverlay"><Icon Name="x" /></button>
+        </div>
+
+        @* ---------- Voraussetzungen ---------- *@
+        @if (Ef.ToolChecked && Ef.ToolVersion is null)
+        {
+            <div class="banner warn"><Icon Name="alert" /><span>@L["ef.toolMissingText"]</span><span class="grow"></span>
+                <button class="btn sm ac" disabled="@(Ef.Busy is not null)" @onclick="Ef.InstallToolAsync">@L["ef.installTool"]</button></div>
+        }
+        @if (Ws.Project?.ProjectFile is not null && !Ef.HasDesignPackage && Ef.UsesEfCore)
+        {
+            <div class="banner warn"><Icon Name="alert" /><span>@L.F("ef.designMissing", Ws.Project.Name)</span><span class="grow"></span>
+                <button class="btn sm" disabled="@(NuGet.BusyPackage is not null)" @onclick="InstallDesign">@L["nuget.install"]</button></div>
+        }
+
+        <div class="ng-bar" style="padding-top:12px">
+            <Dropdown Label="DbContext" Value="@(Ef.Selected is { } sc ? sc.ProjectPath + "|" + sc.Name : null)" Placeholder="@L["ef.noContexts"]" Class="grow"
+                      Options='Ef.Contexts.Select(c => new Dropdown.Option(c.ProjectPath + "|" + c.Name, c.Name, Path.GetFileNameWithoutExtension(c.ProjectPath), "database"))'
+                      ValueChanged="v => SelectContext(new ChangeEventArgs { Value = v })" />
+            <span class="dim" style="font-size:12px">@L["ef.startup"] <b>@Ws.Project?.Name</b></span>
+            @if (Ef.Busy is not null) { <Icon Name="refresh" Class="spin dim" /> }
+            <button class="ibtn" title="@L["nuget.refresh"]" disabled="@(Ef.Busy is not null)" @onclick="Reload"><Icon Name="refresh" /></button>
+        </div>
+
+        <div class="ef-body scroll">
+            @if (Ef.LastError is { } err)
+            {
+                <div class="hint warn" style="margin-bottom:12px;white-space:pre-wrap"><Icon Name="alertc" /><span>@err</span></div>
+            }
+
+            @switch (_tab)
+            {
+                case "migrations":
+                    <div class="ef-actions">
+                        <div class="f" style="flex:1"><input placeholder="@L["ef.migrationName"]" value="@_newName" spellcheck="false"
+                                                             @oninput="e => _newName = e.Value?.ToString() ?? string.Empty" @onkeydown="NewKey" /></div>
+                        <button class="btn ac" disabled="@(!CanRun || _newName.Trim().Length == 0)" @onclick="AddMigration"><Icon Name="plus" />@L["ef.addMigration"]</button>
+                        <button class="btn" disabled="@(!CanRun)" @onclick="() => Ef.UpdateDatabaseAsync(null)"><Icon Name="database" />@L["ef.updateDatabase"]</button>
+                        <button class="btn" disabled="@(!CanRun || Ef.Migrations.Count == 0)" @onclick="RemoveLast"><Icon Name="undo" />@L["ef.removeLast"]</button>
+                    </div>
+                    <div class="ef-list">
+                        @if (Ef.Migrations.Count == 0)
+                        {
+                            <div class="empty-hint">@(Ef.Busy == "list" ? L["ef.loading"] : L["ef.noMigrations"])</div>
+                        }
+                        @foreach (var m in Ef.Migrations.Reverse())
+                        {
+                            var mig = m;
+                            <div class="ef-mig @(mig.Applied == true ? "applied" : mig.Applied == false ? "pending" : "")">
+                                <span class="ef-state" title="@(mig.Applied == true ? L["ef.applied"] : mig.Applied == false ? L["ef.notApplied"] : "?")">@(mig.Applied == true ? "✓" : mig.Applied == false ? "○" : "?")</span>
+                                <div class="ng-main">
+                                    <b>@mig.Name</b>
+                                    <div class="mono dim" style="font-size:11.5px">@mig.Id</div>
+                                </div>
+                                <button class="btn sm ghost" title="@L["ef.migrateToHint"]" disabled="@(!CanRun)" @onclick="() => Ef.UpdateDatabaseAsync(mig.Id)">@L["ef.migrateTo"]</button>
+                                <button class="btn sm ghost" disabled="@(!CanRun)" @onclick="() => Ef.ScriptAsync(true, null, mig.Id, true)">SQL</button>
+                                @if (FindMigrationFile(mig) is { } f) { <button class="ibtn sm" title="@L["ef.openFile"]" @onclick="() => Ws.Open(f)"><Icon Name="ext" /></button> }
+                            </div>
+                        }
+                    </div>
+                    <div class="ef-actions" style="margin-top:12px">
+                        <button class="btn" disabled="@(!CanRun)" @onclick="() => Ef.ScriptAsync(true, null, null, true)"><Icon Name="code" />@L["ef.scriptAll"]</button>
+                        <button class="btn" disabled="@(!CanRun)" @onclick="Ef.CheckPendingAsync"><Icon Name="search" />@L["ef.checkPending"]</button>
+                        <span class="grow"></span>
+                        <button class="btn ghost danger-text" disabled="@(!CanRun || Ef.Migrations.Count == 0)" @onclick="RevertAll"><Icon Name="restart" />@L["ef.revertAll"]</button>
+                    </div>
+                    break;
+
+                case "context":
+                    @if (Ef.Selected is { } ctx)
+                    {
+                        <div class="ef-grid">
+                            <div class="card" style="padding:12px">
+                                <h4 class="ef-h">@L["ef.connection"]</h4>
+                                @if (Ef.Info is { } info)
+                                {
+                                    <div class="ef-kv"><span>Provider</span><b class="mono">@info.Provider</b></div>
+                                    <div class="ef-kv"><span>@L["ef.database"]</span><b class="mono">@info.DatabaseName</b></div>
+                                    <div class="ef-kv"><span>Data Source</span><b class="mono">@info.DataSource</b></div>
+                                    @if (!string.IsNullOrEmpty(info.Options)) { <div class="ef-kv"><span>Options</span><b class="mono">@info.Options</b></div> }
+                                }
+                                else
+                                {
+                                    <div class="dim">@(Ef.Busy is not null ? L["ef.loading"] : L["ef.infoUnavailable"])</div>
+                                }
+                            </div>
+                            <div class="card" style="padding:12px">
+                                <h4 class="ef-h">@L.F("ef.entities", ctx.Entities.Count)</h4>
+                                @foreach (var e in ctx.Entities)
+                                {
+                                    var ent = e;
+                                    <div class="vr click" @onclick="() => Ws.Open(ent.File, ent.Line)"><span class="n">@ent.PropertyName</span><span class="v">DbSet&lt;@ent.Name&gt;</span><span class="t">@Path.GetFileName(ent.File):@ent.Line</span></div>
+                                }
+                                <button class="btn ghost sm" style="margin-top:8px" @onclick="() => Ws.Open(ctx.File, ctx.Line)"><Icon Name="ext" />@ctx.Name</button>
+                            </div>
+                        </div>
+                        <div class="ef-actions" style="margin-top:12px">
+                            <button class="btn" disabled="@(!CanRun)" @onclick="() => Ef.ScriptAsync(false, null, null, false)"><Icon Name="code" />@L["ef.createScript"]</button>
+                            <button class="btn" disabled="@(!CanRun)" @onclick="Ef.OptimizeAsync"><Icon Name="zap" />@L["ef.optimize"]</button>
+                            <span class="grow"></span>
+                            <button class="btn ghost danger-text" disabled="@(!CanRun)" @onclick="Drop"><Icon Name="trash" />@L["ef.drop"]</button>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="ins-empty"><Icon Name="database" /><span>@L["ef.noContextsText"]</span>
+                            <button class="btn" @onclick='() => _tab = "scaffold"'>@L["ef.scaffold"]</button></div>
+                    }
+                    break;
+
+                case "scaffold":
+                    <p class="dim" style="margin-top:0">@L["ef.scaffoldText"]</p>
+                    <div class="row2"><label>@L["ef.connectionString"]</label>
+                        <div class="f"><input class="mono" value="@_conn" placeholder="Server=.;Database=Shop;Trusted_Connection=True;TrustServerCertificate=True" spellcheck="false" @oninput="e => _conn = e.Value?.ToString() ?? string.Empty" /></div></div>
+                    <div class="g2">
+                        <div class="row2"><label>Provider</label>
+                            <Dropdown Value="@_provider" Options='BlazorStudio.Core.EfCore.EfCli.Providers.Select(x => new Dropdown.Option(x.Package, x.Label, x.Package))' ValueChanged="v => _provider = v ?? _provider" /></div>
+                        <div class="row2"><label>@L["ef.targetProject"]</label>
+                            <Dropdown Value="@(_target ?? Ws.Project?.ProjectFile)" Options='(Ws.Solution?.AllProjects.Where(x => x.Project is not null) ?? Enumerable.Empty<SolutionItem>()).Select(x => new Dropdown.Option(x.Path, x.Name, string.Join(";", x.Project!.TargetFrameworks), "cube"))' ValueChanged="v => _target = v" /></div>
+                        <div class="row2"><label>@L["ef.outputDir"]</label><div class="f"><input value="@_outDir" @oninput="e => _outDir = e.Value?.ToString() ?? string.Empty" /></div></div>
+                        <div class="row2"><label>@L["ef.contextDir"]</label><div class="f"><input value="@_ctxDir" @oninput="e => _ctxDir = e.Value?.ToString() ?? string.Empty" /></div></div>
+                        <div class="row2"><label>@L["ef.contextName"]</label><div class="f"><input value="@_ctxName" placeholder="AppDbContext" @oninput="e => _ctxName = e.Value?.ToString() ?? string.Empty" /></div></div>
+                        <div class="row2"><label>@L["ef.tables"]</label><div class="f"><input value="@_tables" placeholder="@L["ef.tablesHint"]" @oninput="e => _tables = e.Value?.ToString() ?? string.Empty" /></div></div>
+                    </div>
+                    <label class="check"><input type="checkbox" checked="@_annotations" @onchange="e => _annotations = e.Value is true" />@L["ef.dataAnnotations"]</label>
+                    <label class="check"><input type="checkbox" checked="@_noOnConfiguring" @onchange="e => _noOnConfiguring = e.Value is true" />@L["ef.noOnConfiguring"]</label>
+                    <label class="check"><input type="checkbox" checked="@_force" @onchange="e => _force = e.Value is true" />@L["ef.force"]</label>
+                    <div class="hint" style="margin:8px 0"><Icon Name="info" />@L.F("ef.providerHint", _provider)</div>
+                    <div class="ef-actions">
+                        <span class="grow"></span>
+                        <button class="btn ac" disabled="@(Ef.Busy is not null || Ef.ToolVersion is null || _conn.Trim().Length == 0)" @onclick="Scaffold"><Icon Name="database" />@L["ef.runScaffold"]</button>
+                    </div>
+                    break;
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private string _tab = "migrations";
+    private string _newName = "";
+    private string _conn = "";
+    private string _provider = "Microsoft.EntityFrameworkCore.SqlServer";
+    private string? _target;
+    private string _outDir = "Models";
+    private string _ctxDir = "Data";
+    private string _ctxName = "";
+    private string _tables = "";
+    private bool _annotations;
+    private bool _noOnConfiguring = true;
+    private bool _force;
+
+    private bool CanRun => Ef.Busy is null && Ef.ToolVersion is not null && Ef.Selected is not null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Ef.Changed += Refresh;
+        await Ef.InitializeAsync();
+        if (Ef.Contexts.Count == 0) _tab = "scaffold";
+    }
+
+    private async Task Reload()
+    {
+        Ef.FindContexts();
+        await Ef.LoadMigrationsAsync();
+    }
+
+    private async Task SelectContext(ChangeEventArgs e)
+    {
+        var v = e.Value?.ToString()?.Split('|');
+        if (v is not { Length: 2 }) return;
+        Ef.Select(Ef.Contexts.FirstOrDefault(c => c.ProjectPath == v[0] && c.Name == v[1]));
+        await Ef.LoadMigrationsAsync();
+    }
+
+    private async Task NewKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && _newName.Trim().Length > 0 && CanRun) await AddMigration();
+    }
+
+    private async Task AddMigration()
+    {
+        var name = new string(_newName.Trim().Where(c => char.IsLetterOrDigit(c) || c == '_').ToArray());
+        if (name.Length == 0) return;
+        await Ef.AddMigrationAsync(name, null);
+        _newName = "";
+    }
+
+    private async Task RemoveLast()
+    {
+        var last = Ef.Migrations.LastOrDefault();
+        var applied = last?.Applied == true;
+        var r = await Ui.ShowDialogAsync(new DialogRequest
+        {
+            Title = L.F("ef.removeTitle", last?.Name ?? ""),
+            Message = applied ? L["ef.removeAppliedText"] : L["ef.removeText"],
+            OkText = L["ef.removeLast"],
+            CancelText = L["action.cancel"],
+            Danger = applied,
+        });
+        if (r == DialogResult.Ok) await Ef.RemoveMigrationAsync(applied);
+    }
+
+    private async Task RevertAll()
+    {
+        var r = await Ui.ShowDialogAsync(new DialogRequest { Title = L["ef.revertAll"], Message = L["ef.revertAllText"], OkText = L["ef.revertAll"], CancelText = L["action.cancel"], Danger = true });
+        if (r == DialogResult.Ok) await Ef.UpdateDatabaseAsync("0");
+    }
+
+    private async Task Drop()
+    {
+        var r = await Ui.ShowDialogAsync(new DialogRequest
+        {
+            Title = L["ef.drop"],
+            Message = L.F("ef.dropText", Ef.Info?.DatabaseName ?? "?"),
+            OkText = L["ef.drop"],
+            CancelText = L["action.cancel"],
+            Danger = true,
+        });
+        if (r == DialogResult.Ok) await Ef.DropDatabaseAsync();
+    }
+
+    private async Task InstallDesign()
+    {
+        NuGet.TargetProject = Ws.Project?.ProjectFile;
+        var efVersion = Ws.StartupItem?.Project?.ResolvedPackages.FirstOrDefault(p => p.Id.Equals("Microsoft.EntityFrameworkCore", StringComparison.OrdinalIgnoreCase))?.Version;
+        await NuGet.InstallAsync("Microsoft.EntityFrameworkCore.Design", efVersion);
+        NuGet.TargetProject = null;
+    }
+
+    private async Task Scaffold()
+    {
+        var target = _target ?? Ws.Project?.ProjectFile;
+        if (target is null) return;
+        var options = new BlazorStudio.Core.EfCore.ScaffoldOptions(_conn.Trim(), _provider, _outDir.Trim().Length == 0 ? "Models" : _outDir.Trim(),
+            _ctxDir.Trim().Length == 0 ? null : _ctxDir.Trim(), _ctxName.Trim().Length == 0 ? null : _ctxName.Trim(),
+            _annotations, _force, _noOnConfiguring,
+            _tables.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        await Ef.ScaffoldAsync(options, target);
+        if (Ef.LastError is null) _tab = "context";
+    }
+
+    private string? FindMigrationFile(BlazorStudio.Core.EfCore.EfMigration m)
+    {
+        if (Ef.Selected is null) return null;
+        var dir = Path.GetDirectoryName(Ef.Selected.ProjectPath)!;
+        return ProjectIndex.EnumerateFiles(dir).FirstOrDefault(f => Path.GetFileName(f).Equals(m.Id + ".cs", StringComparison.OrdinalIgnoreCase));
+    }
+
+    public override void Dispose()
+    {
+        base.Dispose();
+        Ef.Changed -= Refresh;
+    }
+}

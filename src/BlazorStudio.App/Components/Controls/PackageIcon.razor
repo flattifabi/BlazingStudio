@@ -1,0 +1,23 @@
+@* Paket-Icon von nuget.org, sonst ein farbiger Buchstabe. *@
+@if (!string.IsNullOrEmpty(Url) && !_failed)
+{
+    <img class="ng-icon @(Large ? "lg" : "")" src="@Url" alt="" loading="lazy" @onerror="() => _failed = true" />
+}
+else
+{
+    <span class="ng-icon ng-letter @(Large ? "lg" : "")" style="background:@Color">@(Id.Length > 0 ? char.ToUpperInvariant(Id[0]) : '?')</span>
+}
+
+@code {
+    [Parameter] public string? Url { get; set; }
+
+    [Parameter] public string Id { get; set; } = "";
+
+    [Parameter] public bool Large { get; set; }
+
+    private bool _failed;
+
+    private static readonly string[] Colors = { "#4c8dff", "#14b8a6", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#64748b" };
+
+    private string Color => Colors[Math.Abs(Id.GetHashCode(StringComparison.OrdinalIgnoreCase)) % Colors.Length];
+}

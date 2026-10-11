@@ -1,0 +1,48 @@
+# Neues Release:  git tag v1.1.0  &&  git push origin v1.1.0
+# Baut das Setup auf Windows und hängt es an das GitHub-Release. Die installierte App
+# findet es beim nächsten Start (UpdateService) und bietet das Update an.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (z. B. 1.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Version bestimmen
+        id: ver
+        shell: pwsh
+        run: |
+          $v = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.version }}' } else { '${{ github.ref_name }}'.TrimStart('v') }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Tests
+        run: dotnet test tests/BlazorStudio.Core.Tests -c Release
+
+      - name: Setup bauen
+        shell: pwsh
+        run: ./build-installer.ps1 -Version ${{ steps.ver.outputs.version }} -SkipLogo
+
+      - name: GitHub-Release veröffentlichen
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: Blazor Studio ${{ steps.ver.outputs.version }}
+          generate_release_notes: true
+          files: dist/BlazorStudio-Setup-${{ steps.ver.outputs.version }}.exe

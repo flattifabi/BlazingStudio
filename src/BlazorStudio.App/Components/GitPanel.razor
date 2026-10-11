@@ -1,0 +1,372 @@
+@* Git-Werkzeug im unteren Panel: Änderungen + Commit, Log, Branches, Konsole. *@
+@implements IDisposable
+@inject GitService Git
+@inject Workspace Ws
+@inject UiService Ui
+@inject Localizer L
+@inject IHostBridge Host
+@using BlazorStudio.Core.Git
+
+@if (!Git.Checked)
+{
+    <div class="empty-hint"><Icon Name="refresh" Class="spin" /></div>
+}
+else if (Git.Root is null)
+{
+    <div class="git-empty">
+        <Icon Name="git" />
+        <span>@L["git.noRepo"]</span>
+        <button class="btn ac" @onclick="Git.InitAsync"><Icon Name="plus" />@L["git.init"]</button>
+    </div>
+}
+else
+{
+    var st = Git.Status;
+    <div class="git">
+        <div class="git-bar">
+            <div style="width:210px">
+                <Dropdown Class="sm" Value="@st.Branch" Options="BranchOptions" Search="true" ValueChanged="PickBranch" />
+            </div>
+            @if (st.Upstream is null && st.Branch is not null)
+            {
+                <span class="chip dim" title="@L["git.noUpstream"]">@L["git.noUpstream"]</span>
+            }
+            @if (st.Ahead > 0) { <span class="chip ac" title="@L.F("git.ahead", st.Ahead)">↑@st.Ahead</span> }
+            @if (st.Behind > 0) { <span class="chip warn" title="@L.F("git.behind", st.Behind)">↓@st.Behind</span> }
+            <span class="sep"></span>
+            <button class="ibtn" title="@L["git.fetch"]" disabled="@(Git.Busy is not null)" @onclick="Git.FetchAsync"><Icon Name="refresh" /></button>
+            <button class="ibtn" title="@L["git.pull"] (Ctrl+T)" disabled="@(Git.Busy is not null)" @onclick="Git.PullAsync"><Icon Name="down" /></button>
+            <button class="ibtn" title="@L["git.push"] (Ctrl+Shift+K)" disabled="@(Git.Busy is not null)" @onclick="() => Git.PushAsync()" @oncontextmenu="PushMenu" @oncontextmenu:preventDefault="true"><Icon Name="up" /></button>
+            <button class="ibtn" title="@L["git.stash"]" disabled="@(Git.Busy is not null || st.Changes.Count == 0)" @onclick="Git.StashAsync"><Icon Name="box" /></button>
+            @if (Git.Stashes.Count > 0)
+            {
+                <button class="btn ghost sm" title="@L["git.unstash"]" @onclick="StashMenu"><Icon Name="box" />@L["git.stashes"] <span class="dim">@Git.Stashes.Count</span></button>
+            }
+            <button class="ibtn" title="@L["git.remote"]" @onclick="Git.SetRemoteAsync"><Icon Name="globe" /></button>
+            @if (Git.Busy is { } busy)
+            {
+                <span class="dim" style="font-size:12px;display:flex;gap:6px;align-items:center"><Icon Name="refresh" Class="spin sm" />@busy …</span>
+            }
+            <span class="grow"></span>
+            <div class="seg">
+                <button class="@(View == "changes" ? "on" : "")" @onclick='() => SetView("changes")'>@L["git.changes"] <span class="dim">@st.Changes.Count</span></button>
+                <button class="@(View == "log" ? "on" : "")" @onclick='() => SetView("log")'>@L["git.log"]</button>
+                <button class="@(View == "console" ? "on" : "")" @onclick='() => SetView("console")'>@L["git.console"]</button>
+            </div>
+            <button class="ibtn" title="@L["git.refresh"]" @onclick='() => Git.RefreshAsync(View == "log")'><Icon Name="restart" /></button>
+        </div>
+
+        @switch (View)
+        {
+            case "changes":
+                <div class="git-body">
+                    <div class="git-left">
+                        <div class="git-commit">
+                            <textarea placeholder="@L["git.message"]" spellcheck="false" value="@_message" @oninput="e => _message = e.Value?.ToString() ?? string.Empty" @onkeydown="CommitKey"></textarea>
+                            <div class="git-cbtns">
+                                <label class="check" title="git commit --amend"><input type="checkbox" checked="@_amend" @onchange="ToggleAmend" />@L["git.amend"]</label>
+                                <span class="grow"></span>
+                                <button class="btn sm" disabled="@(!CanCommit)" @onclick="() => Commit(true)">@L["git.commitPush"]</button>
+                                <button class="btn ac sm" disabled="@(!CanCommit)" title="Ctrl+Enter" @onclick="() => Commit(false)"><Icon Name="check" />@L["git.commit"]</button>
+                            </div>
+                        </div>
+                        <div class="git-files scroll">
+                            @if (st.Changes.Count == 0)
+                            {
+                                <div class="empty-hint">@L["git.noChanges"]</div>
+                            }
+                            @{ var staged = st.Changes.Where(c => c.HasStaged).ToList(); var unstaged = st.Changes.Where(c => c.HasUnstaged && !c.IsUntracked || c.IsConflict).ToList(); var untracked = st.Changes.Where(c => c.IsUntracked).ToList(); }
+                            @if (staged.Count > 0)
+                            {
+                                <div class="git-grp"><b>@L["git.staged"]</b><span class="dim">@staged.Count</span><span class="grow"></span><button class="ibtn sm" title="@L["git.unstageAll"]" @onclick="() => Git.UnstageAsync(staged.Select(c => c.Path))"><Icon Name="minus" /></button></div>
+                                @foreach (var c in staged) { @FileRow(c, true) }
+                            }
+                            @if (unstaged.Count > 0)
+                            {
+                                <div class="git-grp"><b>@L["git.changes"]</b><span class="dim">@unstaged.Count</span><span class="grow"></span><button class="ibtn sm" title="@L["git.stageAll"]" @onclick="() => Git.StageAsync(unstaged.Select(c => c.Path))"><Icon Name="plus" /></button></div>
+                                @foreach (var c in unstaged) { @FileRow(c, false) }
+                            }
+                            @if (untracked.Count > 0)
+                            {
+                                <div class="git-grp"><b>@L["git.unversioned"]</b><span class="dim">@untracked.Count</span><span class="grow"></span><button class="ibtn sm" title="@L["git.stageAll"]" @onclick="() => Git.StageAsync(untracked.Select(c => c.Path))"><Icon Name="plus" /></button></div>
+                                @foreach (var c in untracked) { @FileRow(c, false) }
+                            }
+                        </div>
+                    </div>
+                    <div class="git-right scroll">
+                        @if (_diffFor is null)
+                        {
+                            <div class="empty-hint">@L["git.selectFile"]</div>
+                        }
+                        else
+                        {
+                            <div class="diff-head"><FileIcon Path="@_diffFor.Path" /><b>@_diffFor.Path</b><span class="dim">@(_diffStaged ? L["git.staged"] : L["git.changes"])</span><span class="grow"></span>
+                                <button class="btn ghost sm" @onclick="() => OpenFile(_diffFor)"><Icon Name="ext" />@L["git.openFile"]</button></div>
+                            @DiffView(_diff)
+                        }
+                    </div>
+                </div>
+                break;
+
+            case "log":
+                <div class="git-body">
+                    <div class="git-log scroll">
+                        @foreach (var c in Git.Log)
+                        {
+                            var commit = c;
+                            <div class="git-commit-row @(_commit == commit ? "on" : "")" @onclick="() => SelectCommit(commit)" @oncontextmenu="e => CommitMenu(e, commit)" @oncontextmenu:preventDefault="true">
+                                <i class="node"></i>
+                                <span class="subj">
+                                    @foreach (var r in Refs(commit.Refs))
+                                    {
+                                        <span class="ref @(r.StartsWith("tag:") ? "tag" : r.Contains('/') ? "remote" : "local")">@r.Replace("HEAD -> ", "")</span>
+                                    }
+                                    @commit.Subject
+                                </span>
+                                <span class="dim au">@commit.Author</span>
+                                <span class="dim when">@commit.When</span>
+                                <code class="dim">@commit.ShortHash</code>
+                            </div>
+                        }
+                        @if (Git.Log.Count == 0) { <div class="empty-hint">—</div> }
+                    </div>
+                    <div class="git-right scroll">
+                        @if (_commit is null)
+                        {
+                            <div class="empty-hint">@L["git.history"]</div>
+                        }
+                        else
+                        {
+                            @DiffView(_diff)
+                        }
+                    </div>
+                </div>
+                break;
+
+            default:
+                <div class="term scroll">
+                    @foreach (var (cmd, output, ok) in Git.Console)
+                    {
+                        <div class="l-tcmd">&gt; @cmd</div>
+                        @foreach (var line in output.Split('\n'))
+                        {
+                            <div class="@(ok ? "l-tout" : "l-terr")">@line</div>
+                        }
+                    }
+                </div>
+                break;
+        }
+    </div>
+}
+
+@code {
+    /// <summary>Gewünschte Ansicht beim Öffnen (Leiste: Commit → changes, Git → log).</summary>
+    public static string View { get; set; } = "changes";
+
+    public static event Action? ViewChanged;
+
+    public static void Request(string view)
+    {
+        View = view;
+        ViewChanged?.Invoke();
+    }
+
+    private string _message = "";
+    private bool _amend;
+    private GitChange? _diffFor;
+    private bool _diffStaged;
+    private string _diff = "";
+    private GitCommit? _commit;
+
+    private bool CanCommit => Git.Busy is null && (_message.Trim().Length > 0 || _amend) && Git.Status.Changes.Count + (_amend ? 1 : 0) > 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Git.Changed += Refresh;
+        ViewChanged += OnView;
+        await Git.RefreshAsync(View == "log");
+    }
+
+    private void Refresh() => InvokeAsync(StateHasChanged);
+
+    private void OnView() => InvokeAsync(async () =>
+    {
+        if (View == "log" && Git.Log.Count == 0) await Git.RefreshAsync(true);
+        StateHasChanged();
+    });
+
+    private async Task SetView(string v)
+    {
+        View = v;
+        if (v == "log") await Git.RefreshAsync(true);
+    }
+
+    private IEnumerable<Dropdown.Option> BranchOptions
+    {
+        get
+        {
+            foreach (var b in Git.Branches.Where(b => !b.IsRemote))
+                yield return new Dropdown.Option(b.Name, b.Name, b.Upstream, b.IsCurrent ? "check" : "git", L["git.local"]);
+            foreach (var b in Git.Branches.Where(b => b.IsRemote))
+                yield return new Dropdown.Option("remote:" + b.Name, b.Name, null, "globe", L["git.remoteBranches"]);
+            yield return new Dropdown.Option("__new", "+ " + L["git.newBranch"] + " …", null, "plus", " ");
+        }
+    }
+
+    private async Task PickBranch(string? v)
+    {
+        if (v is null || v == Git.Status.Branch) return;
+        if (v == "__new") { await Git.CreateBranchAsync(); return; }
+        var remote = v.StartsWith("remote:", StringComparison.Ordinal);
+        var name = remote ? v[7..] : v;
+        var branch = Git.Branches.FirstOrDefault(b => b.Name == name && b.IsRemote == remote);
+        if (branch is not null) await Git.CheckoutAsync(branch);
+    }
+
+    private RenderFragment FileRow(GitChange c, bool staged) => __builder =>
+    {
+        var status = c.StatusFor(staged);
+        var dir = Path.GetDirectoryName(c.Path)?.Replace('\\', '/');
+        <div class="git-file @(_diffFor == c && _diffStaged == staged ? "on" : "")" @onclick="() => ShowDiff(c, staged)" @ondblclick="() => OpenFile(c)"
+             @oncontextmenu="e => FileMenu(e, c, staged)" @oncontextmenu:preventDefault="true">
+            <span class="st st-@StatusClass(status)">@status</span>
+            <FileIcon Path="@c.Path" />
+            <span class="fn">@Path.GetFileName(c.Path)</span>
+            <span class="dim dir">@dir</span>
+            <span class="acts">
+                @if (staged)
+                {
+                    <button class="ibtn sm" title="@L["git.unstage"]" @onclick:stopPropagation="true" @onclick="() => Git.UnstageAsync(new[] { c.Path })"><Icon Name="minus" /></button>
+                }
+                else
+                {
+                    <button class="ibtn sm" title="@L["git.discard"]" @onclick:stopPropagation="true" @onclick="() => Git.DiscardAsync(c)"><Icon Name="undo" /></button>
+                    <button class="ibtn sm" title="@L["git.stage"]" @onclick:stopPropagation="true" @onclick="() => Git.StageAsync(new[] { c.Path })"><Icon Name="plus" /></button>
+                }
+            </span>
+        </div>
+    };
+
+    private static string StatusClass(char s) => s switch
+    {
+        'A' => "add",
+        '?' => "new",
+        'D' => "del",
+        'R' or 'C' => "ren",
+        'U' => "conf",
+        _ => "mod",
+    };
+
+    private RenderFragment DiffView(string diff) => __builder =>
+    {
+        <div class="diff">
+            @foreach (var raw in diff.Split('\n'))
+            {
+                var line = raw.TrimEnd('\r');
+                var cls = line.StartsWith("+++", StringComparison.Ordinal) || line.StartsWith("---", StringComparison.Ordinal) || line.StartsWith("diff ", StringComparison.Ordinal) || line.StartsWith("index ", StringComparison.Ordinal) ? "h"
+                    : line.StartsWith("@@", StringComparison.Ordinal) ? "hunk"
+                    : line.StartsWith('+') ? "add" : line.StartsWith('-') ? "del"
+                    : line.StartsWith("commit ", StringComparison.Ordinal) || line.StartsWith("Author:", StringComparison.Ordinal) || line.StartsWith("Date:", StringComparison.Ordinal) ? "meta" : "";
+                <div class="dl @cls">@(line.Length == 0 ? " " : line)</div>
+            }
+        </div>
+    };
+
+    private async Task ShowDiff(GitChange c, bool staged)
+    {
+        _diffFor = c;
+        _diffStaged = staged;
+        _diff = await Git.DiffAsync(c, staged);
+    }
+
+    private async Task SelectCommit(GitCommit c)
+    {
+        _commit = c;
+        _diff = await Git.ShowCommitAsync(c);
+    }
+
+    private void OpenFile(GitChange c)
+    {
+        var full = Path.Combine(Git.Root!, c.Path);
+        if (File.Exists(full)) Ws.Open(full);
+    }
+
+    private static IEnumerable<string> Refs(string refs) =>
+        refs.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(r => r != "HEAD" && !r.EndsWith("/HEAD", StringComparison.Ordinal));
+
+    private void ToggleAmend(ChangeEventArgs e)
+    {
+        _amend = e.Value is true;
+        if (_amend && _message.Length == 0 && Git.Log.FirstOrDefault() is { } last) _message = last.Subject;
+    }
+
+    private async Task Commit(bool push)
+    {
+        if (await Git.CommitAsync(_message, _amend, push))
+        {
+            _message = "";
+            _amend = false;
+            _diffFor = null;
+        }
+    }
+
+    private async Task CommitKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && e.CtrlKey && CanCommit) await Commit(false);
+    }
+
+    private void FileMenu(MouseEventArgs e, GitChange c, bool staged)
+    {
+        var full = Path.Combine(Git.Root!, c.Path);
+        Ui.ShowMenu(e.ClientX, e.ClientY, new[]
+        {
+            MenuEntry.Do(L["git.openFile"], "ext", () => OpenFile(c)),
+            MenuEntry.Do(L["git.changes"], "split", () => ShowDiff(c, staged)),
+            MenuEntry.Separator,
+            staged ? MenuEntry.Do(L["git.unstage"], "minus", () => Git.UnstageAsync(new[] { c.Path })) : MenuEntry.Do(L["git.stage"], "plus", () => Git.StageAsync(new[] { c.Path })),
+            MenuEntry.Do(L["git.discard"], "undo", () => Git.DiscardAsync(c), danger: true, disabled: staged),
+            MenuEntry.Separator,
+            MenuEntry.Do(L["cmd.copyPath"], "clipboard", () => Host.SetClipboard(full)),
+            MenuEntry.Do(L["cmd.reveal"], "folderopen", () => Host.RevealInExplorer(full)),
+        });
+    }
+
+    private void CommitMenu(MouseEventArgs e, GitCommit c)
+    {
+        Ui.ShowMenu(e.ClientX, e.ClientY, new[]
+        {
+            MenuEntry.Do(L["git.copyHash"], "clipboard", () => Host.SetClipboard(c.Hash)),
+            MenuEntry.Separator,
+            MenuEntry.Do(L["git.newBranch"] + " …", "git", () => CreateBranchAt(c)),
+            MenuEntry.Do(L["git.tag"] + " …", "dot", () => Git.CreateTagAsync(c)),
+            MenuEntry.Separator,
+            MenuEntry.Do(L["git.cherryPick"], "copy", () => Git.CherryPickAsync(c)),
+            MenuEntry.Do(L["git.revert"], "undo", () => Git.RevertAsync(c)),
+            MenuEntry.Sub(L["git.reset"], "restart",
+                MenuEntry.Do(L["git.resetSoft"], "restart", () => Git.ResetToAsync(c, false)),
+                MenuEntry.Do(L["git.resetHard"], "alert", () => Git.ResetToAsync(c, true), danger: true)),
+        });
+    }
+
+    private async Task CreateBranchAt(GitCommit c)
+    {
+        var req = new DialogRequest { Title = L["git.newBranch"], Message = L.F("git.newBranchFrom", c.ShortHash), InputValue = "", InputPlaceholder = "feature/…", OkText = L["action.create"], CancelText = L["action.cancel"] };
+        if (await Ui.ShowDialogAsync(req) != DialogResult.Ok || string.IsNullOrWhiteSpace(req.InputValue)) return;
+        await Git.RunAsync(L["git.newBranch"], "switch", "-c", req.InputValue.Trim().Replace(' ', '-'), c.Hash);
+    }
+
+    private void PushMenu(MouseEventArgs e) => Ui.ShowMenu(e.ClientX, e.ClientY, new[]
+    {
+        MenuEntry.Do(L["git.push"], "up", () => Git.PushAsync()),
+        MenuEntry.Do(L["git.forcePush"], "alert", () => Git.PushAsync(force: true), danger: true),
+    });
+
+    private void StashMenu(MouseEventArgs e) => Ui.ShowMenu(e.ClientX, e.ClientY + 8,
+        Git.Stashes.Select(s => MenuEntry.Do(s, "box", () => Git.StashPopAsync(s))).ToList());
+
+    public void Dispose()
+    {
+        Git.Changed -= Refresh;
+        ViewChanged -= OnView;
+    }
+}

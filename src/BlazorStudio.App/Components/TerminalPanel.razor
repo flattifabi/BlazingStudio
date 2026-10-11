@@ -1,0 +1,97 @@
+@* Interaktives Terminal (PowerShell) im unteren Panel. *@
+@implements IDisposable
+@inject TerminalService Term
+@inject Localizer L
+@inject IJSRuntime JS
+
+@{ var s = Term.Active; }
+<div class="term-wrap" @onclick="Focus">
+    <div class="term scroll" @ref="_out">
+        @if (s is not null)
+        {
+            @foreach (var line in s.Lines.TakeLast(2500))
+            {
+                <div class="l-t@(line.Kind.ToString().ToLowerInvariant())">@line.Text</div>
+            }
+            <div class="term-in">
+                <span class="pr">@(s.Busy ? "" : s.Prompt)</span>
+                <input @ref="_input" id="term-input" spellcheck="false" autocomplete="off" value="@_cmd" @oninput="e => _cmd = e.Value?.ToString() ?? string.Empty"
+                       @onkeydown="Key" @onkeydown:preventDefault="_prevent" placeholder="@(s.Busy ? L["term.running"] : "")" />
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private ElementReference _out;
+    private ElementReference _input;
+    private string _cmd = "";
+    private int _hist = -1;
+    private bool _prevent;
+    private bool _scroll = true;
+
+    protected override void OnInitialized()
+    {
+        Term.Changed += OnChanged;
+        Term.EnsureActive();
+    }
+
+    private void OnChanged()
+    {
+        _scroll = true;
+        InvokeAsync(StateHasChanged);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if (_scroll)
+        {
+            _scroll = false;
+            await JS.InvokeVoidAsync("studio.scrollToBottom", _out);
+        }
+        if (first) await Focus();
+    }
+
+    private async Task Focus()
+    {
+        try { await _input.FocusAsync(); }
+        catch (Exception e) when (e is InvalidOperationException or JSException) { }
+    }
+
+    private void Key(KeyboardEventArgs e)
+    {
+        var s = Term.Active;
+        _prevent = false;
+        if (s is null) return;
+        switch (e.Key)
+        {
+            case "Enter":
+                s.Execute(_cmd);
+                _cmd = "";
+                _hist = -1;
+                _prevent = true;
+                break;
+            case "ArrowUp" when s.History.Count > 0:
+                _hist = _hist < 0 ? s.History.Count - 1 : Math.Max(0, _hist - 1);
+                _cmd = s.History[_hist];
+                _prevent = true;
+                break;
+            case "ArrowDown" when _hist >= 0:
+                _hist++;
+                if (_hist >= s.History.Count) { _hist = -1; _cmd = ""; }
+                else _cmd = s.History[_hist];
+                _prevent = true;
+                break;
+            case "c" when e.CtrlKey && s.Busy:
+                s.Interrupt();
+                _prevent = true;
+                break;
+            case "l" when e.CtrlKey:
+                s.Clear();
+                _prevent = true;
+                break;
+        }
+    }
+
+    public void Dispose() => Term.Changed -= OnChanged;
+}

@@ -1,0 +1,273 @@
+@inherits StudioComponent
+@inject IHostBridge Host
+@using BlazorStudio.Core.Build
+
+<div class="backdrop" style="padding-top:5vh" @onclick="() => { if (!_busy) Ui.CloseOverlay(); }">
+    <div class="dialog nuget pub" @onclick:stopPropagation="true">
+        <div class="ng-head">
+            <div class="iic"><Icon Name="upload" /></div>
+            <div class="t">
+                <h2>@L["pub.title"]</h2>
+                <small class="dim">@(Csproj is { } c ? Path.GetFileName(c) : "")</small>
+            </div>
+            @if (Ws.Solution is { } sln && sln.AllProjects.Count(p => p.Project is not null) > 1)
+            {
+                <div style="width:220px"><Dropdown Class="sm" Value="@Csproj" Options='sln.AllProjects.Where(x => x.Project is not null).Select(x => new Dropdown.Option(x.Path, x.Name, null, "cube"))' ValueChanged="v => ChangeProject(new ChangeEventArgs { Value = v })" /></div>
+            }
+            <button class="ibtn" title="@L["action.close"]" disabled="@_busy" @onclick="Ui.CloseOverlay"><Icon Name="x" /></button>
+        </div>
+
+        <div class="pub-body">
+            <div class="pub-list scroll">
+                @foreach (var p in _profiles)
+                {
+                    var prof = p;
+                    <div class="pub-item @(prof == _selected ? "on" : "")" @onclick="() => Select(prof)">
+                        <Icon Name="@TargetIcon(prof.Target)" />
+                        <div class="ng-main"><b>@prof.Name</b><small>@L["pub.t." + prof.Target] · @prof.Configuration@(prof.RuntimeIdentifier is { } r ? " · " + r : "")</small></div>
+                    </div>
+                }
+                @if (_profiles.Count == 0) { <div class="empty-hint">@L["pub.noProfiles"]</div> }
+                <div class="pub-new">
+                    <div class="hdr dim">@L["pub.new"]</div>
+                    @foreach (var t in new[] { PublishTarget.Folder, PublishTarget.Zip, PublishTarget.Container, PublishTarget.WebDeploy })
+                    {
+                        var target = t;
+                        <button class="btn ghost sm" @onclick="() => New(target)"><Icon Name="@TargetIcon(target)" />@L["pub.t." + target]</button>
+                    }
+                </div>
+            </div>
+
+            <div class="pub-edit scroll">
+                @if (_selected is { } s)
+                {
+                    <div class="g2">
+                        <div class="row2"><label>@L["pub.name"]</label><div class="f"><input value="@s.Name" spellcheck="false" @onchange="e => s.Name = Sanitize(e.Value?.ToString())" /></div></div>
+                        <div class="row2"><label>@L["pub.target"]</label>
+                            <Dropdown Value="@s.Target.ToString()" Options='new[] { PublishTarget.Folder, PublishTarget.Zip, PublishTarget.Container, PublishTarget.WebDeploy }.Select(t => new Dropdown.Option(t.ToString(), L["pub.t." + t], null, TargetIcon(t)))' ValueChanged="v => s.Target = Enum.Parse<PublishTarget>(v!)" /></div>
+                        <div class="row2"><label>@L["pub.configuration"]</label>
+                            <div class="seg fill"><button class="@(s.Configuration == "Release" ? "on" : "")" @onclick='() => s.Configuration = "Release"'>Release</button><button class="@(s.Configuration == "Debug" ? "on" : "")" @onclick='() => s.Configuration = "Debug"'>Debug</button></div></div>
+                        <div class="row2"><label>@L["pub.framework"]</label>
+                            <Dropdown Value="@s.TargetFramework" Placeholder="@L["pub.fromProject"]" Mono="true" Options='Frameworks.Select(f => new Dropdown.Option(f, f)).Prepend(new Dropdown.Option(null, L["pub.fromProject"]))' ValueChanged="v => s.TargetFramework = v" /></div>
+                        <div class="row2"><label>@L["pub.runtime"]</label>
+                            <Dropdown Value="@s.RuntimeIdentifier" Placeholder="@L["pub.portable"]" Mono="true" Options='PublishProfile.RuntimeIdentifiers.Select(r => new Dropdown.Option(r, r, r.StartsWith("win") ? "Windows" : r.StartsWith("linux") ? "Linux" : "macOS")).Prepend(new Dropdown.Option(null, L["pub.portable"]))' ValueChanged="v => s.RuntimeIdentifier = v" /></div>
+                        <div class="row2"><label>@L["pub.mode"]</label>
+                            <div class="seg fill">
+                                <button class="@(!s.SelfContained ? "on" : "")" title="@L["pub.fddHint"]" @onclick="() => s.SelfContained = false">@L["pub.fdd"]</button>
+                                <button class="@(s.SelfContained ? "on" : "")" disabled="@(s.RuntimeIdentifier is null)" title="@L["pub.scdHint"]" @onclick="() => s.SelfContained = true">@L["pub.scd"]</button>
+                            </div></div>
+                    </div>
+
+                    @switch (s.Target)
+                    {
+                        case PublishTarget.Folder or PublishTarget.Zip:
+                            <div class="row2"><label>@L["pub.output"]</label>
+                                <div style="display:flex;gap:6px">
+                                    <div class="f" style="flex:1"><input class="mono" value="@s.OutputPath" spellcheck="false" @onchange="e => s.OutputPath = e.Value?.ToString() ?? s.OutputPath" /></div>
+                                    <button class="btn" @onclick="PickOutput"><Icon Name="folder" /></button>
+                                </div></div>
+                            <label class="check"><input type="checkbox" checked="@s.DeleteExistingFiles" @onchange="e => s.DeleteExistingFiles = e.Value is true" />@L["pub.deleteExisting"]</label>
+                            break;
+                        case PublishTarget.Container:
+                            <div class="g2">
+                                <div class="row2"><label>@L["pub.repository"]</label><div class="f"><input class="mono" value="@s.ContainerRepository" placeholder="@(Path.GetFileNameWithoutExtension(Csproj ?? "app").ToLowerInvariant())" @onchange="e => s.ContainerRepository = e.Value?.ToString()" /></div></div>
+                                <div class="row2"><label>Tag</label><div class="f"><input class="mono" value="@s.ContainerTag" @onchange="e => s.ContainerTag = e.Value?.ToString()" /></div></div>
+                            </div>
+                            <div class="row2"><label>@L["pub.registry"]</label><div class="f"><input class="mono" value="@s.ContainerRegistry" placeholder="@L["pub.registryHint"]" @onchange="e => s.ContainerRegistry = e.Value?.ToString()" /></div></div>
+                            <div class="hint"><Icon Name="info" />@L["pub.containerHint"]</div>
+                            break;
+                        case PublishTarget.WebDeploy:
+                            <div class="row2"><label>@L["pub.server"]</label><div class="f"><input class="mono" value="@s.MsDeployServiceUrl" placeholder="https://server:8172/msdeploy.axd" @onchange="e => s.MsDeployServiceUrl = e.Value?.ToString()" /></div></div>
+                            <div class="g2">
+                                <div class="row2"><label>@L["pub.site"]</label><div class="f"><input class="mono" value="@s.DeployIisAppPath" placeholder="Default Web Site/shop" @onchange="e => s.DeployIisAppPath = e.Value?.ToString()" /></div></div>
+                                <div class="row2"><label>@L["pub.user"]</label><div class="f"><input value="@s.UserName" @onchange="e => s.UserName = e.Value?.ToString()" /></div></div>
+                            </div>
+                            <div class="hint"><Icon Name="lock" />@L["pub.passwordHint"]</div>
+                            break;
+                    }
+
+                    @if (s.RuntimeIdentifier is not null && s.Target != PublishTarget.Container)
+                    {
+                        <div class="pub-opts">
+                            <label class="check"><input type="checkbox" checked="@s.SingleFile" @onchange="e => s.SingleFile = e.Value is true" />@L["pub.singleFile"]</label>
+                            <label class="check"><input type="checkbox" checked="@s.ReadyToRun" @onchange="e => s.ReadyToRun = e.Value is true" />ReadyToRun</label>
+                            <label class="check" title="@L["pub.trimHint"]"><input type="checkbox" checked="@s.Trimmed" @onchange="e => s.Trimmed = e.Value is true" />@L["pub.trim"]</label>
+                        </div>
+                    }
+
+                    <div class="hint mono" style="margin-top:12px;word-break:break-all">dotnet @string.Join(' ', s.BuildArguments(Csproj!).Select(a => a.Contains(' ') ? "\"" + a + "\"" : a))</div>
+
+                    @if (_result is { } r)
+                    {
+                        <div class="hint @(r.Ok ? "" : "warn")" style="margin-top:10px">
+                            <Icon Name="@(r.Ok ? "checkc" : "alert")" />
+                            <span>@r.Text
+                                @if (r.Ok && r.Folder is not null) { <button class="btn sm" style="margin-left:8px" @onclick="() => Host.RevealInExplorer(r.Folder)"><Icon Name="folder" />@L["pub.openFolder"]</button> }
+                            </span>
+                        </div>
+                    }
+
+                    <div class="btns">
+                        @if (s.FilePath is not null) { <button class="btn ghost left danger-text" disabled="@_busy" @onclick="DeleteProfile"><Icon Name="trash" />@L["action.remove"]</button> }
+                        <button class="btn" disabled="@_busy" @onclick="SaveProfile"><Icon Name="save" />@L["pub.save"]</button>
+                        <button class="btn ac" disabled="@(_busy || Csproj is null)" @onclick="PublishAsync">
+                            @if (_busy) { <Icon Name="refresh" Class="spin" /> } else { <Icon Name="upload" /> }@L["pub.publish"]
+                        </button>
+                    </div>
+                }
+                else
+                {
+                    <div class="ins-empty"><Icon Name="upload" /><span>@L["pub.pick"]</span></div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private string? _csproj;
+    private List<PublishProfile> _profiles = new();
+    private PublishProfile? _selected;
+    private bool _busy;
+    private (bool Ok, string Text, string? Folder)? _result;
+
+    private string? Csproj => _csproj ?? Ws.Project?.ProjectFile;
+
+    private IReadOnlyList<string> Frameworks =>
+        Ws.Solution?.AllProjects.FirstOrDefault(p => p.Path == Csproj)?.Project?.TargetFrameworks ?? Array.Empty<string>();
+
+    protected override void OnStudioInitialized() => Reload();
+
+    private void Reload()
+    {
+        _profiles = Csproj is null ? new() : PublishProfile.LoadAll(Csproj).ToList();
+        _selected = _profiles.FirstOrDefault();
+        _result = null;
+    }
+
+    private void ChangeProject(ChangeEventArgs e)
+    {
+        _csproj = e.Value?.ToString();
+        Reload();
+    }
+
+    private void Select(PublishProfile p)
+    {
+        _selected = p;
+        _result = null;
+    }
+
+    private void New(PublishTarget target)
+    {
+        var baseName = target switch { PublishTarget.Zip => "ZipProfile", PublishTarget.Container => "ContainerProfile", PublishTarget.WebDeploy => "IISProfile", _ => "FolderProfile" };
+        var name = baseName;
+        for (var i = 2; _profiles.Any(p => p.Name == name); i++) name = baseName + i;
+        var app = Path.GetFileNameWithoutExtension(Csproj ?? "app").ToLowerInvariant();
+        _selected = new PublishProfile
+        {
+            Name = name,
+            Target = target,
+            OutputPath = target == PublishTarget.Zip ? @"bin\Release\zip\" : @"bin\Release\publish\",
+            ContainerRepository = target == PublishTarget.Container ? app : null,
+            RuntimeIdentifier = target == PublishTarget.Container ? "linux-x64" : null,
+        };
+        _profiles.Add(_selected);
+        _result = null;
+    }
+
+    private static string Sanitize(string? s) =>
+        new string((s ?? "Profile").Where(c => char.IsLetterOrDigit(c) || c is '-' or '_' or '.').ToArray()) is { Length: > 0 } n ? n : "Profile";
+
+    private async Task PickOutput()
+    {
+        if (_selected is null || Csproj is null) return;
+        var folder = await Host.PickFolderAsync(L["pub.output"], _selected.ResolveOutput(Csproj));
+        if (folder is null) return;
+        var projectDir = Path.GetDirectoryName(Csproj)!;
+        var rel = Path.GetRelativePath(projectDir, folder);
+        _selected.OutputPath = rel.StartsWith("..", StringComparison.Ordinal) ? folder : rel + Path.DirectorySeparatorChar;
+    }
+
+    private void SaveProfile()
+    {
+        if (_selected is null || Csproj is null) return;
+        var path = _selected.Save(Csproj);
+        Ui.ShowToast(L.F("pub.saved", Path.GetFileName(path)), ToastKind.Success);
+        Ws.Rescan();
+    }
+
+    private async Task DeleteProfile()
+    {
+        if (_selected is null) return;
+        var r = await Ui.ShowDialogAsync(new DialogRequest { Title = L.F("pub.deleteTitle", _selected.Name), OkText = L["action.remove"], CancelText = L["action.cancel"], Danger = true });
+        if (r != DialogResult.Ok) return;
+        _selected.Delete();
+        Reload();
+        Ws.Rescan();
+    }
+
+    private async Task PublishAsync()
+    {
+        if (_selected is not { } s || Csproj is null) return;
+        string? password = null;
+        if (s.Target == PublishTarget.WebDeploy)
+        {
+            var req = new DialogRequest { Title = L["pub.passwordTitle"], Message = L.F("pub.passwordText", s.UserName ?? "", s.MsDeployServiceUrl ?? ""), InputValue = "", OkText = L["pub.publish"], CancelText = L["action.cancel"] };
+            if (await Ui.ShowDialogAsync(req) != DialogResult.Ok) return;
+            password = req.InputValue;
+        }
+        // Profil vor dem Veröffentlichen speichern, damit dotnet publish -p:PublishProfile es findet
+        if (s.Target != PublishTarget.Container) s.Save(Csproj);
+        _busy = true;
+        _result = null;
+        BottomPanel.Show?.Invoke(BottomTab.Output);
+        Ws.SaveAll();
+        var started = DateTime.Now;
+        var output = s.ResolveOutput(Csproj);
+        if (s.DeleteExistingFiles && s.Target is PublishTarget.Folder or PublishTarget.Zip && Directory.Exists(output))
+        {
+            try { Directory.Delete(output, true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
+        var code = await Run.ExecAsync(Path.GetDirectoryName(Csproj)!, s.BuildArguments(Csproj, password).ToArray());
+        var seconds = (DateTime.Now - started).TotalSeconds.ToString("0.0", CultureInfo.CurrentCulture);
+        if (code != 0)
+        {
+            _result = (false, L["pub.failed"], null);
+        }
+        else if (s.Target is PublishTarget.Folder or PublishTarget.Zip)
+        {
+            var files = Directory.Exists(output) ? Directory.GetFiles(output, "*", SearchOption.AllDirectories) : Array.Empty<string>();
+            var size = files.Sum(f => new FileInfo(f).Length);
+            if (s.Target == PublishTarget.Zip)
+            {
+                var zip = output.TrimEnd(Path.DirectorySeparatorChar) + ".zip";
+                await Task.Run(() =>
+                {
+                    if (File.Exists(zip)) File.Delete(zip);
+                    System.IO.Compression.ZipFile.CreateFromDirectory(output, zip, System.IO.Compression.CompressionLevel.Optimal, false);
+                });
+                _result = (true, L.F("pub.zipDone", Path.GetFileName(zip), ProfilerDialog.Bytes(new FileInfo(zip).Length), seconds), zip);
+            }
+            else
+            {
+                _result = (true, L.F("pub.done", files.Length, ProfilerDialog.Bytes(size), seconds), output);
+            }
+        }
+        else
+        {
+            _result = (true, L.F("pub.doneGeneric", seconds), null);
+        }
+        _busy = false;
+        Ui.ShowToast(_result.Value.Text, _result.Value.Ok ? ToastKind.Success : ToastKind.Error, 6000);
+        _profiles = PublishProfile.LoadAll(Csproj).ToList() is { Count: > 0 } list ? list : _profiles;
+        _selected = _profiles.FirstOrDefault(p => p.Name == s.Name) ?? s;
+    }
+
+    private static string TargetIcon(PublishTarget t) => t switch
+    {
+        PublishTarget.Zip => "package",
+        PublishTarget.Container => "cube",
+        PublishTarget.WebDeploy => "globe",
+        _ => "folder",
+    };
+}

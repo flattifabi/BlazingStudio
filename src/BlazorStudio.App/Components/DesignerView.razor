@@ -1,0 +1,218 @@
+@implements IDisposable
+@inject Workspace Ws
+@inject DesignActions Design
+@inject RunService Run
+@inject Localizer L
+
+<div class="bpbar">
+    @if (Session.View != ViewMode.Code && !_live)
+    {
+        <div class="seg ic" title="@L["dev.title"]">
+            <button class="@(Session.DevicePreset == "desktop" ? "on" : "")" title="@L["dev.desktop"]" @onclick='() => SetPreset("desktop")'><Icon Name="monitor" />@L["dev.desktop"]</button>
+            <button class="@(Session.DevicePreset == "tablet" ? "on" : "")" title="@L["dev.tablet"]" @onclick='() => SetPreset("tablet")'><Icon Name="tablet" />@L["dev.tablet"]</button>
+            <button class="@(Session.DevicePreset == "phone" ? "on" : "")" title="@L["dev.phone"]" @onclick='() => SetPreset("phone")'><Icon Name="phone" />@L["dev.phone"]</button>
+        </div>
+        @if (Session.DevicePreset is "tablet" or "phone")
+        {
+            <button class="ibtn sm @(Session.DeviceLandscape ? "on" : "")" title="@L["dev.rotate"]" @onclick="Rotate"><Icon Name="rotate" /></button>
+        }
+        <div class="bps" title="Breakpoints">
+            @foreach (var bp in Breakpoints.Where(b => b.Width > 0))
+            {
+                var b = bp;
+                <button class="@(Session.DevicePreset == "custom" && Session.DeviceWidth == b.Width ? "on" : "")" title="@b.Title" @onclick="() => SetDevice(b.Width)">@b.Name</button>
+            }
+        </div>
+        <span class="dim mono" style="font-size:11.5px">@(Session.DeviceWidth > 0 ? Session.DeviceWidth + " px" : "")</span>
+    }
+    <span class="grow"></span>
+    @if (Session.View != ViewMode.Code && !_live)
+    {
+        <div class="crumb">
+            @if (Session.Selected is { } sel)
+            {
+                var chain = sel.Ancestors().Where(a => !a.IsRoot).Reverse().Append(sel).ToList();
+                @foreach (var n in chain.TakeLast(4))
+                {
+                    var node = n;
+                    @if (node != chain.TakeLast(4).First()) { <Icon Name="chev" /> }
+                    <span class="@(node == sel ? "cur" : "")" @onclick="() => Session.SelectNode(node)">@CanvasRenderer.LabelOf(node)</span>
+                }
+            }
+            else
+            {
+                <span class="dim">@(Session.Doc?.PageRoute is { } r ? r : Session.Name)</span>
+            }
+        </div>
+        <span class="grow"></span>
+        <div class="zoomctl">
+            <button class="ibtn sm" title="@L["cmd.zoomOut"]" @onclick="() => Zoom(-10)"><Icon Name="minus" /></button>
+            <span title="@L["cmd.zoomReset"]" @onclick="() => Zoom(0)">@Session.Zoom %</span>
+            <button class="ibtn sm" title="@L["cmd.zoomIn"]" @onclick="() => Zoom(10)"><Icon Name="plus" /></button>
+        </div>
+    }
+    <div class="seg">
+        <button class="@(Session.View == ViewMode.Design && !_live ? "on" : "")" @onclick="() => SetView(ViewMode.Design)"><Icon Name="design" />@L["view.design"]</button>
+        <button class="@(Session.View == ViewMode.Split && !_live ? "on" : "")" @onclick="() => SetView(ViewMode.Split)"><Icon Name="split" />@L["view.split"]</button>
+        <button class="@(Session.View == ViewMode.Code && !_live ? "on" : "")" @onclick="() => SetView(ViewMode.Code)"><Icon Name="code" />@L["view.code"]</button>
+        <button class="@(_live ? "on" : "")" title="@L["view.liveHint"]" @onclick="() => _live = !_live"><Icon Name="globe" />@L["view.live"]</button>
+    </div>
+</div>
+
+@if (Session.HasErrors && Session.View != ViewMode.Code && !_live)
+{
+    var first = Session.Diagnostics.First(d => d.IsError);
+    <div class="banner warn">
+        <Icon Name="alert" />
+        <span><b>@L["designer.readonly"]</b> · @L.Diagnostic(first)</span>
+        <span class="grow"></span>
+        <button class="btn sm" @onclick="() => GoToError(first)">@L["designer.goToError"]</button>
+    </div>
+}
+
+<div class="surface @(_live ? "live" : Session.View.ToString().ToLowerInvariant())" style="@(_codeHeight is null ? "" : $"--code-h:{_codeHeight}px")">
+    @if (_live)
+    {
+        <div class="stage" style="padding:10px">
+            @if (Run.Url is { } url)
+            {
+                <iframe class="live-frame" src="@(url.TrimEnd('/') + (Session.Doc?.PageRoute is { } r && !r.Contains('{') ? r : "/"))"></iframe>
+            }
+            else
+            {
+                <div class="live-empty">
+                    <Icon Name="globe" />
+                    <span>@L["view.liveEmpty"]</span>
+                    <button class="btn ac" @onclick='() => Shell.ExecuteAsync("run.start")'><Icon Name="play" />@L["run.start"]</button>
+                </div>
+            }
+        </div>
+    }
+    else
+    {
+        <DesignCanvas Session="Session" IsActive="IsActive && Session.View != ViewMode.Code" />
+    }
+    <div class="hs" data-splitter="code"></div>
+    <div class="codepane">
+        <div class="cbar">
+            <FileIcon Path="@Session.Path" />
+            <span>@Session.Name</span>
+            @if (Session.HasErrors)
+            {
+                <span class="sync bad"><i></i>@L["designer.syncPaused"]</span>
+            }
+            else
+            {
+                <span class="sync"><i></i>@L["designer.synced"]</span>
+            }
+            <span class="grow"></span>
+            @if (Ws.CodeBehindPath(Session) is { } cb)
+            {
+                <button class="btn ghost sm" @onclick="() => Ws.Open(cb)"><FileIcon Path="@cb" />@Path.GetFileName(cb)</button>
+            }
+            @if (File.Exists(Session.Path + ".css"))
+            {
+                <button class="btn ghost sm" @onclick='() => Ws.Open(Session.Path + ".css")'><FileIcon Path="x.css" />@(Session.Name).css</button>
+            }
+        </div>
+        <CodeEditor Session="Session" IsVisible="IsActive && Session.View != ViewMode.Design" />
+    </div>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public DocumentSession Session { get; set; } = default!;
+
+    [Parameter] public bool IsActive { get; set; }
+
+    [CascadingParameter] public Shell Shell { get; set; } = default!;
+
+    private bool _live;
+    private int? _codeHeight;
+
+    private sealed record Bp(string Name, int Width, string? Icon, string Title);
+
+    private static readonly Bp[] Breakpoints =
+    {
+        new("100%", 0, "monitor", "Full"),
+        new("xs", 390, null, "≤ 575"),
+        new("sm", 576, null, "≥ 576"),
+        new("md", 768, null, "≥ 768"),
+        new("lg", 992, null, "≥ 992"),
+        new("xl", 1200, null, "≥ 1200"),
+        new("xxl", 1400, null, "≥ 1400"),
+    };
+
+    public static string? BreakpointName(int width) => Breakpoints.FirstOrDefault(b => b.Width == width)?.Name;
+
+
+    protected override void OnInitialized()
+    {
+        Session.Changed += OnChanged;
+        Session.SelectionChanged += OnSelection;
+        Run.Changed += OnRun;
+    }
+
+    private void OnChanged(ChangeOrigin _) => InvokeAsync(StateHasChanged);
+
+    private void OnSelection() => InvokeAsync(StateHasChanged);
+
+    private void OnRun() => InvokeAsync(StateHasChanged);
+
+    private void SetView(ViewMode v)
+    {
+        _live = false;
+        Session.View = v;
+    }
+
+    private void SetDevice(int w)
+    {
+        Session.DevicePreset = "custom";
+        Session.DeviceLandscape = false;
+        Session.DeviceWidth = w;
+        Ws.Activate(Session);
+    }
+
+    private void SetPreset(string preset)
+    {
+        Session.DevicePreset = preset;
+        ApplyPreset();
+    }
+
+    private void Rotate()
+    {
+        Session.DeviceLandscape = !Session.DeviceLandscape;
+        ApplyPreset();
+    }
+
+    private void ApplyPreset()
+    {
+        Session.DeviceWidth = (Session.DevicePreset, Session.DeviceLandscape) switch
+        {
+            ("tablet", false) => 768,
+            ("tablet", true) => 1024,
+            ("phone", false) => 390,
+            ("phone", true) => 844,
+            _ => 0,
+        };
+        Ws.Activate(Session);
+    }
+
+    private void Zoom(int delta)
+    {
+        Session.Zoom = delta == 0 ? 100 : Math.Clamp(Session.Zoom + delta, 30, 200);
+    }
+
+    private void GoToError(RazorDiagnostic d)
+    {
+        if (Session.View == ViewMode.Design) Session.View = ViewMode.Split;
+        Session.RevealLine = Session.LineOf(d.Start);
+        Ws.Activate(Session);
+    }
+
+    public void Dispose()
+    {
+        Session.Changed -= OnChanged;
+        Session.SelectionChanged -= OnSelection;
+        Run.Changed -= OnRun;
+    }
+}

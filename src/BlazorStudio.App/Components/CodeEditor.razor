@@ -1,0 +1,399 @@
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+@inject Workspace Ws
+@inject DebugService Debug
+@inject RunService Run
+@inject SettingsService Settings
+@inject Localizer L
+
+<div class="monaco-host" @ref="_host">
+    @if (!_created) { <div class="placeholder">@L["editor.loading"]</div> }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public DocumentSession Session { get; set; } = default!;
+
+    [Parameter] public bool IsVisible { get; set; } = true;
+
+    [CascadingParameter] public Shell Shell { get; set; } = default!;
+
+    private readonly string _id = "ed" + Guid.NewGuid().ToString("N")[..8];
+    private ElementReference _host;
+    private DotNetObjectReference<CodeEditor>? _ref;
+    private bool _created;
+    private bool _disposed;
+    private int _membersVersion = -1;
+    private IReadOnlyList<CodeMember> _members = Array.Empty<CodeMember>();
+    private string? _lastDebugKey;
+    private string? _selectionFromCursor;
+
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if (first)
+        {
+            _ref = DotNetObjectReference.Create(this);
+            var glyph = Session.Kind is DocumentKind.CSharp or DocumentKind.Razor;
+            await JS.InvokeVoidAsync("studio.monaco.create", _host, _id, _ref, Session.Text, Session.MonacoLanguage,
+                new { fontSize = Settings.Current.EditorFontSize, minimap = Settings.Current.ShowMinimap && Session.Kind != DocumentKind.Razor, glyphMargin = glyph, wordWrap = Session.Kind is DocumentKind.Markdown or DocumentKind.Text });
+            if (_disposed) return;
+            _created = true;
+            Session.Changed += OnSessionChanged;
+            Session.SelectionChanged += OnSelectionChanged;
+            Debug.Changed += OnDebugChanged;
+            Debug.Session.Changed += OnDebugChanged;
+            Run.Changed += OnRunChanged;
+            Settings.Changed += OnSettingsChanged;
+            await UpdateMarkersAsync();
+            await UpdateDebugAsync(force: true);
+            await HighlightSelectionAsync(reveal: false);
+            StateHasChanged();
+        }
+        if (_created && IsVisible && Session.RevealLine is int line)
+        {
+            Session.RevealLine = null;
+            await JS.InvokeVoidAsync("studio.monaco.revealLine", _id, line, true);
+        }
+    }
+
+    private void OnSessionChanged(ChangeOrigin origin) => InvokeAsync(async () =>
+    {
+        if (_disposed) return;
+        if (origin != ChangeOrigin.Code) await JS.InvokeVoidAsync("studio.monaco.setValue", _id, Session.Text);
+        await UpdateMarkersAsync();
+        await HighlightSelectionAsync(reveal: false);
+        if (Session.RevealLine is not null) StateHasChanged();
+    });
+
+    private void OnSelectionChanged() => InvokeAsync(async () =>
+    {
+        if (_disposed) return;
+        var fromCursor = _selectionFromCursor == Session.SelectedId;
+        _selectionFromCursor = null;
+        await HighlightSelectionAsync(reveal: !fromCursor);
+    });
+
+    private void OnDebugChanged() => InvokeAsync(() => UpdateDebugAsync(force: false));
+
+    private void OnRunChanged() => InvokeAsync(UpdateBuildMarkersAsync);
+
+    private void OnSettingsChanged() => InvokeAsync(async () =>
+    {
+        if (_created) await JS.InvokeVoidAsync("studio.monaco.setOptions", _id, new { fontSize = Settings.Current.EditorFontSize, minimap = Settings.Current.ShowMinimap && Session.Kind != DocumentKind.Razor });
+    });
+
+    private async Task HighlightSelectionAsync(bool reveal)
+    {
+        if (!_created || Session.Kind != DocumentKind.Razor) return;
+        if (Session.Selected is { } n && Session.Spans.TryGetValue(n.Id, out var span))
+            await JS.InvokeVoidAsync("studio.monaco.highlightRange", _id, span.Start, span.End, reveal && IsVisible);
+        else
+            await JS.InvokeVoidAsync("studio.monaco.highlightRange", _id, -1, -1, false);
+    }
+
+    private async Task UpdateMarkersAsync()
+    {
+        if (!_created || Session.Kind != DocumentKind.Razor) return;
+        var markers = Session.Diagnostics.Select(d => new { start = d.Start, end = d.End, error = d.IsError, message = L.Diagnostic(d) }).ToList();
+        await JS.InvokeVoidAsync("studio.monaco.setMarkers", _id, markers);
+    }
+
+    private async Task UpdateBuildMarkersAsync()
+    {
+        if (!_created || _disposed) return;
+        var markers = Run.Diagnostics
+            .Where(d => string.Equals(Path.GetFullPath(d.File), Session.Path, StringComparison.OrdinalIgnoreCase))
+            .Select(d => new { line = d.Line, column = d.Column, error = d.Severity == BlazorStudio.Core.Build.DiagnosticSeverity.Error, message = $"{d.Code}: {d.Message}" })
+            .ToList();
+        await JS.InvokeVoidAsync("studio.monaco.setLineMarkers", _id, markers);
+    }
+
+    private async Task UpdateDebugAsync(bool force)
+    {
+        if (!_created || _disposed) return;
+        var bps = Debug.Session.Breakpoints.TryGetValue(Session.Path, out var set) ? set.ToList() : new List<int>();
+        var frame = Debug.Session.CurrentFrame;
+        var current = Debug.IsStopped && frame?.File is { } f && string.Equals(f, Session.Path, StringComparison.OrdinalIgnoreCase) ? frame.Line : 0;
+        var inline = current > 0 ? InlineValues(current) : new List<object>();
+        var key = string.Join(',', bps) + "|" + current + "|" + inline.Count + "|" + string.Join(';', Debug.Session.Locals.Select(v => v.Value));
+        if (!force && key == _lastDebugKey) return;
+        _lastDebugKey = key;
+        await JS.InvokeVoidAsync("studio.monaco.setDebug", _id, bps, current, inline);
+    }
+
+    /// <summary>„name = wert“ hinter den Zeilen, in denen lokale Variablen vorkommen (bis zur aktuellen Zeile).</summary>
+    private List<object> InlineValues(int current)
+    {
+        var lines = Session.Text.Replace("\r\n", "\n").Split('\n');
+        var result = new List<object>();
+        var shown = new HashSet<string>();
+        var locals = Debug.Session.Locals.Where(v => v.Name != "this" && v.Name.Length > 0).ToList();
+        for (var ln = current; ln >= Math.Max(1, current - 25) && ln <= lines.Length; ln--)
+        {
+            var text = lines[ln - 1];
+            var parts = new List<string>();
+            foreach (var v in locals)
+            {
+                if (shown.Contains(v.Name)) continue;
+                if (!System.Text.RegularExpressions.Regex.IsMatch(text, $@"\b{System.Text.RegularExpressions.Regex.Escape(v.Name)}\b")) continue;
+                shown.Add(v.Name);
+                var value = v.Value.Length > 40 ? v.Value[..39] + "…" : v.Value;
+                parts.Add($"{v.Name} = {value}");
+            }
+            if (parts.Count > 0) result.Add(new { line = ln, text = string.Join(", ", parts) });
+            if (text.Contains('{') && ln < current && System.Text.RegularExpressions.Regex.IsMatch(text, @"\b(void|Task|async|public|private|protected|internal)\b.*\(")) break;
+        }
+        return result;
+    }
+
+    // ------------------------------------------------------------------
+    // Aufrufe aus JavaScript
+    // ------------------------------------------------------------------
+
+    [JSInvokable]
+    public void OnCodeChanged(string text) => Session.SetText(text, ChangeOrigin.Code);
+
+    [JSInvokable]
+    public void OnCursor(int offset, int line, int column, bool user)
+    {
+        Ws.SetCursor(line, column);
+        if (!user || Session.Kind != DocumentKind.Razor || Session.Doc is null) return;
+        var node = DocumentEditor.NodeAt(Session.Doc, Session.Spans, offset);
+        if (node is not null && node.Id != Session.SelectedId)
+        {
+            _selectionFromCursor = node.Id;
+            Session.SelectNode(node);
+        }
+    }
+
+    [JSInvokable]
+    public async Task<object> GetCompletions(string text, int offset, bool explicitInvoke)
+    {
+        var items = new List<object>();
+        int replaceStart = offset, replaceEnd = offset;
+        try
+        {
+            if (Session.Kind == DocumentKind.CSharp)
+            {
+                await Ws.EnsureHighlighterAsync();
+                var list = await Ws.Highlighter.CompleteAsync(Session.Path, text, offset, explicitInvoke);
+                if (list is not null)
+                {
+                    (replaceStart, replaceEnd) = (list.ReplaceStart, list.ReplaceEnd);
+                    AddRoslyn(items, list, text, list.ReplaceStart, list.ReplaceEnd, attributeValue: false, razor: false);
+                }
+                return new { items, replaceStart, replaceEnd };
+            }
+            if (Session.Kind != DocumentKind.Razor) return new { items, replaceStart, replaceEnd };
+
+            // Razor: Markup-Vorschläge (Tags, Attribute, Klassen, Direktiven …)
+            if (_membersVersion != Session.Version)
+            {
+                _members = Ws.MembersFor(Session);
+                _membersVersion = Session.Version;
+            }
+            var (cls, ns, usings) = Ws.RazorContextFor(Session);
+            var proj = BlazorStudio.Core.Razor.RazorCSharpProjection.Project(text, offset, cls, ns, usings, Ws.IsCSharpParameter);
+            var razor = BlazorStudio.Core.Completion.CompletionEngine.Complete(new BlazorStudio.Core.Completion.CompletionContext
+            {
+                Text = text,
+                Offset = offset,
+                Components = Ws.AllComponents,
+                Members = _members,
+                Css = Ws.Project?.Css,
+            });
+
+            if (proj is null || proj.Context == BlazorStudio.Core.Razor.RazorCSharpContext.Expression && text[..offset].EndsWith('@'))
+            {
+                replaceStart = offset - razor.ReplaceLength;
+                AddRazor(items, razor.Items, null);
+                if (proj is null) return new { items, replaceStart, replaceEnd };
+            }
+
+            await Ws.EnsureHighlighterAsync();
+            var cs = await Ws.Highlighter.CompleteAsync(Session.Path + ".__complete.cs", proj.Code, proj.Position, explicitInvoke: true);
+            if (cs is null) return new { items, replaceStart, replaceEnd };
+            var rs = offset - (proj.Position - cs.ReplaceStart);
+            var re = offset + (cs.ReplaceEnd - proj.Position);
+            if (items.Count == 0) (replaceStart, replaceEnd) = (rs, re);
+
+            // Direktiven-Keywords (@if, @code …) zusätzlich, wenn ein @wort getippt wird
+            if (proj.Context == BlazorStudio.Core.Razor.RazorCSharpContext.Expression && razor.Items.Any(i => i.Kind == BlazorStudio.Core.Completion.CompletionKind.Keyword) && items.Count == 0)
+            {
+                AddRazor(items, razor.Items.Where(i => i.Kind == BlazorStudio.Core.Completion.CompletionKind.Keyword), (offset - razor.ReplaceLength, offset));
+            }
+            // Enum-/Bool-Werte aus dem Komponentenkatalog behalten
+            if (proj.Context == BlazorStudio.Core.Razor.RazorCSharpContext.AttributeValue)
+            {
+                AddRazor(items, razor.Items.Where(i => i.Kind is BlazorStudio.Core.Completion.CompletionKind.CssValue), (offset - razor.ReplaceLength, offset));
+            }
+            AddRoslyn(items, cs, text, rs, re, proj.Context == BlazorStudio.Core.Razor.RazorCSharpContext.AttributeValue, razor: true,
+                allowImports: proj.Context is not BlazorStudio.Core.Razor.RazorCSharpContext.Using);
+            return new { items, replaceStart, replaceEnd };
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            LogError("completion", e);
+            return new { items, replaceStart, replaceEnd };
+        }
+    }
+
+    /// <summary>Fehler der Editor-Dienste nach %TEMP%\BlazorStudio\editor.log (für die Fehlersuche).</summary>
+    private static void LogError(string area, Exception e)
+    {
+        try
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "BlazorStudio");
+            Directory.CreateDirectory(dir);
+            File.AppendAllText(Path.Combine(dir, "editor.log"), $"[{DateTime.Now:HH:mm:ss}] {area}: {e}\n\n");
+        }
+        catch (IOException)
+        {
+        }
+    }
+
+    private static void AddRazor(List<object> items, IEnumerable<BlazorStudio.Core.Completion.CompletionItem> source, (int Start, int End)? range)
+    {
+        foreach (var i in source.Take(400))
+        {
+            items.Add(new
+            {
+                label = i.Label,
+                kind = i.Kind.ToString(),
+                insertText = i.InsertText,
+                detail = i.Detail,
+                documentation = i.Documentation,
+                isSnippet = i.IsSnippet,
+                sortText = i.SortText,
+                rangeStart = range?.Start,
+                rangeEnd = range?.End,
+            });
+        }
+    }
+
+    private void AddRoslyn(List<object> items, BlazorStudio.Core.Highlighting.CSharpCompletionList list, string text, int rangeStart, int rangeEnd, bool attributeValue, bool razor, bool allowImports = true)
+    {
+        var index = -1;
+        var nextChar = rangeEnd < text.Length ? text[rangeEnd] : '\0';
+        foreach (var i in list.Items.Take(1500))
+        {
+            index++;
+            if (i.ImportNamespace is not null && !allowImports) continue;
+            var isMethod = i.Kind is "method" or "extension";
+            var snippet = isMethod && !attributeValue && nextChar != '(' && !i.InsertText.EndsWith(')');
+            object? edit = null;
+            if (i.ImportNamespace is { } ns)
+            {
+                var (pos, ins) = razor
+                    ? BlazorStudio.Core.Razor.RazorCSharpProjection.UsingInsertion(text, ns)
+                    : BlazorStudio.Core.Highlighting.SemanticHighlighter.UsingInsertion(text, ns);
+                edit = new { offset = pos, text = ins };
+            }
+            items.Add(new
+            {
+                label = i.Label,
+                kind = "cs." + i.Kind,
+                insertText = snippet ? Escape(i.InsertText) + "($0)" : i.InsertText,
+                detail = i.Detail,
+                isSnippet = snippet,
+                sortText = i.SortText,
+                filterText = i.FilterText,
+                preselect = i.Preselect,
+                rangeStart = rangeStart,
+                rangeEnd = rangeEnd,
+                id = i.ImportNamespace is null ? index : (int?)null,
+                importNs = i.ImportNamespace,
+                edit,
+            });
+        }
+    }
+
+    private static string Escape(string s) => s.Replace("\\", "\\\\").Replace("$", "\\$").Replace("}", "\\}");
+
+    [JSInvokable]
+    public Task<string?> DescribeCompletion(int id) => Ws.Highlighter.DescribeAsync(id);
+
+    /// <summary>Semantische Tokens (Roslyn) für .cs-Dateien und die @code-Blöcke in .razor.</summary>
+    [JSInvokable]
+    public async Task<int[]?> GetSemanticTokens(string text)
+    {
+        if (Session.Kind is not (DocumentKind.CSharp or DocumentKind.Razor)) return null;
+        try
+        {
+            await Ws.EnsureHighlighterAsync();
+            IReadOnlyList<(int Start, int Length, int Type, int Mods)> tokens;
+            if (Session.Kind == DocumentKind.CSharp)
+            {
+                tokens = await Ws.Highlighter.ClassifyCSharpAsync(Session.Path, text);
+            }
+            else
+            {
+                var regions = CodeRegions(text);
+                if (regions.Count == 0) return Array.Empty<int>();
+                tokens = await Ws.Highlighter.ClassifyRazorAsync(Session.Path, text, Path.GetFileNameWithoutExtension(Session.Path), regions);
+            }
+            return BlazorStudio.Core.Highlighting.SemanticHighlighter.Encode(text, tokens);
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Innenbereiche von @code { … } / @functions { … }.</summary>
+    private static List<(int Start, int End)> CodeRegions(string text)
+    {
+        var list = new List<(int, int)>();
+        foreach (var kw in new[] { "@code", "@functions" })
+        {
+            var i = 0;
+            while ((i = text.IndexOf(kw, i, StringComparison.Ordinal)) >= 0)
+            {
+                var brace = text.IndexOf('{', i + kw.Length);
+                if (brace < 0 || text[(i + kw.Length)..brace].Trim().Length > 0) { i += kw.Length; continue; }
+                var end = BlazorStudio.Core.Razor.CSharpScanner.SkipBalanced(text, brace, '{', '}');
+                if (end < 0) end = text.Length;
+                list.Add((brace + 1, Math.Max(brace + 1, end - 1)));
+                i = end;
+            }
+        }
+        return list;
+    }
+
+    [JSInvokable]
+    public async Task OnGutterClick(int line)
+    {
+        if (Session.Kind is not (DocumentKind.CSharp or DocumentKind.Razor)) return;
+        await Debug.ToggleBreakpointAsync(Session.Path, line);
+        await UpdateDebugAsync(force: true);
+    }
+
+    [JSInvokable]
+    public async Task<string?> OnHover(string expression)
+    {
+        if (!Debug.IsStopped || string.IsNullOrWhiteSpace(expression)) return null;
+        var r = await Debug.Session.EvaluateAsync(expression, "hover");
+        if (r.Error is not null || r.Value.Length == 0) return null;
+        return r.Type is null ? $"{expression} = {r.Value}" : $"{expression} = {r.Value}\n{r.Type}";
+    }
+
+    [JSInvokable]
+    public Task OnEditorShortcut(string combo) => Shell.OnShortcut(combo);
+
+    public async ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        Session.Changed -= OnSessionChanged;
+        Session.SelectionChanged -= OnSelectionChanged;
+        Debug.Changed -= OnDebugChanged;
+        Debug.Session.Changed -= OnDebugChanged;
+        Run.Changed -= OnRunChanged;
+        Settings.Changed -= OnSettingsChanged;
+        try
+        {
+            await JS.InvokeVoidAsync("studio.monaco.dispose", _id);
+        }
+        catch (JSDisconnectedException) { }
+        catch (TaskCanceledException) { }
+        _ref?.Dispose();
+    }
+}

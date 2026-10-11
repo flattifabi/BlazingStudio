@@ -1,0 +1,29 @@
+@inject DebugService Debug
+@inject Localizer L
+
+<div class="scene" style="display:@(IsActive ? "flex" : "none");flex:1;min-height:0;flex-direction:column">
+    @if (Session.Kind == DocumentKind.Razor)
+    {
+        <DesignerView Session="Session" IsActive="IsActive" />
+    }
+    else
+    {
+        <div class="codepane solo">
+            <div class="cbar">
+                <FileIcon Path="@Session.Path" />
+                <span class="mono ellipsis">@Session.Path</span>
+            </div>
+            @if (IsActive && Debug.IsStopped && Debug.Session.CurrentFrame?.File is { } f && string.Equals(f, Session.Path, StringComparison.OrdinalIgnoreCase))
+            {
+                <DebugToolbar />
+            }
+            <CodeEditor Session="Session" IsVisible="IsActive" />
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public DocumentSession Session { get; set; } = default!;
+
+    [Parameter] public bool IsActive { get; set; }
+}
