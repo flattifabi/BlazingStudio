@@ -78,7 +78,7 @@
         <span class="grow"></span>
         @if (le is not null && File.Exists(Map(le.File)))
         {
-            <button class="btn sm" @onclick="() => Ws.Open(Map(le.File), le.Line)">@L["designer.goToError"]</button>
+            <button class="btn sm" @onclick="() => GoToLiveError(le)">@L["designer.goToError"]</button>
         }
         <button class="btn sm ghost" @onclick="ShowLiveLog">@L["live.log"]</button>
         <button class="btn sm ghost" @onclick="LiveDesign.Restart">@L["live.restart"]</button>
@@ -193,13 +193,23 @@
     }
 
     /// <summary>Fehlerpfad aus der Schatten-Kopie auf die Originaldatei abbilden.</summary>
+    private void GoToLiveError(BlazorStudio.Core.Build.BuildDiagnostic e) =>
+        Ws.Open(Map(e.File), e.File.EndsWith("_razor.g.cs", StringComparison.OrdinalIgnoreCase) ? null : e.Line);
+
     private string Map(string file)
     {
         var shadowRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BlazorStudio", "design");
         if (!file.StartsWith(shadowRoot, StringComparison.OrdinalIgnoreCase) || Ws.Project?.RootDirectory is not { } root) return file;
         var rel = Path.GetRelativePath(shadowRoot, file);
         var parts = rel.Split(Path.DirectorySeparatorChar, 2);
-        return parts.Length == 2 ? Path.Combine(root, parts[1]) : file;
+        if (parts.Length != 2) return file;
+        // Fehler im generierten Code (obj\…\RazorSourceGenerator\Components/Layout/MainLayout_razor.g.cs) → .razor-Datei
+        var gen = parts[1].Replace('/', Path.DirectorySeparatorChar);
+        const string marker = "RazorSourceGenerator";
+        var mi = gen.IndexOf(marker + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+        if (mi >= 0 && gen.EndsWith("_razor.g.cs", StringComparison.OrdinalIgnoreCase))
+            return Path.Combine(root, gen[(mi + marker.Length + 1)..^"_razor.g.cs".Length] + ".razor");
+        return Path.Combine(root, parts[1]);
     }
 
     private void LiveMenu(MouseEventArgs e) => Ui.ShowMenu(e.ClientX, e.ClientY + 8, new[]

@@ -1,5 +1,6 @@
 using BlazorStudio.Core.Catalog;
 using BlazorStudio.Core.Project;
+using BlazorStudio.Core.Razor;
 
 namespace BlazorStudio.App.Services;
 
@@ -36,6 +37,22 @@ public static class LibrarySetup
     }
 
     public static bool HasRecipe(string packageId) => Recipes.ContainsKey(packageId);
+
+    private static IEnumerable<string> AllProviders => Recipes.Values.SelectMany(r => r.LayoutProviders);
+
+    /// <summary>
+    /// Ältere Versionen haben Provider (z. B. &lt;RadzenComponents /&gt;) teils in den @code-Block geschrieben –
+    /// dann baut das Projekt nicht mehr. Beim Öffnen reparieren. Liefert die reparierte Datei.
+    /// </summary>
+    public static string? RepairLayout(Workspace ws, ProjectIndex project)
+    {
+        var layout = FindFile(project.RootDirectory, "MainLayout.razor");
+        if (layout is null) return null;
+        var text = Text(ws, layout);
+        if (LayoutProviders.Repair(text, AllProviders) is not { } fixedText) return null;
+        Write(ws, layout, fixedText);
+        return layout;
+    }
 
     /// <summary>Führt die Einrichtung durch. Liefert die geänderten Dateien.</summary>
     public static List<string> Apply(Workspace ws, ProjectIndex project, ComponentLibrary lib)
@@ -97,18 +114,16 @@ public static class LibrarySetup
             }
         }
 
-        // Provider ins Hauptlayout
+        // Provider ins Hauptlayout (hinter Direktiven/vorhandene Provider, nie in @code)
         var layout = FindFile(root, "MainLayout.razor");
         if (layout is not null)
         {
             var text = Text(ws, layout);
-            var missing = r.LayoutProviders.Where(p => !text.Contains(p.TrimEnd('/', '>', ' '), StringComparison.Ordinal)).ToList();
-            if (missing.Count > 0)
+            var updated = LayoutProviders.Repair(text, AllProviders) ?? text;
+            updated = LayoutProviders.Insert(updated, r.LayoutProviders);
+            if (updated != text)
             {
-                var lines = text.Replace("\r\n", "\n").Split('\n').ToList();
-                var insertAt = lines.FindLastIndex(l => l.TrimStart().StartsWith('@') && !l.TrimStart().StartsWith("@Body", StringComparison.Ordinal)) + 1;
-                lines.InsertRange(insertAt, missing.Prepend(insertAt > 0 ? "" : null!).Where(x => x is not null));
-                Write(ws, layout, string.Join("\n", lines));
+                Write(ws, layout, updated);
                 changed.Add(layout);
             }
         }

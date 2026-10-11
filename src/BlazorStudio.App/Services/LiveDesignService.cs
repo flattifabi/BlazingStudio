@@ -161,6 +161,8 @@ public sealed partial class LiveDesignService : IDisposable
             ["DOTNET_CLI_UI_LANGUAGE"] = "en",
             ["BLAZORSTUDIO_DESIGN"] = "1",
         };
+        // Nach einem Wiederherstellungsversuch ohne gemeinsamen Compiler-Server (VBCSCompiler) bauen – der hängt sonst mitunter
+        if (_noSharedCompilation) env["UseSharedCompilation"] = "false";
         var runner = _runner;
         var task = runner.RunAsync("dotnet", new[] { "watch", "run", "--non-interactive", "--no-launch-profile", "--project", shadow.ShadowProjectFile, "--urls", BaseUrl }, shadow.ShadowDir, env);
         // PID merken, damit eine verwaiste Instanz (Absturz, hart beendet) beim nächsten Start aufgeräumt wird
@@ -212,20 +214,39 @@ public sealed partial class LiveDesignService : IDisposable
             if (_log.Count > 600) _log.RemoveRange(0, 200);
             try { if (_logFile is not null) File.AppendAllText(_logFile, line + Environment.NewLine); }
             catch (IOException) { }
+            if (!_objRetried && IsCorruptBuildState(line) && _shadow is { } broken)
+            {
+                // obj/ kaputt (z. B. Blazor Studio während eines Builds beendet) - einmal leeren und neu starten
+                _objRetried = true;
+                _noSharedCompilation = true;
+                _ = RecoverAsync(broken);
+                return;
+            }
             var diag = ProcessRunner.ParseDiagnostic(line);
             if (diag is { Severity: DiagnosticSeverity.Error } && !_errors.Any(e => e.File == diag.File && e.Line == diag.Line && e.Code == diag.Code))
+            {
                 _errors.Add(diag);
+                // Fehlerzeilen kommen nach der Meldung "Unable to apply changes" - Banner aktualisieren
+                if (State == LiveDesignState.Failed) Changed?.Invoke();
+            }
 
             var l = line.Trim();
             if (l.Contains("Now listening on", StringComparison.OrdinalIgnoreCase) || l.Contains("Application started", StringComparison.OrdinalIgnoreCase))
             {
                 var wasRestart = State is LiveDesignState.Rebuilding or LiveDesignState.Failed;
                 _errors.Clear();
+                _objRetried = false;
                 Set(LiveDesignState.Ready);
                 if (wasRestart) RefreshRequested?.Invoke();
             }
+            else if (l.Contains("File updated", StringComparison.OrdinalIgnoreCase))
+            {
+                // neuer Versuch: alte Fehler gelten nicht mehr
+                _errors.Clear();
+            }
             else if (l.Contains("Hot reload succeeded", StringComparison.OrdinalIgnoreCase) || l.Contains("Hot reload of changes succeeded", StringComparison.OrdinalIgnoreCase)
-                     || l.Contains("Hot reload change handled", StringComparison.OrdinalIgnoreCase))
+                     || l.Contains("Hot reload change handled", StringComparison.OrdinalIgnoreCase)
+                     || l.Contains("changes applied", StringComparison.OrdinalIgnoreCase) || l.Contains("No C# changes to apply", StringComparison.OrdinalIgnoreCase))
             {
                 _errors.Clear();
                 Set(LiveDesignState.Ready);
@@ -233,6 +254,7 @@ public sealed partial class LiveDesignService : IDisposable
                 RefreshRequested?.Invoke();
             }
             else if (l.Contains("Fix the error to continue", StringComparison.OrdinalIgnoreCase) || l.Contains("Build failed", StringComparison.OrdinalIgnoreCase)
+                     || l.Contains("Unable to apply changes", StringComparison.OrdinalIgnoreCase)
                      || l.Contains("Waiting for a file to change before restarting", StringComparison.OrdinalIgnoreCase) && _errors.Count > 0)
             {
                 Set(LiveDesignState.Failed);
@@ -242,6 +264,32 @@ public sealed partial class LiveDesignService : IDisposable
                 Set(LiveDesignState.Rebuilding);
             }
         });
+    }
+
+    private bool _objRetried;
+    private bool _noSharedCompilation;
+
+    /// <summary>Fehler, die nicht am Code liegen, sondern an halb geschriebenen Build-Dateien im Spiegel (CSC : error CS2001 … obj\…).</summary>
+    private static bool IsCorruptBuildState(string line) =>
+        CorruptBuildRx().IsMatch(line) && (line.Contains(@"\obj\", StringComparison.OrdinalIgnoreCase) || line.Contains("/obj/", StringComparison.OrdinalIgnoreCase));
+
+    [GeneratedRegex(@"\berror (CS2001|CS0006|MSB3030|MSB3491|MSB4018|NETSDK1004)\b")]
+    private static partial Regex CorruptBuildRx();
+
+    private async Task RecoverAsync(ShadowProject shadow)
+    {
+        _log.Add("Build-Zwischenstand beschädigt – obj wird geleert und der Live-Designer neu gestartet …");
+        Stop();
+        await Task.Run(() =>
+        {
+            var obj = Path.Combine(shadow.ShadowDir, "obj");
+            for (var i = 0; i < 5 && Directory.Exists(obj); i++)
+            {
+                try { Directory.Delete(obj, recursive: true); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { Thread.Sleep(400); }
+            }
+        });
+        EnsureStarted();
     }
 
     private void Set(LiveDesignState s)

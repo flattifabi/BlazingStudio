@@ -156,6 +156,14 @@ public sealed class Workspace : IDisposable
         }
 
         Project = index;
+        try
+        {
+            if (LibrarySetup.RepairLayout(this, index) is { } repaired)
+                _ui.ShowToast(_l.F("lib.layoutRepaired", Path.GetFileName(repaired)), ToastKind.Success, 6000);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+        }
         ScanVersion++;
         _previewCache.Clear();
         _previewCss = null;
