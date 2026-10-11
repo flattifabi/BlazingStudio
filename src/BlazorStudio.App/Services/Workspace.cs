@@ -628,6 +628,15 @@ public sealed class Workspace : IDisposable
         "Microsoft.AspNetCore.Components.Web", "Microsoft.AspNetCore.Components.Web.Virtualization", "Microsoft.JSInterop",
     };
 
+    /// <summary>RenderFragment-Parameter einer Komponente in Deklarationsreihenfolge (null = Komponente unbekannt).</summary>
+    public IReadOnlyList<string>? FragmentsOf(string tagName)
+    {
+        var def = AllComponents.FirstOrDefault(c => c.TagName == tagName) ?? Libraries.SelectMany(l => l.Components).FirstOrDefault(c => c.TagName == tagName);
+        // ChildContent zuletzt – so schreibt man es üblicherweise (Titel/Kopf vor dem Inhalt)
+        return def?.Parameters.Where(p => p.Type.StartsWith("RenderFragment", StringComparison.Ordinal)).Select(p => p.Name)
+            .OrderBy(n => n == "ChildContent").ToList();
+    }
+
     /// <summary>Klassenname, Namespace und @using-Einträge (inkl. _Imports.razor) für eine .razor-Datei.</summary>
     public (string ClassName, string Namespace, List<string> Usings) RazorContextFor(DocumentSession doc) => RazorContextFor(doc.Path);
 

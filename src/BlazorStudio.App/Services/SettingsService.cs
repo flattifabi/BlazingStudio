@@ -34,6 +34,9 @@ public sealed class AppSettings
     /// <summary>Design-Tab zeigt die echte App (Schatten-Kopie mit dotnet watch) statt der Nachzeichnung.</summary>
     public bool LiveDesign { get; set; } = true;
 
+    /// <summary>Live-Designer: Seiten mit ihrem Layout (MainLayout …) zeigen oder nur die Seite selbst.</summary>
+    public bool LiveShowLayout { get; set; } = true;
+
     public double WindowWidth { get; set; }
 
     public double WindowHeight { get; set; }

@@ -14,7 +14,7 @@
     <AssemblyTitle>Blazor Studio</AssemblyTitle>
     <Company>Blazor Studio</Company>
     <Copyright>© 2026 Blazor Studio</Copyright>
-    <Version>1.2.1</Version>
+    <Version>1.3.0</Version>
   </PropertyGroup>
 
   <ItemGroup>

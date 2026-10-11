@@ -55,7 +55,10 @@ public sealed partial class DesignActions
     public string LocalizeTemplate(string template) =>
         TemplateTextRegex().Replace(template, m => _l.TemplateText(m.Value));
 
-    public DesignNode? Insert(string key, string? targetId, DropPosition pos)
+    public DesignNode? Insert(string key, string? targetId, DropPosition pos) => Insert(key, targetId, pos, null);
+
+    /// <param name="slot">RenderFragment-Parameter der Zielkomponente (TitleContent …); null = ChildContent.</param>
+    public DesignNode? Insert(string key, string? targetId, DropPosition pos, string? slot)
     {
         if (!Guard()) return null;
         var def = _ws.AllComponents.FirstOrDefault(c => c.Key == key) ?? BuiltInCatalog.Find(key);
@@ -65,7 +68,10 @@ public sealed partial class DesignActions
         s.Apply(d =>
         {
             var target = d.Find(targetId);
-            created = DocumentEditor.InsertTemplate(d, LocalizeTemplate(def.Template), target, pos);
+            var nodes = RazorParser.ParseFragment(LocalizeTemplate(def.Template));
+            if (nodes.Count == 0) return;
+            InsertNodes(d, nodes, target, pos, slot);
+            created = nodes[0];
         });
         if (def.Source == ComponentSource.Project && def.Namespace is null) EnsureUsingFor(def);
         if (def.Source == ComponentSource.Library && def.Namespace is not null) EnsureNamespace(def.Namespace);
@@ -84,24 +90,61 @@ public sealed partial class DesignActions
         Insert(key, sel.Id, inside ? DropPosition.Inside : DropPosition.After);
     }
 
-    public void Move(string nodeId, string? targetId, DropPosition pos)
+    public void Move(string nodeId, string? targetId, DropPosition pos, string? slot = null)
     {
         if (!Guard()) return;
         var s = Session!;
         s.Apply(d =>
         {
             var node = d.Find(nodeId);
-            if (node is null) return;
-            DocumentEditor.Move(d, node, d.Find(targetId), pos);
+            var target = d.Find(targetId);
+            if (node is null || node.IsRoot) return;
+            if (target is not null && (target == node || node.IsAncestorOf(target))) return;
+            var group = DocumentEditor.ChainOf(node);
+            if (target is not null && group.Contains(target)) return;
+            var oldOwner = SlotOwner(node.Parent);
+            foreach (var n in group) n.Detach();
+            InsertNodes(d, group, target, pos, slot);
+            if (oldOwner is not null && FragmentsFor(oldOwner) is { } frags) SlotEditor.Tidy(oldOwner, frags);
         });
         s.Select(nodeId);
     }
 
+    /// <summary>position: "before", "after", "inside" oder "inside:TitleContent" (Slot einer Komponente).</summary>
     public void Drop(string kind, string payload, string? targetId, string position)
     {
+        string? slot = null;
+        if (position.StartsWith("inside:", StringComparison.Ordinal)) { slot = position[7..]; position = "inside"; }
         var pos = position switch { "before" => DropPosition.Before, "after" => DropPosition.After, _ => DropPosition.Inside };
-        if (kind == "component") Insert(payload, targetId, pos);
-        else if (kind == "node") Move(payload, targetId, pos);
+        if (kind == "component") Insert(payload, targetId, pos, slot);
+        else if (kind == "node") Move(payload, targetId, pos, slot);
+    }
+
+    /// <summary>RenderFragment-Parameter einer Komponente; leer, wenn unbekannt.</summary>
+    private IReadOnlyList<string>? FragmentsFor(DesignNode component) =>
+        component.Kind == NodeKind.Component ? _ws.FragmentsOf(component.Name) : null;
+
+    /// <summary>Ist <paramref name="node"/> ein Parameter-Element (&lt;TitleContent&gt;), die Komponente, zu der es gehört.</summary>
+    private DesignNode? SlotOwner(DesignNode? node) =>
+        node is { Kind: NodeKind.Component, Parent: { Kind: NodeKind.Component } owner } && FragmentsFor(owner) is { } f && f.Contains(node.Name) ? owner : null;
+
+    /// <summary>Einfügen mit Rücksicht auf Slots: in Komponenten mit RenderFragments landet Inhalt im richtigen Parameter.</summary>
+    private void InsertNodes(RazorDocument d, IReadOnlyList<DesignNode> nodes, DesignNode? target, DropPosition pos, string? slot)
+    {
+        // Vor/hinter einem Parameter-Element geht nicht – stattdessen in den ChildContent der Komponente
+        if (target is not null && pos != DropPosition.Inside && SlotOwner(target) is { } owner)
+        {
+            target = owner;
+            pos = DropPosition.Inside;
+            slot ??= SlotEditor.ChildContent;
+        }
+        if (target is not null && pos == DropPosition.Inside && FragmentsFor(target) is { Count: > 0 } frags
+            && (slot is not null || SlotEditor.IsExplicit(target, frags)))
+        {
+            SlotEditor.Insert(target, slot, frags, nodes);
+            return;
+        }
+        DocumentEditor.Insert(d, nodes, target, pos);
     }
 
     public void Delete()

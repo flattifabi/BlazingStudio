@@ -66,7 +66,11 @@ public static class DesignInstrumenter
                     {
                         var frags = renderFragmentParameters?.Invoke(c.Name);
                         var container = frags?.Contains("ChildContent") == true || c.Children.Count > 0;
-                        inserts.Add((span.Start, 2, "<template data-bs-s=\"" + id + "\" data-bs-name=\"" + c.Name + "\"" + (container ? " data-bs-container=\"1\"" : "") + "></template>"));
+                        // RenderFragment-Parameter (Slots) für die Slot-Leiste beim Ziehen; vorhandene getrennt markieren
+                        var slots = frags is { Count: > 0 } ? " data-bs-slots=\"" + string.Join(",", frags) + "\"" : "";
+                        var present = frags is { Count: > 0 } ? string.Join(",", c.Children.Where(ch => ch.Kind == NodeKind.Component && frags.Contains(ch.Name)).Select(ch => ch.Name)) : "";
+                        if (present.Length > 0) slots += " data-bs-present=\"" + present + "\"";
+                        inserts.Add((span.Start, 2, "<template data-bs-s=\"" + id + "\" data-bs-name=\"" + c.Name + "\"" + (container ? " data-bs-container=\"1\"" : "") + slots + "></template>"));
                         inserts.Add((span.End, 0, "<template data-bs-e=\"" + id + "\"></template>"));
                         break;
                     }

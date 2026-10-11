@@ -89,6 +89,16 @@ public sealed partial class LiveDesignService : IDisposable
         Changed?.Invoke();
     }
 
+    /// <summary>Seiten mit Layout (MainLayout, Navigation …) oder nur die Seite selbst anzeigen.</summary>
+    public bool ShowLayout => _settings.Current.LiveShowLayout;
+
+    public void SetShowLayout(bool on)
+    {
+        _settings.Current.LiveShowLayout = on;
+        _settings.Save();
+        Changed?.Invoke();
+    }
+
     public void SetEnabled(bool on)
     {
         _settings.Current.LiveDesign = on;
@@ -332,11 +342,7 @@ public sealed partial class LiveDesignService : IDisposable
         }
     }
 
-    private IReadOnlyCollection<string>? RenderFragmentParameters(string component)
-    {
-        var def = _ws.AllComponents.FirstOrDefault(c => c.TagName == component) ?? _ws.Libraries.SelectMany(l => l.Components).FirstOrDefault(c => c.TagName == component);
-        return def?.Parameters.Where(p => p.Type.StartsWith("RenderFragment", StringComparison.Ordinal)).Select(p => p.Name).ToList();
-    }
+    private IReadOnlyCollection<string>? RenderFragmentParameters(string component) => _ws.FragmentsOf(component);
 
     private void OnDocumentChanged(DocumentSession doc)
     {
@@ -404,7 +410,8 @@ public sealed partial class LiveDesignService : IDisposable
     public string? UrlFor(DocumentSession doc)
     {
         if (BaseUrl is null || doc.Doc is null) return null;
-        if (doc.Doc.PageRoute is { } route) return BaseUrl + SampleRoute(route);
+        if (doc.Doc.PageRoute is { } route && ShowLayout) return BaseUrl + SampleRoute(route);
+        // ohne Layout: die Seite als einzelne Komponente rendern (Provider der Bibliotheken bleiben aktiv)
         var (cls, ns, _) = _ws.RazorContextFor(doc);
         return BaseUrl + "/_bs/preview?c=" + Uri.EscapeDataString(ns + "." + cls);
     }

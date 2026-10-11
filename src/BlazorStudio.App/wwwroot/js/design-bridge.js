@@ -29,7 +29,13 @@
       .ind.inside{background:rgba(76,141,255,.12);border:2px dashed #4c8dff}
       .ind span{position:absolute;left:4px;top:-17px;font:600 10px/14px system-ui;color:#fff;background:#4c8dff;padding:0 4px;border-radius:3px;white-space:nowrap}
       .ghost{position:fixed;left:0;top:0;padding:4px 10px;border-radius:7px;background:#1e1e22;color:#eee;border:1px solid #4c8dff;font:600 12px system-ui;display:none}
+      .slots{position:fixed;display:none;gap:3px;align-items:center;padding:3px;border-radius:7px;background:#1e1e22;border:1px solid #4c8dff;box-shadow:0 4px 14px rgba(0,0,0,.35);font:600 11px/18px system-ui,sans-serif}
+      .slots b{color:#9fb7ff;padding:0 4px 0 3px;font-weight:600}
+      .slots i{font-style:normal;color:#ddd;padding:1px 8px;border-radius:5px;border:1px dashed #4c8dff88;white-space:nowrap}
+      .slots i.on{background:#4c8dff;color:#fff;border-style:solid}
+      .slots i.missing{opacity:.75}
     </style>
+    <div class="slots"></div>
     <div class="box hover"><span></span></div>
     <div class="box sel"><div class="chip"><b class="lbl"></b>
       <button data-act="parent" title="Übergeordnetes Element">&#8593;</button>
@@ -45,6 +51,15 @@
   const ind = root.querySelector('.ind');
   const indLabel = ind.querySelector('span');
   const ghost = root.querySelector('.ghost');
+  const slotBar = root.querySelector('.slots');
+
+  // Leere Container sichtbar machen (sonst 0 px hoch und nicht zu treffen)
+  const pageStyle = document.createElement('style');
+  pageStyle.id = 'bs-design-style';
+  pageStyle.textContent = `html:not(.bs-interact) [data-bs-empty]{min-height:46px!important;min-width:90px;outline:1.5px dashed rgba(76,141,255,.55)!important;outline-offset:-3px;background-color:rgba(76,141,255,.04)!important;position:relative}
+    html:not(.bs-interact) [data-bs-empty]::after{content:attr(data-bs-empty);position:absolute;inset:0;display:grid;place-items:center;font:500 11px system-ui,sans-serif;color:rgba(76,141,255,.85);pointer-events:none;white-space:nowrap}`;
+  const mountStyle = () => { if (!pageStyle.isConnected) (document.head || document.documentElement).appendChild(pageStyle); };
+  mountStyle();
   const mount = () => { if (!host.isConnected) (document.body || document.documentElement).appendChild(host); };
   mount();
   new MutationObserver(mount).observe(document.documentElement, { childList: true, subtree: false });
@@ -226,9 +241,51 @@
     return getComputedStyle(el).display.startsWith('inline') ? 'x' : 'y';
   }
 
+  const LEAF = ['img', 'input', 'br', 'hr', 'textarea', 'select', 'button', 'a', 'span', 'label', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'svg', 'video', 'audio', 'iframe'];
+  const startOf = (id) => document.querySelector(`template[data-bs-s="${CSS.escape(id)}"]`);
   const isContainer = (n) => n.kind === 'el'
-    ? !['img', 'input', 'br', 'hr', 'textarea', 'select', 'button', 'a', 'span', 'label', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p'].includes(n.el.tagName.toLowerCase())
-    : document.querySelector(`template[data-bs-s="${CSS.escape(n.id)}"]`)?.dataset.bsContainer === '1';
+    ? !LEAF.includes(n.el.tagName.toLowerCase())
+    : startOf(n.id)?.dataset.bsContainer === '1' && !(n.el && LEAF.includes(n.el.tagName.toLowerCase()));
+
+  /** RenderFragment-Parameter (Slots) einer Komponente, wenn es mehr als nur ChildContent gibt. */
+  function slotsOf(n) {
+    if (!n || n.kind !== 'comp') return null;
+    const list = (startOf(n.id)?.dataset.bsSlots || '').split(',').filter(Boolean);
+    return list.length > 1 || (list.length === 1 && list[0] !== 'ChildContent') ? list : null;
+  }
+
+  /** Nächste Komponente mit Slots: der Knoten selbst oder ein umgebender. */
+  function slotHostOf(n) {
+    for (let cur = n, i = 0; cur && i < 12; i++) {
+      if (slotsOf(cur)) return cur;
+      const up = cur.kind === 'comp' ? startOf(cur.id)?.parentElement : cur.el.parentElement;
+      cur = up ? nodeOf(up) : null;
+    }
+    return null;
+  }
+
+  // Slot-Leiste beim Ziehen über einer Komponente mit mehreren RenderFragments
+  let bar = null; // { host, slots, rect, chips:[{slot, rect}], zone }
+  function showBar(host) {
+    const rect = unionRect(rectsOf(host.id));
+    if (!rect) { hideBar(); return; }
+    if (!bar || bar.host.id !== host.id) {
+      const s = startOf(host.id);
+      const present = (s?.dataset.bsPresent || '').split(',');
+      slotBar.innerHTML = '<b>' + (s?.dataset.bsName || '') + '</b>' + slotsOf(host).map(x => `<i data-slot="${x}" class="${present.includes(x) || x === 'ChildContent' ? '' : 'missing'}">${x}</i>`).join('');
+      bar = { host };
+    }
+    slotBar.style.display = 'flex';
+    const h = slotBar.offsetHeight || 26;
+    const top = rect.top - h - 4 >= 0 ? rect.top - h - 4 : rect.top + 4;
+    Object.assign(slotBar.style, { left: Math.max(4, rect.left) + 'px', top: top + 'px' });
+    const br = slotBar.getBoundingClientRect();
+    bar.rect = rect;
+    bar.chips = [...slotBar.querySelectorAll('i')].map(i => ({ slot: i.dataset.slot, el: i, rect: i.getBoundingClientRect() }));
+    bar.zone = { left: Math.min(rect.left, br.left) - 6, top: Math.min(rect.top, br.top) - 6, right: Math.max(rect.right, br.right) + 6, bottom: Math.max(rect.bottom, br.bottom) + 6 };
+  }
+  function hideBar() { bar = null; slotBar.style.display = 'none'; }
+  const inside = (x, y, r) => r && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
 
   /** Oberste eigene Knoten der Seite (nicht in anderen eigenen Knoten verschachtelt). */
   function topNodes() {
@@ -264,8 +321,23 @@
   }
 
   function computeDrop(x, y, dragged) {
+    const r = computeDropCore(x, y, dragged);
+    if (bar) for (const c of bar.chips) c.el.classList.toggle('on', !!r && r.pos === 'inside:' + c.slot && r.targetId === bar.host.id);
+    return r;
+  }
+
+  function computeDropCore(x, y, dragged) {
+    // Über einem Slot-Chip: genau in diesen RenderFragment-Parameter
+    if (bar && bar.host.id !== dragged) {
+      const chip = bar.chips.find(c => inside(x, y, c.rect));
+      if (chip) return { targetId: bar.host.id, pos: 'inside:' + chip.slot, rect: bar.rect, axis: 'y', label: '' }; // die Leiste zeigt das Ziel schon
+    }
     const target = document.elementFromPoint(x, y);
     const n = nodeOf(target);
+    // Leiste zeigen für die nächste Komponente mit Slots (bleibt stehen, solange der Zeiger in ihrer Nähe ist)
+    const host = n ? slotHostOf(n) : null;
+    if (host && host.id !== dragged) showBar(host);
+    else if (!(bar && inside(x, y, bar.zone))) hideBar();
     if (!n) return nearestDrop(x, y, dragged) || { targetId: null, pos: 'inside', rect: unionRect([document.body.getBoundingClientRect()]), axis: 'y', label: 'body' };
     if (dragged && (n.id === dragged)) return null;
     const rect = unionRect(rectsOf(n.id));
@@ -280,11 +352,12 @@
   }
 
   function drawIndicator(info) {
-    if (!info) { ind.style.display = 'none'; return; }
+    if (!info) { ind.style.display = 'none'; hideBar(); return; }
     const r = info.rect;
-    ind.className = 'box ind ' + info.pos;
+    ind.className = 'box ind ' + (info.pos.startsWith('inside') ? 'inside' : info.pos);
     indLabel.textContent = info.label || '';
-    if (info.pos === 'inside') place(ind, r);
+    indLabel.style.display = info.label ? '' : 'none';
+    if (info.pos.startsWith('inside')) place(ind, r);
     else if (info.axis === 'x') place(ind, { left: (info.pos === 'before' ? r.left - 2 : r.right - 1), top: r.top, width: 3, height: r.height });
     else place(ind, { left: r.left, top: (info.pos === 'before' ? r.top - 2 : r.bottom - 1), width: r.width, height: 3 });
   }
@@ -329,6 +402,7 @@
     drag = null; pending = null; lastHit = null;
     ghost.style.display = 'none';
     drawIndicator(null);
+    hideBar();
   }, true);
 
   // ---------- Nachrichten vom Designer ----------
@@ -338,6 +412,8 @@
     switch (m.type) {
       case 'config':
         Object.assign(cfg, { prefix: m.prefix ?? cfg.prefix, interact: !!m.interact });
+        document.documentElement.classList.toggle('bs-interact', cfg.interact);
+        markEmpty();
         if (cfg.interact) { hover = null; place(hoverBox, null); }
         break;
       case 'select':
@@ -353,6 +429,7 @@
         if (m.commit && lastHit) post({ type: 'drop', kind: m.kind, payload: m.payload, targetId: lastHit.targetId, pos: lastHit.pos });
         lastHit = null;
         drawIndicator(null);
+        hideBar();
         break;
       case 'patch': {
         // Sofort-Vorschau für Style/Klasse, bis Hot Reload den echten Stand liefert
@@ -383,6 +460,34 @@
       }
     }
   });
+
+  /** Leere eigene Container (HTML und Komponenten mit ChildContent) bekommen data-bs-empty. */
+  function markEmpty() {
+    mountStyle();
+    const want = new Map();
+    if (designOn() && cfg.prefix) {
+      const blank = (el) => ![...el.childNodes].some(c => c.nodeType === 1 && c.tagName !== 'TEMPLATE' || c.nodeType === 3 && c.textContent.trim());
+      for (const el of document.querySelectorAll('[data-bs-id]')) {
+        if (!own(el.dataset.bsId) || LEAF.includes(el.tagName.toLowerCase())) continue;
+        if (blank(el) && (el.hasAttribute('data-bs-empty') || el.getBoundingClientRect().height < 30)) want.set(el, el.tagName.toLowerCase());
+      }
+      for (const t of document.querySelectorAll('template[data-bs-s][data-bs-container="1"]')) {
+        if (!own(t.dataset.bsS)) continue;
+        const els = [];
+        for (let n = t.nextSibling; n && !(n.nodeType === 1 && n.tagName === 'TEMPLATE' && n.dataset.bsE === t.dataset.bsS); n = n.nextSibling)
+          if (n.nodeType === 1) els.push(n);
+        if (els.length === 1 && !LEAF.includes(els[0].tagName.toLowerCase()) && blank(els[0]) && (els[0].hasAttribute('data-bs-empty') || els[0].getBoundingClientRect().height < 30)) want.set(els[0], t.dataset.bsName || '');
+      }
+    }
+    for (const el of document.querySelectorAll('[data-bs-empty]')) if (!want.has(el)) el.removeAttribute('data-bs-empty');
+    for (const [el, name] of want) {
+      const label = (name ? name + ' · ' : '') + 'Elemente hierher ziehen';
+      if (el.getAttribute('data-bs-empty') !== label) el.setAttribute('data-bs-empty', label);
+    }
+  }
+  setInterval(markEmpty, 400);
+  // Für Tests/Fehlersuche (Designer-Brücke läuft nur im Schatten-Projekt)
+  window.__bsDebug = { computeDrop, nodeOf, rectsOf, slotHostOf, slotsOf };
 
   post({ type: 'ready', url: location.pathname + location.search });
   // Nach Blazor-Navigation (enhanced nav) erneut melden

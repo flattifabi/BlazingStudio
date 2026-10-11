@@ -15,13 +15,24 @@ public class DesignInstrumenterTests
     }
 
     [Fact]
+    public void Marks_slots_and_present_parameter_elements()
+    {
+        const string src = "<MudExpansionPanel>\n    <TitleContent>T</TitleContent>\n    <ChildContent><p>A</p></ChildContent>\n</MudExpansionPanel>\n";
+        var r = Run(src, n => n == "MudExpansionPanel" ? new[] { "TitleContent", "ChildContent" } : null);
+        Assert.Contains("data-bs-name=\"MudExpansionPanel\" data-bs-container=\"1\" data-bs-slots=\"TitleContent,ChildContent\" data-bs-present=\"TitleContent,ChildContent\"", r);
+        // Parameter-Elemente selbst werden nicht eingerahmt, ihr Inhalt schon
+        Assert.DoesNotContain("data-bs-name=\"TitleContent\"", r);
+        Assert.Contains("<p data-bs-id=\"p_", r);
+    }
+
+    [Fact]
     public void Marks_elements_and_wraps_components_without_touching_whitespace()
     {
         const string src = "@page \"/\"\n\n<section class=\"hero\">\n    <h1>Hi</h1>   <MudButton Color=\"Color.Primary\">Go</MudButton>\n</section>\n@code { int x; }\n";
         var r = Run(src, n => n == "MudButton" ? new[] { "ChildContent" } : null);
         Assert.Contains("<section data-bs-id=\"p_", r);
         Assert.Contains("<h1 data-bs-id=\"p_", r);
-        Assert.Matches(@"<template data-bs-s=""p_\w+"" data-bs-name=""MudButton"" data-bs-container=""1""></template><MudButton Color=""Color.Primary"">Go</MudButton><template data-bs-e=""p_\w+""></template>", r);
+        Assert.Matches(@"<template data-bs-s=""p_\w+"" data-bs-name=""MudButton"" data-bs-container=""1"" data-bs-slots=""ChildContent""></template><MudButton Color=""Color.Primary"">Go</MudButton><template data-bs-e=""p_\w+""></template>", r);
         // Rest bleibt exakt erhalten
         var stripped = System.Text.RegularExpressions.Regex.Replace(r, @" data-bs-id=""p_\w+""|<template data-bs-[se]=""p_\w+""[^>]*></template>", "");
         Assert.Equal(src, stripped);

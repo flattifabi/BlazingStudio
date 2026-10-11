@@ -53,6 +53,12 @@
             <button class="ibtn sm" title="@L["cmd.zoomIn"]" @onclick="() => Zoom(10)"><Icon Name="plus" /></button>
         </div>
     }
+    @if (Session.View != ViewMode.Code && !_live && LiveDesign.Enabled && Session.Doc?.PageRoute is not null)
+    {
+        <button class="tog-layout @(LiveDesign.ShowLayout ? "on" : "")" title="@L["live.layoutHint"]" @onclick="() => LiveDesign.SetShowLayout(!LiveDesign.ShowLayout)">
+            <Icon Name="layout" />@L["live.layout"]
+        </button>
+    }
     @if (Session.View != ViewMode.Code && !_live)
     {
         <button class="live-badge st-@LiveDesign.State.ToString().ToLowerInvariant() @(LiveDesign.Enabled ? "" : "off")" title="@L["live.menuTitle"]" @onclick="LiveMenu">

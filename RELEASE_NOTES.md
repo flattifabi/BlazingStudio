@@ -1,4 +1,8 @@
-## Behoben
-- **Live-Designer zeigte neue Elemente nicht an:** Beim Einrichten von Radzen.Blazor wurde `<RadzenComponents />` in den `@code`-Block von `MainLayout.razor` geschrieben. Danach baute das Projekt nicht mehr und keine Änderung kam im Design-Tab an. Provider werden jetzt immer hinter die Direktiven bzw. neben die vorhandenen Provider gesetzt, und bereits betroffene Layouts werden beim Öffnen des Projekts automatisch repariert.
-- Der Live-Designer erkennt die Hot-Reload-Meldungen von .NET 10 (`C# and Razor changes applied`, `Unable to apply changes …`). Kompilierfehler erscheinen jetzt sofort als Hinweis über der Vorschau, und „Zum Fehler“ öffnet die richtige `.razor`-Datei.
-- Ist der Build-Zwischenstand des Live-Designers beschädigt (z. B. weil Blazor Studio während eines Builds beendet wurde), wird er automatisch bereinigt und neu gestartet.
+## Neu
+- **Komponenten visuell zusammenbauen:** Elemente lassen sich im Live-Designer in jede Komponente mit Inhalt ziehen (MudStack, MudPaper, MudCard, RadzenStack …).
+- **Mehrere RenderFragments:** Beim Ziehen über eine Komponente mit mehreren Inhaltsbereichen (z. B. `TitleContent`, `ChildContent`, `DialogActions`, `CardHeaderActions`) erscheint eine Leiste mit allen Bereichen. Darauf ablegen legt das Element genau dort ab. Fehlende Bereiche werden angelegt, und vorhandener Inhalt wandert automatisch in `<ChildContent>`. Wird ein Bereich leer, verschwindet er wieder.
+- **Leere Container sind sichtbar:** Leere Komponenten und HTML-Container zeigen im Design-Tab eine gestrichelte Ablagefläche statt 0 px Höhe.
+- **Layout ein/aus:** Neuer Schalter „Layout“ im Design-Tab. Die Seite wird entweder mit `MainLayout` (Navigation, Kopfzeile …) angezeigt oder nur für sich. Die Einstellung wird gespeichert.
+
+## Verbessert
+- Komponenten, die einen Button, Link oder Text rendern (z. B. `MudButton`, `MudText`), nehmen beim Ziehen keine Kinder mehr auf. Dadurch landet ein Button nicht mehr versehentlich in einem anderen Button.
