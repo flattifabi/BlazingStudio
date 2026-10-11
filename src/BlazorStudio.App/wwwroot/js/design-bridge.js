@@ -466,17 +466,19 @@
     mountStyle();
     const want = new Map();
     if (designOn() && cfg.prefix) {
+      // zu klein zum Treffen: in Row-Stacks ist ein leerer Container 0 px breit, aber gestreckt hoch
+      const tiny = (el) => { const r = el.getBoundingClientRect(); return r.width < 30 || r.height < 30; };
       const blank = (el) => ![...el.childNodes].some(c => c.nodeType === 1 && c.tagName !== 'TEMPLATE' || c.nodeType === 3 && c.textContent.trim());
       for (const el of document.querySelectorAll('[data-bs-id]')) {
         if (!own(el.dataset.bsId) || LEAF.includes(el.tagName.toLowerCase())) continue;
-        if (blank(el) && (el.hasAttribute('data-bs-empty') || el.getBoundingClientRect().height < 30)) want.set(el, el.tagName.toLowerCase());
+        if (blank(el) && (el.hasAttribute('data-bs-empty') || tiny(el))) want.set(el, el.tagName.toLowerCase());
       }
       for (const t of document.querySelectorAll('template[data-bs-s][data-bs-container="1"]')) {
         if (!own(t.dataset.bsS)) continue;
         const els = [];
         for (let n = t.nextSibling; n && !(n.nodeType === 1 && n.tagName === 'TEMPLATE' && n.dataset.bsE === t.dataset.bsS); n = n.nextSibling)
           if (n.nodeType === 1) els.push(n);
-        if (els.length === 1 && !LEAF.includes(els[0].tagName.toLowerCase()) && blank(els[0]) && (els[0].hasAttribute('data-bs-empty') || els[0].getBoundingClientRect().height < 30)) want.set(els[0], t.dataset.bsName || '');
+        if (els.length === 1 && !LEAF.includes(els[0].tagName.toLowerCase()) && blank(els[0]) && (els[0].hasAttribute('data-bs-empty') || tiny(els[0]))) want.set(els[0], t.dataset.bsName || '');
       }
     }
     for (const el of document.querySelectorAll('[data-bs-empty]')) if (!want.has(el)) el.removeAttribute('data-bs-empty');
