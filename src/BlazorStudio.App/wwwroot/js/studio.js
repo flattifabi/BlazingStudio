@@ -63,7 +63,7 @@
 
   const typingAllowed = new Set([
     'ctrl+s', 'ctrl+shift+s', 'f5', 'shift+f5', 'ctrl+f5', 'ctrl+shift+f5', 'ctrl+shift+b', 'ctrl+p', 'ctrl+shift+p',
-    'f10', 'f11', 'shift+f11', 'ctrl+w', 'ctrl+tab', 'ctrl+shift+tab', 'ctrl+n', 'ctrl+o', 'ctrl+comma', 'ctrl+j', 'ctrl+shift+n', 'alt+f2', 'ctrl+alt+x', 'alt+f12', 'alt+0', 'alt+9', 'ctrl+t', 'ctrl+shift+k',
+    'f10', 'f11', 'shift+f11', 'ctrl+w', 'ctrl+tab', 'ctrl+shift+tab', 'ctrl+n', 'ctrl+o', 'ctrl+comma', 'ctrl+j', 'ctrl+shift+n', 'alt+f2', 'ctrl+alt+x', 'alt+f12', 'alt+0', 'alt+9', 'ctrl+t', 'ctrl+shift+k', 'ctrl+shift+b', 'alt+insert', 'ctrl+shift+f', 'ctrl+shift+h',
   ]);
   const designOnly = new Set([
     'delete', 'backspace', 'ctrl+z', 'ctrl+y', 'ctrl+shift+z', 'ctrl+d', 'ctrl+c', 'ctrl+v', 'ctrl+x',
@@ -621,7 +621,7 @@
           { token: 'keyword', foreground: c.kw }, { token: 'string', foreground: c.str }, { token: 'number', foreground: c.num },
           { token: 'comment', foreground: c.com }, { token: 'type', foreground: c.cls }, { token: 'identifier', foreground: c.fg },
           { token: 'tag', foreground: c.tag }, { token: 'metatag', foreground: c.razor }, { token: 'attribute.name', foreground: c.attr },
-          { token: 'attribute.value', foreground: c.str }, { token: 'delimiter', foreground: c.delim }, { token: 'operator', foreground: c.fg },
+          { token: 'attribute.value', foreground: c.str }, { token: 'delimiter', foreground: c.fg }, { token: 'delimiter.bracket', foreground: c.fg }, { token: 'delimiter.parenthesis', foreground: c.fg }, { token: 'delimiter.curly', foreground: c.fg }, { token: 'delimiter.square', foreground: c.fg }, { token: 'delimiter.angle', foreground: c.fg }, { token: 'operator', foreground: c.fg },
           // semantische Tokens (Roslyn)
           { token: 'namespace', foreground: c.fg }, { token: 'class', foreground: c.cls }, { token: 'record', foreground: c.cls },
           { token: 'interface', foreground: c.cls }, { token: 'delegate', foreground: c.cls }, { token: 'typeParameter', foreground: c.cls },
@@ -644,9 +644,14 @@
           'editorHoverWidget.background': '#2B2B2B', 'editorHoverWidget.border': '#3C3C3C', 'focusBorder': '#' + a,
           'editor.wordHighlightBackground': '#344134', 'editor.findMatchHighlightBackground': '#32593D', 'scrollbarSlider.background': '#ffffff18',
           'editorOverviewRuler.border': '#00000000',
+          'editorBracketHighlight.foreground1': '#' + c.fg, 'editorBracketHighlight.foreground2': '#' + c.fg, 'editorBracketHighlight.foreground3': '#' + c.fg,
+          'editorBracketHighlight.foreground4': '#' + c.fg, 'editorBracketHighlight.foreground5': '#' + c.fg, 'editorBracketHighlight.foreground6': '#' + c.fg,
+          'editorBracketHighlight.unexpectedBracket.foreground': '#FF6B68',
         } : {
           'editor.background': '#FFFFFF', 'editor.foreground': '#000000', 'editorLineNumber.foreground': '#ADADAD',
           'editorLineNumber.activeForeground': '#555555', 'editor.lineHighlightBackground': '#F5F8FE', 'editor.lineHighlightBorder': '#00000000',
+          'editorBracketHighlight.foreground1': '#000000', 'editorBracketHighlight.foreground2': '#000000', 'editorBracketHighlight.foreground3': '#000000',
+          'editorBracketHighlight.foreground4': '#000000', 'editorBracketHighlight.foreground5': '#000000', 'editorBracketHighlight.foreground6': '#000000',
           'editor.selectionBackground': '#A6D2FF', 'editorCursor.foreground': '#000000', 'focusBorder': '#' + a,
           'editorSuggestWidget.selectedBackground': '#D5E1FF',
         },
@@ -890,8 +895,51 @@
           dotnet.invokeMethodAsync('OnGutterClick', e.target.position.lineNumber);
         }
       });
+      // Nach "." sofort Vorschläge (auch wenn Monaco den Trigger wegen offener Liste/Snippet verschluckt)
+      editor.onDidType((text) => {
+        if (text !== '.' || !['csharp', 'razor'].includes(editor.getModel()?.getLanguageId())) return;
+        const pos = editor.getPosition();
+        const before = editor.getModel().getLineContent(pos.lineNumber).slice(0, pos.column - 2);
+        if (/\d$/.test(before) && !/[A-Za-z_]\w*\d$/.test(before)) return; // Zahl wie 1.5
+        setTimeout(() => editor.trigger('dot', 'editor.action.triggerSuggest', {}), 0);
+      });
+
+      // Smartes Semikolon wie in Rider/VS: "Foo(x|)" + ; → "Foo(x);"
+      editor.onKeyDown((e) => {
+        if (e.browserEvent.key !== ';' || e.ctrlKey || e.altKey) return;
+        if (!['csharp', 'razor'].includes(editor.getModel()?.getLanguageId())) return;
+        const sels = editor.getSelections();
+        if (!sels || sels.length !== 1 || !sels[0].isEmpty()) return;
+        const pos = editor.getPosition();
+        const model = editor.getModel();
+        const line = model.getLineContent(pos.lineNumber);
+        const before = line.slice(0, pos.column - 1);
+        const after = line.slice(pos.column - 1);
+        // Nur wenn hinter dem Cursor ausschließlich schließende Klammern stehen
+        const m = /^([)\]]+)\s*$/.exec(after);
+        if (!m) return;
+        // nicht in for(;;), Strings oder Kommentaren
+        if (/\bfor\s*\(/.test(before) || /\/\/|\/\*/.test(before)) return;
+        if (/^\s*(@?(if|while|switch|foreach|using|lock|catch|fixed)|else\s+if)\s*\(/.test(before)) return;
+        const quotes = (before.replace(/\\./g, '').match(/"/g) || []).length;
+        if (quotes % 2 === 1) return;
+        // Klammern müssen sich auf der Zeile ausgleichen, sonst gehört das ; wirklich hinein
+        let depth = 0;
+        for (const c of before) { if (c === '(' || c === '[') depth++; else if (c === ')' || c === ']') depth--; }
+        if (depth !== m[1].length) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const endCol = pos.column + m[1].length;
+        editor.executeEdits('smart-semicolon', [{ range: new monaco.Range(pos.lineNumber, endCol, pos.lineNumber, endCol), text: ';' }]);
+        editor.setPosition({ lineNumber: pos.lineNumber, column: endCol + 1 });
+        editor.trigger('smart', 'hideSuggestWidget', {});
+      });
+
       // Strg+K im Editor öffnet die Befehlspalette
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyK, () => dotnet.invokeMethodAsync('OnEditorShortcut', 'ctrl+k'));
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyF, () => dotnet.invokeMethodAsync('OnEditorShortcut', 'ctrl+shift+f'));
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyH, () => dotnet.invokeMethodAsync('OnEditorShortcut', 'ctrl+shift+h'));
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyB, () => dotnet.invokeMethodAsync('OnEditorShortcut', 'ctrl+shift+b'));
       editor.addCommand(monaco.KeyCode.F9, () => dotnet.invokeMethodAsync('OnGutterClick', editor.getPosition().lineNumber));
     },
 

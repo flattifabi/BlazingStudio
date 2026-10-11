@@ -4,6 +4,8 @@ namespace BlazorStudio.App.Services;
 
 public enum RunState { Idle, Building, Running }
 
+public enum BuildAction { Build, Rebuild, Clean, CleanBuild, Restore }
+
 public enum OutputKind { Normal, Error, Warning, Success, Command, Muted }
 
 public sealed record OutputLine(string Text, OutputKind Kind, DateTime Time);
@@ -199,6 +201,62 @@ public sealed class RunService
     {
         _diagnostics.Clear();
         Changed?.Invoke();
+    }
+
+    /// <summary>
+    /// Build-Aktion für ein Projekt (.csproj) oder die ganze Solution (.sln/.slnx), wie im Kontextmenü von Rider/VS.
+    /// Fehler und Warnungen landen im Problems-Panel.
+    /// </summary>
+    public async Task<bool> RunBuildActionAsync(string target, BuildAction action)
+    {
+        if (State == RunState.Building) return false;
+        _ws.SaveAll();
+        var wasRunning = State;
+        State = RunState.Building;
+        _diagnostics.Clear();
+        Changed?.Invoke();
+        var name = Path.GetFileName(target);
+        var steps = action switch
+        {
+            BuildAction.Build => new[] { new[] { "build", target, "-nologo", "-v", "q", "-clp:NoSummary" } },
+            BuildAction.Rebuild => new[] { new[] { "build", target, "--no-incremental", "-nologo", "-v", "q", "-clp:NoSummary" } },
+            BuildAction.Clean => new[] { new[] { "clean", target, "-nologo", "-v", "q" } },
+            BuildAction.CleanBuild => new[] { new[] { "clean", target, "-nologo", "-v", "q" }, new[] { "build", target, "-nologo", "-v", "q", "-clp:NoSummary" } },
+            BuildAction.Restore => new[] { new[] { "restore", target, "-nologo", "-v", "q" } },
+            _ => Array.Empty<string[]>(),
+        };
+        var code = 0;
+        var started = DateTime.Now;
+        try
+        {
+            foreach (var args in steps)
+            {
+                Write("❯ dotnet " + string.Join(' ', args.Select(a => a.Contains(' ') ? "\"" + a + "\"" : a)), OutputKind.Command);
+                _buildRunner = new ProcessRunner();
+                _buildRunner.Output += OnProcessLine;
+                try
+                {
+                    code = await _buildRunner.RunAsync("dotnet", args, Path.GetDirectoryName(target)!);
+                }
+                finally
+                {
+                    _buildRunner.Dispose();
+                    _buildRunner = null;
+                }
+                if (code != 0) break;
+            }
+        }
+        catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            Write(_l["run.dotnetMissing"], OutputKind.Error);
+            code = -1;
+        }
+        var secs = (DateTime.Now - started).TotalSeconds.ToString("0.0", System.Globalization.CultureInfo.CurrentCulture);
+        var label = _l["build." + action];
+        Write(code == 0 ? $"✓ {label}: {name} ({secs} s)" : $"✗ {label}: {name} – {_l["run.buildFailed"]}", code == 0 ? OutputKind.Success : OutputKind.Error);
+        State = wasRunning == RunState.Running && _runner?.IsRunning == true ? RunState.Running : RunState.Idle;
+        Changed?.Invoke();
+        return code == 0;
     }
 
     /// <summary>Befehl im Projektordner ausführen (z. B. dotnet new) und Ausgabe zeigen.</summary>

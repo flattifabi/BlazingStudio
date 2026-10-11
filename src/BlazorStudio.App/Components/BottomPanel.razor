@@ -167,6 +167,10 @@
             case BottomTab.Git:
                 <div class="bpane" style="flex-direction:column"><GitPanel /></div>
                 break;
+
+            case BottomTab.Find:
+                <div class="bpane" style="flex-direction:column"><FindPanel /></div>
+                break;
         }
     }
 </section>
@@ -201,6 +205,7 @@
         BottomTab.Terminal => L["bottom.terminal"],
         BottomTab.NuGet => "NuGet",
         BottomTab.Git => "Git",
+        BottomTab.Find => L["find.title"],
         _ => "",
     };
     private ElementReference _term;

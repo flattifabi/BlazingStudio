@@ -34,6 +34,7 @@ public partial class MainWindow : Window
         sc.AddSingleton<TerminalService>();
         sc.AddSingleton<GitService>();
         sc.AddSingleton<UpdateService>();
+        sc.AddSingleton<ProjectActions>();
         _services = sc.BuildServiceProvider();
         Resources.Add("services", _services);
 

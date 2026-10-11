@@ -1,0 +1,62 @@
+@* Neues Projekt zur Projektmappe hinzufügen (dotnet new <vorlage> + dotnet sln add). *@
+@using BlazorStudio.Core.Templates
+@inject UiService Ui
+@inject Localizer L
+@inject ProjectActions Actions
+@inject IJSRuntime JS
+
+<div class="backdrop" @onclick="Ui.CloseOverlay">
+    <div class="dialog" style="width:min(560px,92vw)" @onclick:stopPropagation="true">
+        <h2>@L["sol.newProject"]</h2>
+        <p>@L["sol.newProjectText"]</p>
+        <div class="nf-grid">
+            @foreach (var t in ProjectTemplates.All)
+            {
+                var tpl = t;
+                <button class="opt-card @(tpl == _tpl ? "on" : "")" @onclick="() => _tpl = tpl">
+                    <b><Icon Name="@tpl.Icon" /> @L["sol.tpl." + tpl.ShortName]</b>
+                    <small class="mono">dotnet new @tpl.ShortName</small>
+                </button>
+            }
+        </div>
+        <div class="row2" style="margin-top:12px">
+            <label>@L["newComp.name"]</label>
+            <div class="f"><input id="np-name" value="@_name" spellcheck="false" placeholder="MyApp.Core" @oninput="e => _name = e.Value?.ToString() ?? string.Empty" @onkeydown="Key" /></div>
+        </div>
+        <div class="btns">
+            <button class="btn ghost" @onclick="Ui.CloseOverlay">@L["action.cancel"]</button>
+            <button class="btn ac" disabled="@(!Valid || _busy)" @onclick="Create">@if (_busy) { <Icon Name="refresh" Class="spin" /> }@L["action.create"]</button>
+        </div>
+    </div>
+</div>
+
+@code {
+    private ProjectTemplate _tpl = ProjectTemplates.All.First(t => t.ShortName == "classlib");
+    private string _name = "";
+    private bool _busy;
+
+    public static void Show() { }
+
+    private bool Valid => _name.Trim().Length > 0 && _name.Trim().IndexOfAny(Path.GetInvalidFileNameChars()) < 0 && !_name.Contains(' ');
+
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if (first) await JS.InvokeVoidAsync("studio.focusSelector", "#np-name", false);
+    }
+
+    private async Task Create()
+    {
+        if (!Valid) return;
+        _busy = true;
+        var name = _name.Trim();
+        Ui.CloseOverlay();
+        await Actions.NewProjectAsync(_tpl.ShortName, name);
+        _busy = false;
+    }
+
+    private async Task Key(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await Create();
+        if (e.Key == "Escape") Ui.CloseOverlay();
+    }
+}

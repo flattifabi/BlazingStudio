@@ -10,6 +10,7 @@
 @inject IJSRuntime JS
 @inject GitService Git
 @inject UpdateService Updates
+@inject ProjectActions Actions
 @inject TerminalService Term
 
 <CascadingValue Value="this" IsFixed="true">
@@ -46,6 +47,8 @@
         case "profiler": <ProfilerDialog /> break;
         case "publish": <PublishDialog /> break;
         case "update": <UpdateDialog /> break;
+        case "newFile": <NewFileDialog /> break;
+        case "newSlnProject": <NewProjectInSolutionDialog /> break;
     }
 </CascadingValue>
 
@@ -185,6 +188,18 @@
             new("view.code", "cmd.viewCode", "code", null, () => SetView(ViewMode.Code), () => IsRazor),
             new("view.toolbox", "cmd.toggleToolbox", "blocks", "Ctrl+Alt+X", () => { Settings.Current.ToolboxCollapsed = !Settings.Current.ToolboxCollapsed; Settings.Save(); return Task.CompletedTask; }, () => Ws.HasProject),
             new("view.bottom", "cmd.toggleBottom", "panelb", "Ctrl+J", () => { ToggleBottom(); return Task.CompletedTask; }, () => Ws.HasProject),
+            new("file.newFile", "newFile.title", "filenew", "Alt+Ins", () => { NewFileDialog.Folder = Ws.Active is { } a ? Path.GetDirectoryName(a.Path) : Ws.Project?.RootDirectory; Ui.OpenOverlay("newFile"); return Task.CompletedTask; }, () => Ws.HasProject),
+            new("build.solution", "build.solution", "hammer", "Ctrl+Shift+B", () => Actions.SolutionTarget is { } t ? Actions.BuildAsync(t, BuildAction.Build) : Task.CompletedTask, () => Ws.HasProject && Run.State != RunState.Building),
+            new("build.rebuildSolution", "build.rebuildSolution", "restart", null, () => Actions.SolutionTarget is { } t ? Actions.BuildAsync(t, BuildAction.Rebuild) : Task.CompletedTask, () => Ws.HasProject && Run.State != RunState.Building),
+            new("build.cleanSolution", "build.cleanSolution", "trash", null, () => Actions.SolutionTarget is { } t ? Actions.BuildAsync(t, BuildAction.Clean) : Task.CompletedTask, () => Ws.HasProject && Run.State != RunState.Building),
+            new("build.cleanBuildSolution", "build.cleanBuildSolution", "zap", null, () => Actions.SolutionTarget is { } t ? Actions.BuildAsync(t, BuildAction.CleanBuild) : Task.CompletedTask, () => Ws.HasProject && Run.State != RunState.Building),
+            new("build.restoreSolution", "build.restoreSolution", "package", null, () => Actions.SolutionTarget is { } t ? Actions.BuildAsync(t, BuildAction.Restore) : Task.CompletedTask, () => Ws.HasProject && Run.State != RunState.Building),
+            new("build.rebuildProject", "build.rebuildProject", "restart", null, () => Ws.Project?.ProjectFile is { } t ? Actions.BuildAsync(t, BuildAction.Rebuild) : Task.CompletedTask, () => Ws.Project?.ProjectFile is not null && Run.State != RunState.Building),
+            new("build.cleanProject", "build.cleanProject", "trash", null, () => Ws.Project?.ProjectFile is { } t ? Actions.BuildAsync(t, BuildAction.Clean) : Task.CompletedTask, () => Ws.Project?.ProjectFile is not null && Run.State != RunState.Building),
+            new("sln.newProject", "sol.newProject", "cube", null, () => { Ui.OpenOverlay("newSlnProject"); return Task.CompletedTask; }, () => Ws.HasProject),
+            new("sln.addExisting", "sol.addExisting", "folderopen", null, () => Actions.AddExistingProjectAsync(), () => Ws.HasProject),
+            new("find.inFiles", "find.title", "search", "Ctrl+Shift+F", () => { FindPanel.Request(); return Task.CompletedTask; }, () => Ws.HasProject),
+            new("find.replaceInFiles", "find.replaceTitle", "refresh", "Ctrl+Shift+H", () => { FindPanel.Request(replace: true); return Task.CompletedTask; }, () => Ws.HasProject),
             new("view.terminal", "bottom.terminal", "terminal", "Alt+F12", () => { BottomPanel.Show?.Invoke(BottomTab.Terminal); return Task.CompletedTask; }, () => Ws.HasProject),
             new("view.newTerminal", "term.new", "plus", null, () => { Term.Open(); BottomPanel.Show?.Invoke(BottomTab.Terminal); return Task.CompletedTask; }, () => Ws.HasProject),
             new("view.problems", "bottom.problems", "alertc", null, () => { BottomPanel.Show?.Invoke(BottomTab.Problems); return Task.CompletedTask; }, () => Ws.HasProject),
@@ -205,7 +220,7 @@
             new("view.theme", "cmd.toggleTheme", "moon", null, () => SetThemeModeAsync(EffectiveTheme == "dark" ? "light" : "dark")),
             new("view.lang", "cmd.toggleLanguage", "translate", null, () => { SetLanguage(L.Language == "de" ? "en" : "de"); return Task.CompletedTask; }),
 
-            new("run.build", "cmd.build", "hammer", "Ctrl+Shift+B", async () => await Run.BuildAsync(), () => Ws.Project?.ProjectFile is not null && Run.State != RunState.Building),
+            new("run.build", "cmd.build", "hammer", null, async () => await Run.BuildAsync(), () => Ws.Project?.ProjectFile is not null && Run.State != RunState.Building),
             new("run.publish", "cmd.publish", "upload", null, () => { Ui.OpenOverlay("publish"); return Task.CompletedTask; }, () => Ws.Project?.ProjectFile is not null),
             new("run.start", "cmd.run", "play", "Ctrl+F5", () => Run.StartAsync(), () => Ws.Project?.ProjectFile is not null && Run.State == RunState.Idle && !Debug.IsActive),
             new("run.startNoHot", "cmd.runNoHot", "playo", null, () => Run.StartAsync(false), () => Ws.Project?.ProjectFile is not null && Run.State == RunState.Idle && !Debug.IsActive),
@@ -270,7 +285,6 @@
             "ctrl+p" => "go.files",
             "ctrl+k" or "ctrl+shift+p" => "go.commands",
             "ctrl+comma" => "settings",
-            "ctrl+shift+b" => "run.build",
             "ctrl+shift+n" => "tools.nuget",
             "alt+f2" => "tools.profiler",
             "f5" => "run.debug",
@@ -282,6 +296,10 @@
             "shift+f11" => "debug.out",
             "ctrl+j" => "view.bottom",
             "alt+f12" => "view.terminal",
+            "ctrl+shift+b" => "build.solution",
+            "ctrl+shift+f" => "find.inFiles",
+            "ctrl+shift+h" => "find.replaceInFiles",
+            "alt+insert" => "file.newFile",
             "alt+0" => "git.commitView",
             "alt+9" => "git.logView",
             "ctrl+t" => "git.pull",

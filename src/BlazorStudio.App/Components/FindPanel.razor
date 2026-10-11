@@ -1,0 +1,239 @@
+@* In Dateien suchen / ersetzen (Strg+Shift+F / Strg+Shift+H). *@
+@using BlazorStudio.Core.Search
+@implements IDisposable
+@inject Workspace Ws
+@inject UiService Ui
+@inject Localizer L
+@inject IJSRuntime JS
+
+<div class="find">
+    <div class="find-bar">
+        <div class="f find-q">
+            <Icon Name="search" Class="sm dim" />
+            <input id="find-input" placeholder="@L["find.placeholder"]" spellcheck="false" value="@_query" @oninput="OnQuery" @onkeydown="Key" />
+            <button class="tog @(_case ? "on" : "")" title="@L["find.case"]" @onclick="() => Toggle(ref _case)">Aa</button>
+            <button class="tog @(_word ? "on" : "")" title="@L["find.word"]" @onclick="() => Toggle(ref _word)"><u>W</u></button>
+            <button class="tog @(_regex ? "on" : "")" title="@L["find.regex"]" @onclick="() => Toggle(ref _regex)">.*</button>
+        </div>
+        <div class="f find-mask" title="@L["find.maskHint"]">
+            <Icon Name="files" Class="sm dim" />
+            <input placeholder="@L["find.mask"]" spellcheck="false" value="@_mask" @oninput="e => { _mask = e.Value?.ToString() ?? string.Empty; Schedule(); }" />
+        </div>
+        <div style="width:150px">
+            <Dropdown Class="sm" Value="@_scope" Options='new[] { new Dropdown.Option("solution", L["find.scopeSolution"], null, "sln"), new Dropdown.Option("project", L["find.scopeProject"], null, "cube") }' ValueChanged="v => { _scope = v ?? _scope; Schedule(); }" />
+        </div>
+        <button class="ibtn sm" title="@L["find.replaceToggle"]" @onclick="() => _showReplace = !_showReplace"><Icon Name="@(_showReplace ? "chevu" : "chevd")" /></button>
+    </div>
+    @if (_showReplace)
+    {
+        <div class="find-bar">
+            <div class="f find-q">
+                <Icon Name="refresh" Class="sm dim" />
+                <input placeholder="@L["find.replacePlaceholder"]" spellcheck="false" value="@_replace" @oninput="e => _replace = e.Value?.ToString() ?? string.Empty" />
+            </div>
+            <button class="btn sm" disabled="@(_result is not { Hits.Count: > 0 } || _busy)" @onclick="ReplaceAllAsync"><Icon Name="refresh" />@L["find.replaceAll"]</button>
+            @if (_regex) { <span class="dim" style="font-size:11.5px">@L["find.regexHint"]</span> }
+        </div>
+    }
+    <div class="find-sum dim">
+        @if (_busy) { <Icon Name="refresh" Class="spin sm" /> }
+        @if (_result?.Error is { } err) { <span class="err">@err</span> }
+        else if (_result is { } r && _query.Length > 0)
+        {
+            <span>@L.F("find.summary", r.Hits.Count, r.Hits.Select(h => h.File).Distinct().Count(), r.FilesSearched)@(r.Truncated ? " · " + L["find.truncated"] : "")</span>
+        }
+        else { <span>@L["find.hint"]</span> }
+    </div>
+    <div class="find-res scroll">
+        @if (_result is { } res)
+        {
+            @foreach (var g in res.Hits.GroupBy(h => h.File))
+            {
+                var file = g.Key;
+                var collapsed = _collapsed.Contains(file);
+                <div class="find-file" @onclick="() => { if (!_collapsed.Remove(file)) _collapsed.Add(file); }">
+                    <span class="ch @(collapsed ? "" : "open")"><Icon Name="chev" /></span>
+                    <FileIcon Path="@file" />
+                    <b>@Path.GetFileName(file)</b>
+                    <span class="dim ellipsis">@Rel(Path.GetDirectoryName(file)!)</span>
+                    <em>@g.Count()</em>
+                </div>
+                @if (!collapsed)
+                {
+                    @foreach (var h in g.Take(200))
+                    {
+                        var hit = h;
+                        <div class="find-hit @(_sel == hit ? "on" : "")" @onclick="() => OpenHit(hit)">
+                            <span class="ln">@hit.Line</span>
+                            @Highlight(hit)
+                        </div>
+                    }
+                }
+            }
+        }
+    </div>
+</div>
+
+@code {
+    public static event Action<string?>? FocusRequested;
+
+    /// <summary>Panel öffnen und Suchfeld fokussieren (optional mit Suchtext).</summary>
+    public static void Request(string? query = null, bool replace = false)
+    {
+        _requestReplace = replace;
+        BottomPanel.Show?.Invoke(BottomTab.Find);
+        FocusRequested?.Invoke(query);
+    }
+
+    private static bool _requestReplace;
+    private static string _query = "", _mask = "", _replace = "", _scope = "solution";
+    private static bool _case, _word, _regex, _showReplace;
+    private static SearchResult? _result;
+    private readonly HashSet<string> _collapsed = new(StringComparer.OrdinalIgnoreCase);
+    private SearchHit? _sel;
+    private bool _busy;
+    private CancellationTokenSource? _cts;
+    private bool _focus = true;
+
+    protected override void OnInitialized()
+    {
+        FocusRequested += OnFocusRequested;
+        if (_requestReplace) _showReplace = true;
+    }
+
+    private void OnFocusRequested(string? q) => InvokeAsync(() =>
+    {
+        if (!string.IsNullOrEmpty(q)) { _query = q; Schedule(); }
+        if (_requestReplace) _showReplace = true;
+        _focus = true;
+        StateHasChanged();
+    });
+
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if (_focus)
+        {
+            _focus = false;
+            await JS.InvokeVoidAsync("studio.focusSelector", "#find-input", true);
+        }
+    }
+
+    private void OnQuery(ChangeEventArgs e)
+    {
+        _query = e.Value?.ToString() ?? string.Empty;
+        Schedule();
+    }
+
+    private void Toggle(ref bool flag)
+    {
+        flag = !flag;
+        Schedule();
+    }
+
+    private void Key(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") Schedule(0);
+        if (e.Key == "Escape") { _query = ""; _result = null; }
+    }
+
+    private IEnumerable<string> Roots =>
+        _scope == "project" && Ws.Project?.RootDirectory is { } p ? new[] { p }
+        : Ws.Solution is { } s ? s.AllProjects.Where(x => x.Project is not null && !Ws.IsUnloaded(x.Path)).Select(x => Path.GetDirectoryName(x.Path)!).Prepend(s.Directory).Distinct(StringComparer.OrdinalIgnoreCase)
+        : Ws.RootDirectory is { } r ? new[] { r } : Array.Empty<string>();
+
+    private void Schedule(int delay = 250)
+    {
+        _cts?.Cancel();
+        var cts = _cts = new CancellationTokenSource();
+        if (_query.Length == 0)
+        {
+            _result = null;
+            return;
+        }
+        var opts = new SearchOptions(_query, _case, _word, _regex, _mask.Trim().Length > 0 ? _mask : null);
+        var roots = Roots.ToList();
+        // ungespeicherte Editor-Inhalte mit durchsuchen
+        var overrides = Ws.Documents.Where(d => d.IsDirty).ToDictionary(d => d.Path, d => d.Text, StringComparer.OrdinalIgnoreCase);
+        _busy = true;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(delay, cts.Token);
+                // Solution-Ordner enthält die Projektordner – doppelte Treffer vermeiden
+                var dedup = roots.Where(r => !roots.Any(o => o != r && r.StartsWith(o + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))).ToList();
+                var res = FileSearch.Search(dedup, opts, overrides, ct: cts.Token);
+                if (cts.IsCancellationRequested) return;
+                await InvokeAsync(() =>
+                {
+                    _result = res;
+                    _busy = false;
+                    StateHasChanged();
+                });
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        });
+    }
+
+    private void OpenHit(SearchHit h)
+    {
+        _sel = h;
+        Ws.Open(h.File, h.Line);
+    }
+
+    private string Rel(string dir) => Ws.RootDirectory is { } r ? Path.GetRelativePath(r, dir).Replace('\\', '/') : dir;
+
+    private RenderFragment Highlight(SearchHit h) => __builder =>
+    {
+        var text = h.LineText;
+        var start = Math.Clamp(h.Column - 1, 0, text.Length);
+        var len = Math.Clamp(h.Length, 0, text.Length - start);
+        // lange Zeilen um den Treffer herum kürzen
+        var from = Math.Max(0, start - 60);
+        var lead = text[from..start].TrimStart();
+        <span class="code">@(from > 0 ? "…" : "")@lead<mark>@text.Substring(start, len)</mark>@text[(start + len)..]</span>
+    };
+
+    private async Task ReplaceAllAsync()
+    {
+        if (_result is not { Hits.Count: > 0 } r) return;
+        var files = r.Hits.Select(h => h.File).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var ok = await Ui.ShowDialogAsync(new DialogRequest
+        {
+            Title = L["find.replaceAll"],
+            Message = L.F("find.replaceConfirm", r.Hits.Count, files.Count, _query, _replace),
+            OkText = L["find.replaceAll"],
+            CancelText = L["action.cancel"],
+        });
+        if (ok != DialogResult.Ok) return;
+        var opts = new SearchOptions(_query, _case, _word, _regex, null);
+        var total = 0;
+        foreach (var f in files)
+        {
+            var doc = Ws.Documents.FirstOrDefault(d => d.Path.Equals(f, StringComparison.OrdinalIgnoreCase));
+            if (doc is not null)
+            {
+                // offene Datei: im Editor ersetzen (rückgängig machbar, danach speichern)
+                var (text, n) = FileSearch.ReplaceText(doc.Text, opts, _replace);
+                if (n > 0) doc.SetText(text, ChangeOrigin.External);
+                total += n;
+            }
+            else if (FileSearch.ReadText(f) is { } content)
+            {
+                var (text, n) = FileSearch.ReplaceText(content, opts, _replace);
+                if (n > 0) await File.WriteAllTextAsync(f, text, new System.Text.UTF8Encoding(File.ReadAllBytes(f).Take(3).SequenceEqual(new byte[] { 0xEF, 0xBB, 0xBF })));
+                total += n;
+            }
+        }
+        Ui.ShowToast(L.F("find.replaced", total, files.Count), ToastKind.Success);
+        Schedule(0);
+    }
+
+    public void Dispose()
+    {
+        FocusRequested -= OnFocusRequested;
+        _cts?.Cancel();
+    }
+}

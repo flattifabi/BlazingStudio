@@ -919,3 +919,53 @@ body.bs-dragging, body.bs-dragging * { cursor: grabbing !important; user-select:
 .upd-progress { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
 .upd-progress .bar { height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
 .upd-progress .bar i { display: block; height: 100%; background: linear-gradient(90deg, #4c8dff, #14b8e6); transition: width .15s; }
+
+/* Entladene Projekte */
+.tree .row.unloaded { opacity: .55; }
+.tree .row.unloaded .ellipsis { font-style: italic; }
+
+/* Neue Datei */
+.dialog.nf { width: min(900px, 94vw); height: min(620px, 88vh); display: flex; flex-direction: column; }
+.nf-head { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; }
+.nf-head h2 { margin: 0; flex: none; }
+.nf-search { flex: 1; }
+.nf-body { flex: 1; min-height: 0; display: grid; grid-template-columns: 300px 1fr; gap: 14px; }
+.nf-list { border: 1px solid var(--line); border-radius: 10px; padding: 4px; min-height: 0; }
+.nf-grp { font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: .5px; color: var(--dim); padding: 8px 8px 4px; }
+.nf-item { display: flex; align-items: center; gap: 9px; width: 100%; padding: 6px 8px; border-radius: 7px; color: var(--text-2); text-align: left; font-size: 13px; }
+.nf-item svg { width: 15px; height: 15px; color: var(--muted); flex: none; }
+.nf-item em { font-style: normal; font-family: var(--mono); font-size: 11px; color: var(--dim); }
+.nf-item:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+.nf-item.on { background: var(--ac-soft); color: var(--text); }
+.nf-item.on svg { color: var(--ac); }
+.nf-side { display: flex; flex-direction: column; min-height: 0; }
+.nf-files { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; margin-bottom: 8px; }
+.nf-files div { display: flex; align-items: center; gap: 8px; }
+.nf-code { flex: 1; min-height: 80px; margin: 0; padding: 10px 12px; border-radius: 9px; background: var(--field); border: 1px solid var(--line); font: 12px/1.55 var(--mono); color: var(--text-2); white-space: pre; }
+.nf-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.nf-grid .opt-card b { display: flex; align-items: center; gap: 7px; }
+.nf-grid .opt-card svg { width: 14px; height: 14px; color: var(--ac); }
+
+/* In Dateien suchen */
+.find { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.find-bar { display: flex; align-items: center; gap: 6px; padding: 6px 8px 0; }
+.find-q { flex: 1; }
+.find-mask { width: 260px; }
+.find .tog { padding: 1px 6px; border-radius: 5px; font: 600 11.5px var(--mono); color: var(--muted); }
+.find .tog:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
+.find .tog.on { background: var(--ac-soft); color: var(--ac); }
+.find-sum { display: flex; align-items: center; gap: 6px; padding: 6px 12px 4px; font-size: 12px; }
+.find-sum .err { color: var(--err); }
+.find-res { flex: 1; min-height: 0; padding-bottom: 6px; }
+.find-file { display: flex; align-items: center; gap: 6px; padding: 3px 10px; font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+.find-file:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
+.find-file .ch svg { width: 10px; height: 10px; transition: transform .12s; }
+.find-file .ch.open svg { transform: rotate(90deg); }
+.find-file .dim { font-size: 11.5px; min-width: 0; }
+.find-file em { margin-left: auto; font-style: normal; font-size: 11px; color: var(--dim); }
+.find-hit { display: flex; gap: 10px; padding: 1px 10px 1px 38px; font: 12px/1.6 var(--mono); cursor: pointer; white-space: pre; overflow: hidden; }
+.find-hit:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
+.find-hit.on { background: var(--ac-soft); }
+.find-hit .ln { color: var(--dim); min-width: 32px; text-align: right; flex: none; }
+.find-hit .code { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; }
+.find-hit mark { background: color-mix(in srgb, #f5b95b 35%, transparent); color: var(--text); border-radius: 2px; padding: 0 1px; }

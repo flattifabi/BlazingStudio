@@ -52,12 +52,18 @@ public sealed class AppSettings
     /// <summary>"rider" oder "studio".</summary>
     public string EditorScheme { get; set; } = "rider";
 
+    /// <summary>Version der Editor-Farben; ältere Einstellungen werden einmalig auf das Rider-Schema gesetzt.</summary>
+    public int EditorSchemeVersion { get; set; }
+
     public bool ShowMinimap { get; set; }
 
     public Dictionary<string, string> LastOpenFiles { get; set; } = new();
 
     /// <summary>Projektmappe -> Pfad des Startprojekts.</summary>
     public Dictionary<string, string> StartupProjects { get; set; } = new();
+
+    /// <summary>Entladene Projekte je Projektmappe (wie „Unload Project“ in VS/Rider).</summary>
+    public Dictionary<string, List<string>> UnloadedProjects { get; set; } = new();
 }
 
 /// <summary>Speichert Einstellungen in %AppData%\BlazorStudio\settings.json.</summary>
@@ -72,6 +78,13 @@ public sealed class SettingsService
         Directory.CreateDirectory(dir);
         _path = Path.Combine(dir, "settings.json");
         Current = Load();
+        // Ab 1.1: Code-Farben wie in Rider als Standard (frühere Versionen konnten "studio" gespeichert haben)
+        if (Current.EditorSchemeVersion < 2)
+        {
+            Current.EditorScheme = "rider";
+            Current.EditorSchemeVersion = 2;
+            Save();
+        }
     }
 
     public AppSettings Current { get; }

@@ -27,6 +27,7 @@
         <Icon Name="bug" />
         @if (Debug.IsStopped) { <i class="dot warn"></i> }
     </button>
+    <button class="@(IsOn(BottomTab.Find) ? "on" : "")" title="@L["find.title"] (Ctrl+Shift+F)" @onclick="() => { if (IsOn(BottomTab.Find)) Shell.ToggleBottom(); else FindPanel.Request(); }"><Icon Name="search" /></button>
     <button class="@(IsOn(BottomTab.Terminal) ? "on" : "")" title="@L["bottom.terminal"] (Alt+F12)" @onclick="() => Toggle(BottomTab.Terminal)"><Icon Name="terminal" /></button>
     <button class="@(IsOn(BottomTab.Git) && GitPanel.View != "changes" ? "on" : "")" title="Git" @onclick='() => ToggleGit("log")'><Icon Name="git" /></button>
 </nav>

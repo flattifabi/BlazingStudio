@@ -2,13 +2,14 @@
 @inherits StudioComponent
 @inject NuGetService NuGet
 @inject IHostBridge Host
+@inject ProjectActions Actions
 
 <div class="f side-search"><Icon Name="search" Class="sm dim" /><input placeholder="@L["sol.filter"]" @bind="_filter" @bind:event="oninput" /></div>
 <div class="scroll" style="flex:1">
     @if (Ws.Solution is { } sln)
     {
         <div class="tree">
-            <div class="row" style="padding-left:4px" title="@sln.Path" @onclick='() => Toggle("sln")'>
+            <div class="row" style="padding-left:4px" title="@sln.Path" @onclick='() => Toggle("sln")' @oncontextmenu="e => SolutionMenu(e)" @oncontextmenu:preventDefault="true">
                 <span class="ch @(IsOpen("sln", true) ? "open" : "")"><Icon Name="chev" /></span>
                 <Icon Name="sln" Class="k sln" />
                 <span class="ellipsis"><b>@sln.Name</b></span>
@@ -22,30 +23,12 @@
     }
 </div>
 
-@if (_menu is { } m)
-{
-    <div class="click-catcher" @onclick="() => _menu = null" @oncontextmenu="() => _menu = null" @oncontextmenu:preventDefault="true"></div>
-    <div class="pop menu-pop ctxmenu" style="left:@Px(m.X)px;top:min(@Px(m.Y)px, calc(100vh - 300px))">
-        <div class="hdr">@m.Item.Name</div>
-        <button class="mi" disabled="@IsStartup(m.Item)" @onclick="() => Do(() => Ws.SetStartupProjectAsync(m.Item))"><Icon Name="play" />@L["sol.setStartup"]</button>
-        <button class="mi" @onclick="() => Do(() => Build(m.Item))"><Icon Name="hammer" />@L["sol.buildProject"]</button>
-        <button class="mi" @onclick="() => Do(() => OpenNuGet(m.Item))"><Icon Name="package" />@L["cmd.nuget"]</button>
-        <button class="mi" @onclick='() => Do(async () => { if (!IsStartup(m.Item)) await Ws.SetStartupProjectAsync(m.Item); Ui.OpenOverlay("publish"); })'><Icon Name="upload" />@L["cmd.publish"]</button>
-        <div class="sep"></div>
-        <button class="mi" @onclick="() => Do(() => { Ws.Open(m.Item.Path); return Task.CompletedTask; })"><Icon Name="code" />@L["sol.editProject"]</button>
-        <button class="mi" @onclick="() => Do(() => { Host.RevealInExplorer(m.Item.Path); return Task.CompletedTask; })"><Icon Name="folder" />@L["cmd.reveal"]</button>
-    </div>
-}
-
 @code {
     private string _filter = "";
     private readonly HashSet<string> _open = new();
     private readonly HashSet<string> _closed = new();
     private readonly Dictionary<string, (int Version, FileNode Tree)> _trees = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string?> _dllVersions = new(StringComparer.OrdinalIgnoreCase);
-    private Menu? _menu;
-
-    private sealed record Menu(SolutionItem Item, double X, double Y);
 
     private bool IsOpen(string key, bool byDefault = false) => _filter.Length > 0 || (byDefault ? !_closed.Contains(key) : _open.Contains(key));
 
@@ -62,11 +45,6 @@
 
     private static string Px(double v) => Math.Round(v).ToString(CultureInfo.InvariantCulture);
 
-    private async Task Do(Func<Task> action)
-    {
-        _menu = null;
-        await action();
-    }
 
     // ------------------------------------------------------------------
 
@@ -108,12 +86,17 @@
         var key = "p:" + it.Path;
         var open = IsOpen(key, IsStartup(it));
         var startup = IsStartup(it);
-        <div class="row @(startup ? "on" : "")" style="padding-left:@(4 + depth * 14)px" title="@it.Path"
-             @onclick="() => ToggleProject(it)" @oncontextmenu="e => _menu = new Menu(it, e.ClientX, e.ClientY)" @oncontextmenu:preventDefault="true">
+        var unloaded = Actions.IsUnloaded(it);
+        <div class="row @(startup ? "on" : "") @(unloaded ? "unloaded" : "")" style="padding-left:@(4 + depth * 14)px" title="@it.Path"
+             @onclick="() => { if (!unloaded) ToggleProject(it); }" @oncontextmenu="e => ProjectMenu(e, it)" @oncontextmenu:preventDefault="true">
             <span class="ch @(open ? "open" : "")"><Icon Name="chev" /></span>
             <Icon Name="@KindIcon(p)" Class="@("k " + (p?.Kind ?? "missing"))" />
             <span class="ellipsis">@if (startup) { <b>@it.Name</b> } else { @it.Name }</span>
-            @if (p is null)
+            @if (unloaded)
+            {
+                <em class="dim">@L["sol.unloadedTag"]</em>
+            }
+            else if (p is null)
             {
                 <em class="warnc">@L["sol.notFound"]</em>
             }
@@ -129,10 +112,10 @@
                 <button title="@L["cmd.nuget"]" @onclick="() => OpenNuGet(it)" @onclick:stopPropagation="true"><Icon Name="package" /></button>
             </span>
         </div>
-        if (open && p is not null)
+        if (open && p is not null && !unloaded)
         {
             @Dependencies(it, p, depth + 1)
-            @Files(p.Directory, depth + 1)
+            @Files(it, p.Directory, depth + 1)
         }
     };
 
@@ -216,7 +199,8 @@
                 foreach (var r in p.ProjectReferences)
                 {
                     var target = Ws.Solution?.AllProjects.FirstOrDefault(x => x.Path.Equals(r, StringComparison.OrdinalIgnoreCase));
-                    <div class="row nested" style="padding-left:@(pad + 42)px" title="@r" @onclick="() => { if (target is not null) Reveal(target); }">
+                    var reference = r;
+                    <div class="row nested" style="padding-left:@(pad + 42)px" title="@r" @onclick="() => { if (target is not null) Reveal(target); }" @oncontextmenu="e => ReferenceMenu(e, it, reference)" @oncontextmenu:preventDefault="true">
                         <Icon Name="@KindIcon(target?.Project)" Class="k" /><span class="ellipsis">@Path.GetFileNameWithoutExtension(r)</span>
                         @if (target is null) { <em class="warnc">@L["sol.notInSolution"]</em> }
                         else { <em>@string.Join(";", target.Project?.TargetFrameworks ?? Array.Empty<string>())</em> }
@@ -267,7 +251,7 @@
         var installed = NuGet.Find(pkg.Id);
         var resolved = p.ResolvedPackages.FirstOrDefault(r => r.Id.Equals(pkg.Id, StringComparison.OrdinalIgnoreCase)) ?? pkg;
         var hasKids = resolved.Dependencies.Count > 0 || resolved.Assemblies.Count > 0;
-        <div class="row" style="padding-left:@(4 + depth * 14)px" title="@pkg.Id @pkg.Version" @onclick="() => Toggle(key)">
+        <div class="row" style="padding-left:@(4 + depth * 14)px" title="@pkg.Id @pkg.Version" @onclick="() => Toggle(key)" @oncontextmenu="e => PackageMenu(e, p, pkg, depth)" @oncontextmenu:preventDefault="true">
             <span class="ch @(IsOpen(key) ? "open" : "")">@if (hasKids) { <Icon Name="chev" /> }</span>
             <Icon Name="package" Class="k pkg" />
             <span class="ellipsis">@pkg.Id</span>
@@ -291,7 +275,7 @@
         }
     };
 
-    private RenderFragment Files(string dir, int depth) => __builder =>
+    private RenderFragment Files(SolutionItem project, string dir, int depth) => __builder =>
     {
         if (!_trees.TryGetValue(dir, out var t) || t.Version != Ws.ScanVersion)
         {
@@ -312,7 +296,7 @@
                 if (filter.Length > 0 && !HasMatch(node, filter)) continue;
                 var key = "dir:" + node.FullPath;
                 var open = IsOpen(key);
-                <div class="row" style="padding-left:@(4 + depth * 14)px" @onclick="() => Toggle(key)">
+                <div class="row" style="padding-left:@(4 + depth * 14)px" @onclick="() => Toggle(key)" @oncontextmenu="e => FolderMenu(e, node.FullPath, key)" @oncontextmenu:preventDefault="true">
                     <span class="ch @(open ? "open" : "")"><Icon Name="chev" /></span>
                     <Icon Name="@(node.Name.Equals("Properties", StringComparison.OrdinalIgnoreCase) ? "gear" : open ? "folderopen" : "folder")" Class="k fld" />
                     <span class="ellipsis">@node.Name</span>
@@ -329,7 +313,7 @@
                 var isActive = Ws.Active?.Path.Equals(node.FullPath, StringComparison.OrdinalIgnoreCase) == true;
                 var nestedKey = "n:" + node.FullPath;
                 var hasNested = node.Nested.Count > 0;
-                <div class="row @(isActive ? "on" : "")" style="padding-left:@(4 + depth * 14)px" title="@node.FullPath" @onclick="() => Ws.Open(node.FullPath)">
+                <div class="row @(isActive ? "on" : "")" style="padding-left:@(4 + depth * 14)px" title="@node.FullPath" @onclick="() => Ws.Open(node.FullPath)" @oncontextmenu="e => FileMenu(e, node.FullPath)" @oncontextmenu:preventDefault="true">
                     <span class="ch @(IsOpen(nestedKey) ? "open" : "")" @onclick="() => Toggle(nestedKey)" @onclick:stopPropagation="true">@if (hasNested) { <Icon Name="chev" /> }</span>
                     <FileIcon Path="@node.Name" /><span class="ellipsis">@node.Name</span>
                     @if (Ws.Documents.FirstOrDefault(d => d.Path.Equals(node.FullPath, StringComparison.OrdinalIgnoreCase)) is { IsDirty: true }) { <span class="badge">●</span> }
@@ -339,7 +323,7 @@
                     foreach (var n in node.Nested)
                     {
                         var nested = n;
-                        <div class="row nested" style="padding-left:@(18 + depth * 14)px" @onclick="() => Ws.Open(nested.FullPath)">
+                        <div class="row nested" style="padding-left:@(18 + depth * 14)px" @onclick="() => Ws.Open(nested.FullPath)" @oncontextmenu="e => FileMenu(e, nested.FullPath)" @oncontextmenu:preventDefault="true">
                             <span class="ch"></span><FileIcon Path="@nested.Name" /><span class="ellipsis">@nested.Name</span>
                         </div>
                     }
@@ -366,13 +350,145 @@
         _open.Add("p:" + target.Path);
     }
 
-    private async Task Build(SolutionItem it)
+    // ------------------------------------------------------------------
+    // Kontextmenüs (wie Rider / Visual Studio)
+    // ------------------------------------------------------------------
+
+    private MenuEntry[] BuildEntries(string target, bool solution) => new[]
     {
-        BottomPanel.Show?.Invoke(BottomTab.Output);
-        Ws.SaveAll();
-        var code = await Run.ExecAsync(Path.GetDirectoryName(it.Path)!, "build", it.Path, "-nologo", "-v", "q");
-        Ui.ShowToast(code == 0 ? L.F("sol.buildOk", it.Name) : L.F("sol.buildFailed", it.Name), code == 0 ? ToastKind.Success : ToastKind.Error);
-        Ws.Rescan();
+        MenuEntry.Do(L[solution ? "build.solution" : "build.Build"], "hammer", () => Actions.BuildAsync(target, BuildAction.Build), solution ? "Ctrl+Shift+B" : null, disabled: Run.State == RunState.Building),
+        MenuEntry.Do(L["build.Rebuild"], "restart", () => Actions.BuildAsync(target, BuildAction.Rebuild), disabled: Run.State == RunState.Building),
+        MenuEntry.Do(L["build.Clean"], "trash", () => Actions.BuildAsync(target, BuildAction.Clean), disabled: Run.State == RunState.Building),
+        MenuEntry.Do(L["build.CleanBuild"], "zap", () => Actions.BuildAsync(target, BuildAction.CleanBuild), disabled: Run.State == RunState.Building),
+        MenuEntry.Do(L["build.Restore"], "package", () => Actions.BuildAsync(target, BuildAction.Restore), disabled: Run.State == RunState.Building),
+    };
+
+    private void SolutionMenu(MouseEventArgs e)
+    {
+        var sln = Ws.Solution!;
+        var target = Actions.SolutionTarget;
+        var items = new List<MenuEntry>();
+        if (target is not null) items.AddRange(BuildEntries(target, solution: true));
+        items.Add(MenuEntry.Separator);
+        items.Add(MenuEntry.Sub(L["sol.add"], "plus",
+            MenuEntry.Do(L["sol.newProject"] + " …", "cube", () => { NewProjectInSolutionDialog.Show(); Ui.OpenOverlay("newSlnProject"); }),
+            MenuEntry.Do(L["sol.addExisting"] + " …", "folderopen", () => Actions.AddExistingProjectAsync())));
+        items.Add(MenuEntry.Do(L["cmd.nuget"], "package", () => OpenNuGet(Ws.StartupItem ?? sln.AllProjects.First())));
+        items.Add(MenuEntry.Separator);
+        if (Actions.HasSolutionFile) items.Add(MenuEntry.Do(L["sol.editSolution"], "code", () => { Ws.Open(sln.Path); }));
+        items.Add(MenuEntry.Do(L["sol.reloadSolution"], "refresh", () => Actions.ReloadSolutionAsync()));
+        items.Add(MenuEntry.Separator);
+        items.Add(MenuEntry.Do(L["term.openHere"], "terminal", () => Actions.OpenTerminal(sln.Directory)));
+        items.Add(MenuEntry.Do(L["cmd.reveal"], "folder", () => Host.RevealInExplorer(Actions.HasSolutionFile ? sln.Path : sln.Directory)));
+        items.Add(MenuEntry.Do(L["cmd.copyPath"], "clipboard", () => Actions.CopyPath(Actions.HasSolutionFile ? sln.Path : sln.Directory, relative: false)));
+        Ui.ShowMenu(e.ClientX, e.ClientY, items);
+    }
+
+    private void ProjectMenu(MouseEventArgs e, SolutionItem it)
+    {
+        var dir = Path.GetDirectoryName(it.Path)!;
+        var items = new List<MenuEntry>();
+        if (Actions.IsUnloaded(it) || it.Project is null)
+        {
+            if (Actions.IsUnloaded(it)) items.Add(MenuEntry.Do(L["sol.reloadProject"], "refresh", () => Actions.Reload(it)));
+            if (File.Exists(it.Path)) items.Add(MenuEntry.Do(L["sol.editProject"], "code", () => { Ws.Open(it.Path); }));
+            items.Add(MenuEntry.Separator);
+            items.Add(MenuEntry.Do(L["sol.removeProject"], "trash", () => Actions.RemoveFromSolutionAsync(it), danger: true, disabled: !Actions.HasSolutionFile));
+            Ui.ShowMenu(e.ClientX, e.ClientY, items);
+            return;
+        }
+        items.AddRange(BuildEntries(it.Path, solution: false));
+        items.Add(MenuEntry.Separator);
+        items.Add(MenuEntry.Do(L["sol.setStartup"], "play", () => Ws.SetStartupProjectAsync(it), disabled: IsStartup(it)));
+        items.Add(MenuEntry.Separator);
+        var others = Ws.Solution!.AllProjects.Where(x => x != it && x.Project is not null && !it.Project.ProjectReferences.Contains(x.Path, StringComparer.OrdinalIgnoreCase)).ToList();
+        var refEntries = others.Select(o => MenuEntry.Do(o.Name, "cube", () => Actions.AddProjectReferenceAsync(it, o))).ToArray();
+        items.Add(MenuEntry.Sub(L["sol.add"], "plus",
+            MenuEntry.Do(L["newFile.title"] + " …", "filenew", () => NewFile(dir), "Alt+Ins"),
+            MenuEntry.Do(L["newComp.title"] + " …", "puzzle", () => { NewComponentDialog.PresetFolder = dir; Ui.OpenOverlay("newComponent"); }),
+            MenuEntry.Do(L["sol.newFolder"] + " …", "foldernew", () => Actions.NewFolderAsync(dir)),
+            MenuEntry.Separator,
+            refEntries.Length > 0 ? MenuEntry.Sub(L["sol.projectReference"], "link", refEntries) : new MenuEntry(L["sol.projectReference"], "link", Disabled: true),
+            MenuEntry.Do(L["cmd.nuget"] + " …", "package", () => OpenNuGet(it))));
+        items.Add(MenuEntry.Do(L["cmd.publish"] + " …", "upload", async () => { if (!IsStartup(it)) await Ws.SetStartupProjectAsync(it); Ui.OpenOverlay("publish"); }));
+        items.Add(MenuEntry.Separator);
+        items.Add(MenuEntry.Do(L["sol.editProject"], "code", () => { Ws.Open(it.Path); }));
+        items.Add(MenuEntry.Do(L["sol.unloadProject"], "x", () => Actions.UnloadAsync(it)));
+        items.Add(MenuEntry.Do(L["sol.reloadProject"], "refresh", () => Actions.Reload(it)));
+        items.Add(MenuEntry.Do(L["sol.removeProject"], "trash", () => Actions.RemoveFromSolutionAsync(it), danger: true, disabled: !Actions.HasSolutionFile));
+        items.Add(MenuEntry.Separator);
+        items.Add(MenuEntry.Do(L["term.openHere"], "terminal", () => Actions.OpenTerminal(dir)));
+        items.Add(MenuEntry.Do(L["cmd.reveal"], "folder", () => Host.RevealInExplorer(it.Path)));
+        items.Add(MenuEntry.Do(L["cmd.copyPath"], "clipboard", () => Actions.CopyPath(it.Path, relative: false)));
+        Ui.ShowMenu(e.ClientX, e.ClientY, items);
+    }
+
+    private void FolderMenu(MouseEventArgs e, string dir, string key)
+    {
+        Ui.ShowMenu(e.ClientX, e.ClientY, new[]
+        {
+            MenuEntry.Sub(L["sol.add"], "plus",
+                MenuEntry.Do(L["newFile.title"] + " …", "filenew", () => NewFile(dir)),
+                MenuEntry.Do(L["newComp.title"] + " …", "puzzle", () => { NewComponentDialog.PresetFolder = dir; Ui.OpenOverlay("newComponent"); }),
+                MenuEntry.Do(L["sol.newFolder"] + " …", "foldernew", () => Actions.NewFolderAsync(dir))),
+            MenuEntry.Separator,
+            MenuEntry.Do(L["sol.rename"] + " …", "type", () => Actions.RenameAsync(dir), "F2"),
+            MenuEntry.Do(L["sol.delete"], "trash", () => Actions.DeleteAsync(dir), "Del", danger: true),
+            MenuEntry.Separator,
+            MenuEntry.Do(L["term.openHere"], "terminal", () => Actions.OpenTerminal(dir)),
+            MenuEntry.Do(L["cmd.reveal"], "folder", () => Host.RevealInExplorer(dir)),
+            MenuEntry.Do(L["cmd.copyPath"], "clipboard", () => Actions.CopyPath(dir, relative: false)),
+            MenuEntry.Do(L["sol.copyRelativePath"], "clipboard", () => Actions.CopyPath(dir, relative: true)),
+        });
+    }
+
+    private void FileMenu(MouseEventArgs e, string file)
+    {
+        var dir = Path.GetDirectoryName(file)!;
+        Ui.ShowMenu(e.ClientX, e.ClientY, new[]
+        {
+            MenuEntry.Do(L["sol.open"], "ext", () => { Ws.Open(file); }),
+            MenuEntry.Sub(L["sol.add"], "plus",
+                MenuEntry.Do(L["newFile.title"] + " …", "filenew", () => NewFile(dir)),
+                MenuEntry.Do(L["sol.newFolder"] + " …", "foldernew", () => Actions.NewFolderAsync(dir))),
+            MenuEntry.Separator,
+            MenuEntry.Do(L["sol.rename"] + " …", "type", () => Actions.RenameAsync(file), "F2"),
+            MenuEntry.Do(L["sol.delete"], "trash", () => Actions.DeleteAsync(file), "Del", danger: true),
+            MenuEntry.Separator,
+            MenuEntry.Do(L["term.openHere"], "terminal", () => Actions.OpenTerminal(dir)),
+            MenuEntry.Do(L["cmd.reveal"], "folder", () => Host.RevealInExplorer(file)),
+            MenuEntry.Do(L["cmd.copyPath"], "clipboard", () => Actions.CopyPath(file, relative: false)),
+            MenuEntry.Do(L["sol.copyRelativePath"], "clipboard", () => Actions.CopyPath(file, relative: true)),
+        });
+    }
+
+    private void PackageMenu(MouseEventArgs e, ProjectModel p, PackageDependency pkg, int depth)
+    {
+        var item = Ws.Solution?.AllProjects.FirstOrDefault(x => x.Project == p);
+        if (item is null) return;
+        var direct = p.PackageReferences.Any(r => r.Id.Equals(pkg.Id, StringComparison.OrdinalIgnoreCase));
+        Ui.ShowMenu(e.ClientX, e.ClientY, new[]
+        {
+            MenuEntry.Do(L["cmd.nuget"] + " …", "package", () => OpenNuGet(item)),
+            MenuEntry.Do("nuget.org", "globe", () => Host.OpenExternal("https://www.nuget.org/packages/" + pkg.Id)),
+            MenuEntry.Separator,
+            MenuEntry.Do(L["sol.removePackage"], "trash", () => Actions.RemovePackageAsync(item, pkg.Id), danger: true, disabled: !direct),
+        });
+    }
+
+    private void ReferenceMenu(MouseEventArgs e, SolutionItem project, string reference)
+    {
+        Ui.ShowMenu(e.ClientX, e.ClientY, new[]
+        {
+            MenuEntry.Do(L["sol.open"], "ext", () => { if (File.Exists(reference)) Ws.Open(reference); }),
+            MenuEntry.Do(L["sol.removeReference"], "trash", () => Actions.RemoveProjectReferenceAsync(project, reference), danger: true),
+        });
+    }
+
+    private void NewFile(string folder)
+    {
+        NewFileDialog.Folder = folder;
+        Ui.OpenOverlay("newFile");
     }
 
     private Task OpenNuGet(SolutionItem it)

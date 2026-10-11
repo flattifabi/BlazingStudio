@@ -1,0 +1,168 @@
+@* Neue Datei aus Vorlage (Klasse, Interface, Record, Komponente, Seite, CSS, JSON …) – wie „Add → New Item“. *@
+@using BlazorStudio.Core.Templates
+@inject Workspace Ws
+@inject UiService Ui
+@inject Localizer L
+@inject ProjectActions Actions
+@inject IJSRuntime JS
+
+<div class="backdrop" @onclick="Ui.CloseOverlay">
+    <div class="dialog nf" @onclick:stopPropagation="true" @onkeydown="Key">
+        <div class="nf-head">
+            <h2>@L["newFile.title"]</h2>
+            <div class="f nf-search"><Icon Name="search" Class="sm dim" /><input id="nf-search" placeholder="@L["newFile.search"]" value="@_search" @oninput="e => _search = e.Value?.ToString() ?? string.Empty" /></div>
+        </div>
+        <div class="nf-body">
+            <div class="nf-list scroll">
+                @foreach (var g in Groups)
+                {
+                    var items = Filtered.Where(t => t.Group == g).ToList();
+                    if (items.Count == 0) continue;
+                    <div class="nf-grp">@L["newFile.g." + g]</div>
+                    @foreach (var t in items)
+                    {
+                        var tpl = t;
+                        <button class="nf-item @(tpl == _tpl ? "on" : "")" @onclick="() => Pick(tpl)" @ondblclick="Create">
+                            <Icon Name="@tpl.Icon" />
+                            <span class="grow">@L["newFile.t." + tpl.Id]</span>
+                            <em>@(tpl.Extension.Length > 0 ? tpl.Extension : tpl.DefaultName)</em>
+                        </button>
+                    }
+                }
+            </div>
+            <div class="nf-side">
+                <div class="row2">
+                    <label>@L["newComp.name"]</label>
+                    <div class="f"><input id="nf-name" value="@_name" spellcheck="false" @oninput="e => _name = e.Value?.ToString() ?? string.Empty" /></div>
+                </div>
+                <div class="row2">
+                    <label>@L["newComp.folder"]</label>
+                    <Dropdown Value="@Folder" Mono="true" Options='Folders.Select(f => new Dropdown.Option(f, Rel(f), null, "folder"))' ValueChanged="v => Folder = v ?? Folder" />
+                </div>
+                @if (_tpl.Id is "component" or "page" or "layout")
+                {
+                    @if (_tpl.Id == "page")
+                    {
+                        <div class="row2">
+                            <label>@L["newComp.route"]</label>
+                            <div class="f"><span class="u">/</span><input value="@_route" placeholder="@Kebab(FileTemplates.ToIdentifier(_name))" spellcheck="false" @oninput="e => _route = e.Value?.ToString() ?? string.Empty" /></div>
+                        </div>
+                    }
+                    <label class="check"><input type="checkbox" checked="@_codeBehind" @onchange="e => _codeBehind = e.Value is true" />@L["newComp.codeBehind"]</label>
+                    <label class="check"><input type="checkbox" checked="@_css" @onchange="e => _css = e.Value is true" />@L["newComp.scopedCss"]</label>
+                }
+                <div class="lab" style="margin-top:10px">@L["newFile.preview"]</div>
+                <div class="nf-files">
+                    @foreach (var f in Preview)
+                    {
+                        <div><FileIcon Path="@f.RelativePath" /><span class="mono">@f.RelativePath</span></div>
+                    }
+                </div>
+                <pre class="nf-code scroll">@(Preview.FirstOrDefault()?.Content)</pre>
+            </div>
+        </div>
+        <div class="btns">
+            <span class="dim" style="font-size:12px">@(_tpl.IsCode ? L.F("newFile.namespace", Namespace) : "")</span>
+            <span class="grow"></span>
+            <button class="btn ghost" @onclick="Ui.CloseOverlay">@L["action.cancel"]</button>
+            <button class="btn ac" disabled="@(_name.Trim().Length == 0 && _tpl.Extension.Length > 0)" @onclick="Create"><Icon Name="plus" />@L["action.create"]</button>
+        </div>
+    </div>
+</div>
+
+@code {
+    /// <summary>Zielordner (vom Explorer gesetzt).</summary>
+    public static string? Folder;
+
+    private static readonly string[] Groups = { "csharp", "blazor", "web", "data", "other" };
+    private FileTemplate _tpl = FileTemplates.All[0];
+    private string _name = "";
+    private string _search = "";
+    private string _route = "";
+    private bool _codeBehind = true;
+    private bool _css;
+    private List<string> Folders { get; set; } = new();
+
+    protected override void OnInitialized()
+    {
+        Folder ??= Ws.Project?.RootDirectory ?? Ws.RootDirectory ?? Environment.CurrentDirectory;
+        var proj = Actions.ProjectOf(Folder);
+        var root = proj is not null ? Path.GetDirectoryName(proj.Path)! : Folder;
+        Folders = new List<string> { root };
+        try
+        {
+            Folders.AddRange(Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories)
+                .Where(d => !d.Split(Path.DirectorySeparatorChar).Any(p => p is "bin" or "obj" or "node_modules" or ".git" or ".vs"))
+                .Take(400));
+        }
+        catch (IOException) { }
+        if (!Folders.Contains(Folder, StringComparer.OrdinalIgnoreCase)) Folders.Add(Folder);
+        // Vorauswahl je nach Ordner
+        var name = Path.GetFileName(Folder.TrimEnd(Path.DirectorySeparatorChar));
+        _tpl = name switch
+        {
+            "Pages" => FileTemplates.Find("page")!,
+            "Components" or "Shared" or "Layout" => FileTemplates.Find("component")!,
+            "css" or "wwwroot" => FileTemplates.Find("css")!,
+            "js" => FileTemplates.Find("js")!,
+            "Services" => FileTemplates.Find("service")!,
+            "Controllers" => FileTemplates.Find("controller")!,
+            "Data" => FileTemplates.Find("class")!,
+            _ => FileTemplates.All[0],
+        };
+        _name = _tpl.DefaultName;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if (first) await JS.InvokeVoidAsync("studio.focusSelector", "#nf-name", true);
+    }
+
+    private IEnumerable<FileTemplate> Filtered => _search.Trim().Length == 0
+        ? FileTemplates.All
+        : FileTemplates.All.Where(t => L["newFile.t." + t.Id].Contains(_search.Trim(), StringComparison.OrdinalIgnoreCase) || t.Extension.Contains(_search.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    private string Namespace => Actions.NamespaceFor(Folder!);
+
+    private TemplateOptions Options => new()
+    {
+        Namespace = Namespace,
+        CodeBehind = _tpl.Id is "component" or "page" or "layout" && _codeBehind,
+        ScopedCss = _tpl.Id is "component" or "page" or "layout" && _css,
+        Route = _route.Trim().Length > 0 ? _route.Trim() : null,
+    };
+
+    private IReadOnlyList<GeneratedFile> Preview => FileTemplates.Generate(_tpl, _name.Trim().Length > 0 ? _name : _tpl.DefaultName, Options);
+
+    private void Pick(FileTemplate t)
+    {
+        // Namen übernehmen, solange er noch der Vorschlag der alten Vorlage war
+        if (_name.Trim().Length == 0 || _name == _tpl.DefaultName) _name = t.DefaultName;
+        _tpl = t;
+    }
+
+    private string Rel(string f)
+    {
+        var root = Folders[0];
+        var r = Path.GetRelativePath(root, f);
+        return r == "." ? "/ (" + Path.GetFileName(root) + ")" : r.Replace('\\', '/');
+    }
+
+    private static string Kebab(string name) => Workspace.ToKebab(name);
+
+    private void Create()
+    {
+        var name = _name.Trim().Length > 0 ? _name.Trim() : _tpl.DefaultName;
+        if (Actions.CreateFromTemplate(Folder!, _tpl, name, Options) is { } path)
+        {
+            Ui.CloseOverlay();
+            Ui.ShowToast(L.F("toast.created", Path.GetFileName(path)), ToastKind.Success);
+        }
+    }
+
+    private void Key(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape") Ui.CloseOverlay();
+        else if (e.Key == "Enter") Create();
+    }
+}

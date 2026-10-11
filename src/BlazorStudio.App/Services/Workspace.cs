@@ -180,6 +180,41 @@ public sealed class Workspace : IDisposable
     public SolutionItem? StartupItem =>
         Solution?.AllProjects.FirstOrDefault(p => p.Path.Equals(Project?.ProjectFile, StringComparison.OrdinalIgnoreCase));
 
+    public void NotifyChanged() => Changed?.Invoke();
+
+    /// <summary>Ist das Projekt in dieser Projektmappe entladen?</summary>
+    public bool IsUnloaded(string projectPath) =>
+        Solution is { } s && _settings.Current.UnloadedProjects.TryGetValue(s.Path, out var l) && l.Contains(projectPath, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Projektmappe neu einlesen (z. B. nach dotnet sln add/remove); offene Dateien bleiben offen.</summary>
+    public async Task ReloadSolutionAsync(string? path = null)
+    {
+        var target = path ?? Solution?.Path;
+        if (target is null) return;
+        SolutionModel solution;
+        try
+        {
+            solution = await Task.Run(() => LoadSolution(target));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+        {
+            _ui.ShowToast(e.Message, ToastKind.Error);
+            return;
+        }
+        var startup = Project?.ProjectFile;
+        var moved = !string.Equals(Solution?.Path, solution.Path, StringComparison.OrdinalIgnoreCase);
+        Solution = solution;
+        if (moved)
+        {
+            _settings.AddRecent(solution.Path);
+            StartWatcher(solution.Directory);
+        }
+        var keep = solution.AllProjects.FirstOrDefault(p => p.Path.Equals(startup, StringComparison.OrdinalIgnoreCase));
+        if (keep is not null || Project is null && solution.AllProjects.All(p => p.Project is null)) Rescan();
+        else if (solution.AllProjects.FirstOrDefault(p => p.Project is not null) is { } first) await LoadIndexAsync(Path.GetDirectoryName(first.Path)!, openStartFile: false);
+        Changed?.Invoke();
+    }
+
     public async Task SetStartupProjectAsync(SolutionItem item)
     {
         if (Solution is null || item.IsFolder) return;
@@ -467,7 +502,7 @@ public sealed class Workspace : IDisposable
         var root = RootDirectory;
         if (root is null) return Task.CompletedTask;
         var refs = StartupItem?.Project?.ResolvedPackages.SelectMany(p => p.Assemblies).ToList() ?? new List<string>();
-        var dirs = Solution?.AllProjects.Where(p => p.Project is not null).Select(p => Path.GetDirectoryName(p.Path)!).ToList() ?? new List<string> { root };
+        var dirs = Solution?.AllProjects.Where(p => p.Project is not null && !IsUnloaded(p.Path)).Select(p => Path.GetDirectoryName(p.Path)!).ToList() ?? new List<string> { root };
         return _highlighterLoad = Task.Run(() =>
         {
             var files = dirs.SelectMany(ProjectIndex.EnumerateFiles).Where(f => f.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).Take(3000).ToList();
