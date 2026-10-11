@@ -548,11 +548,16 @@ public sealed class Workspace : IDisposable
         {
             Libraries = await Task.Run(() => LibraryScanner.Scan(packages));
         }
-        catch (Exception e) when (e is IOException or BadImageFormatException or InvalidOperationException)
+        catch (Exception e) when (e is not OutOfMemoryException)
         {
+            // Scan darf nie hängen bleiben – lieber ohne Bibliotheken weiter
             Libraries = Array.Empty<ComponentLibrary>();
+            _ui.ShowToast(_l.F("lib.scanFailed", e.Message), ToastKind.Warning, 6000);
         }
-        LibrariesLoading = false;
+        finally
+        {
+            LibrariesLoading = false;
+        }
         _previewCache.Clear();
         Changed?.Invoke();
     }
@@ -664,6 +669,9 @@ public sealed class Workspace : IDisposable
         {
             var session = Open(cb, activate: false)!;
             var updated = CodeInspector.AddMethodToFile(session.Text, Path.GetFileNameWithoutExtension(doc.Path), methodSource);
+            // In .cs-Dateien gibt es kein _Imports.razor: Namespaces der Event-Argumente selbst importieren
+            foreach (var ns in CodeInspector.RequiredUsings(methodSource))
+                updated = CodeInspector.EnsureUsing(updated, ns);
             session.SetText(updated, ChangeOrigin.Code);
             return Path.GetFileName(cb);
         }

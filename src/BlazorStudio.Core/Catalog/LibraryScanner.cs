@@ -57,7 +57,7 @@ public static class LibraryScanner
                         if (def is not null) found.Add(def);
                     }
                 }
-                catch (Exception e) when (e is BadImageFormatException or FileLoadException or FileNotFoundException or IOException) { }
+                catch (Exception e) when (e is not OutOfMemoryException) { }
                 Cache[dll] = (stamp, found);
                 defs.AddRange(found);
             }
@@ -134,7 +134,7 @@ public static class LibraryScanner
                 Keywords = t.FullName ?? name,
             };
         }
-        catch (Exception e) when (e is FileNotFoundException or TypeLoadException or NotSupportedException)
+        catch (Exception e) when (e is not OutOfMemoryException)
         {
             return null;
         }
@@ -148,11 +148,15 @@ public static class LibraryScanner
         if (t.FullName == "System.Int32") return "int";
         if (t.FullName == "System.Double") return "double";
         if (t.FullName == "System.Object") return "object";
+        if (t.IsArray && t.GetElementType() is { } el) return FriendlyName(el) + "[]";
         if (t.IsGenericType)
         {
-            var baseName = t.Name[..t.Name.IndexOf('`')];
+            // Verschachtelte Typen generischer Klassen haben oft keinen `n im Namen (Outer<T>.Inner)
+            var tick = t.Name.IndexOf('`');
+            var baseName = tick >= 0 ? t.Name[..tick] : t.Name;
             var args = string.Join(", ", t.GetGenericArguments().Select(FriendlyName));
-            return baseName == "Nullable" ? args + "?" : $"{baseName}<{args}>";
+            if (baseName == "Nullable") return args + "?";
+            return tick >= 0 ? $"{baseName}<{args}>" : baseName;
         }
         return t.Name;
     }

@@ -1,2 +1,3 @@
 ## Behoben
-- Code-Farben und Vervollständigung in der installierten Version: Typen und Methoden aus ASP.NET Core (z. B. `WebApplication`, `builder.Services`, `app.UseHsts()`) wurden nicht erkannt und blieben grau. Blazor Studio verwendet jetzt die Referenz-Assemblies des installierten .NET SDK passend zum Target-Framework des Projekts – genau wie der Compiler.
+- Komponenten-Bibliotheken wie Radzen.Blazor blieben bei „Scanning packages for components …“ hängen. Der Scan ist jetzt robust für jede Bibliothek (getestet u. a. mit MudBlazor, Radzen, Havit, ApexCharts, Leaflet) und bleibt nie mehr stehen.
+- Neue Event-Handler in `.razor.cs`-Dateien bekommen automatisch das nötige `using Microsoft.AspNetCore.Components.Web;` (z. B. für `MouseEventArgs`).

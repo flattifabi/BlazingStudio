@@ -203,6 +203,28 @@ public static class CodeInspector
 
     public static string CreateFieldStub(string type, string name) => $"private {type} {name};";
 
+    private static readonly string[] WebEventArgs =
+    {
+        "MouseEventArgs", "KeyboardEventArgs", "FocusEventArgs", "WheelEventArgs", "PointerEventArgs", "TouchEventArgs",
+        "DragEventArgs", "ClipboardEventArgs", "ProgressEventArgs", "ErrorEventArgs",
+    };
+
+    /// <summary>Namespaces, die ein generierter Handler in einer .cs-Datei braucht (z. B. MouseEventArgs → …Components.Web).</summary>
+    public static IEnumerable<string> RequiredUsings(string source)
+    {
+        if (WebEventArgs.Any(t => System.Text.RegularExpressions.Regex.IsMatch(source, @"\b" + t + @"\b"))) yield return "Microsoft.AspNetCore.Components.Web";
+        if (System.Text.RegularExpressions.Regex.IsMatch(source, @"\b(ChangeEventArgs|EventCallback|ElementReference)\b")) yield return "Microsoft.AspNetCore.Components";
+    }
+
+    /// <summary>Fügt "using ns;" ein, falls es in der Datei noch fehlt.</summary>
+    public static string EnsureUsing(string text, string ns)
+    {
+        if (System.Text.RegularExpressions.Regex.IsMatch(text, @"^\s*(global\s+)?using\s+" + System.Text.RegularExpressions.Regex.Escape(ns) + @"\s*;", System.Text.RegularExpressions.RegexOptions.Multiline)) return text;
+        var (offset, insert) = Highlighting.SemanticHighlighter.UsingInsertion(text, ns);
+        if (text.Contains("\r\n")) insert = insert.Replace("\r\n", "\n").Replace("\n", "\r\n");
+        return text.Insert(offset, insert);
+    }
+
     private static string Indent(string text, string pad) =>
         string.Join('\n', text.Replace("\r\n", "\n").Split('\n').Select(l => l.Length == 0 ? l : pad + l));
 }
