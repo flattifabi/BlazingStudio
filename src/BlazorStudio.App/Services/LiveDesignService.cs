@@ -367,6 +367,8 @@ public sealed partial class LiveDesignService : IDisposable
         }, TaskScheduler.Default);
     }
 
+    private object? _instrumentedWith;
+
     private void OnWorkspaceChanged()
     {
         if (_shadow is null) return;
@@ -380,6 +382,21 @@ public sealed partial class LiveDesignService : IDisposable
         {
             Stop();
             return;
+        }
+        // Bibliotheks-Scan fertig: Markierungen neu schreiben, damit Container/Slots (MudStack, TitleContent …) bekannt sind
+        if (!ReferenceEquals(_instrumentedWith, _ws.Libraries) && !_ws.LibrariesLoading)
+        {
+            _instrumentedWith = _ws.Libraries;
+            var s = _shadow;
+            foreach (var d in _ws.Documents.Where(d => d.Kind == DocumentKind.Razor && s.Contains(d.Path)).ToList())
+            {
+                var text = ShadowText(s, d);
+                _overridden.Add(d.Path);
+                _ = Task.Run(() =>
+                {
+                    if (s.WriteText(d.Path, text)) _ = _host.InvokeOnUiAsync(ScheduleRefresh);
+                });
+            }
         }
         // Geschlossene Dokumente wieder auf den Stand der Festplatte bringen
         var open = _ws.Documents.Select(d => d.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);

@@ -1,4 +1,4 @@
-﻿using System.Text.RegularExpressions;
+using System.Text.RegularExpressions;
 using BlazorStudio.Core.Catalog;
 using BlazorStudio.Core.Razor;
 using BlazorStudio.Core.Styles;
@@ -155,17 +155,27 @@ public static partial class CompletionEngine
                 isVoid ? tag + " $0/>" : tag + ">$0</" + tag + ">", "HTML", IsSnippet: true, SortText: "2" + tag));
         }
 
-        foreach (var c in ctx.Components.Where(c => c.Source is ComponentSource.Blazor or ComponentSource.Project))
+        foreach (var c in ctx.Components.Where(c => c.Source is ComponentSource.Blazor or ComponentSource.Project or ComponentSource.Library)
+                     .GroupBy(c => c.TagName).Select(g => g.OrderBy(SourceRank).First()))
         {
             var required = c.Parameters.Where(p => p.IsRequired).ToList();
             var attrs = string.Concat(required.Select((p, i) => $" {p.Name}=\"${{{i + 1}}}\""));
             var insert = c.AcceptsChildren
                 ? $"{c.TagName}{attrs}>$0</{c.TagName}>"
                 : $"{c.TagName}{attrs} $0/>";
-            var doc = c.Parameters.Count == 0 ? null : string.Join("\n", c.Parameters.Select(p => $"{p.Name}: {p.Type}"));
+            // wichtigste Parameter (ohne Events), lange Listen kürzen
+            var shown = c.Parameters.Where(p => p.Editor != ValueEditor.Callback).Take(12).ToList();
+            var rest = c.Parameters.Count - shown.Count;
+            var doc = c.Parameters.Count == 0 ? null : string.Join("\n", shown.Select(p => $"{p.Name}: {p.Type}")) + (rest > 0 ? $"\n… +{rest}" : "");
             items.Add(new CompletionItem(c.TagName, CompletionKind.Component, insert,
-                c.Source == ComponentSource.Project ? "Komponente · " + (c.Keywords.Length > 0 ? c.Keywords : "Projekt") : "Blazor", doc, IsSnippet: true,
-                SortText: (c.Source == ComponentSource.Project ? "0" : "1") + c.TagName));
+                c.Source switch
+                {
+                    ComponentSource.Project => "Komponente · " + (c.Keywords.Length > 0 ? c.Keywords : "Projekt"),
+                    ComponentSource.Library => c.Library ?? "Bibliothek",
+                    _ => "Blazor",
+                },
+                c.Summary is { Length: > 0 } sum ? sum + (doc is null ? "" : "\n\n" + doc) : doc, IsSnippet: true,
+                SortText: SourceRank(c) + c.TagName));
         }
         return items;
     }
@@ -189,10 +199,13 @@ public static partial class CompletionEngine
     private static List<CompletionItem> AttributeNames(CompletionContext ctx, string tag, string word, HashSet<string> existing)
     {
         var items = new List<CompletionItem>();
-        var comp = ctx.Components.FirstOrDefault(c => c.TagName == tag && c.Source is ComponentSource.Blazor or ComponentSource.Project);
+        var comp = FindComponent(ctx, tag);
 
         if (comp is not null)
         {
+            // Blazor-Direktiven gibt es auch an Komponenten
+            foreach (var d in new[] { "@ref", "@key", "@attributes", "@rendermode" })
+                if (!existing.Contains(d)) items.Add(new CompletionItem(d, CompletionKind.Directive, $"{d}=\"$1\"", "Blazor", IsSnippet: true, SortText: "3" + d));
             foreach (var p in comp.Parameters)
             {
                 if (existing.Contains(p.Name)) continue;
@@ -265,7 +278,7 @@ public static partial class CompletionEngine
             return new CompletionResult(values, valuePart.Length);
         }
 
-        var comp = ctx.Components.FirstOrDefault(c => c.TagName == tag && c.Source is ComponentSource.Blazor or ComponentSource.Project);
+        var comp = FindComponent(ctx, tag);
         var param = comp?.FindParameter(attr.StartsWith("@bind-", StringComparison.Ordinal) ? attr[6..] : attr);
         var isEvent = attr.StartsWith("@on", StringComparison.Ordinal) || param?.Editor == ValueEditor.Callback;
 
@@ -277,9 +290,9 @@ public static partial class CompletionEngine
         }
 
         if (param is { Editor: ValueEditor.Enum, Options: not null })
-            return new CompletionResult(param.Options.Select(o => new CompletionItem((param.EnumPrefix ?? "") + o, CompletionKind.CssValue, (param.EnumPrefix ?? "") + o)).ToList(), current.Length);
+            return new CompletionResult(param.Options.Select((o, i) => new CompletionItem((param.EnumPrefix ?? "") + o, CompletionKind.CssValue, (param.EnumPrefix ?? "") + o, param.Type, param.Description, SortText: " " + i.ToString("D3"))).ToList(), current.Length);
         if (param is { Editor: ValueEditor.Bool })
-            return new CompletionResult(new[] { new CompletionItem("true", CompletionKind.Keyword, "true"), new CompletionItem("false", CompletionKind.Keyword, "false") }, current.Length);
+            return new CompletionResult(new[] { new CompletionItem("true", CompletionKind.CssValue, "true", SortText: " 0"), new CompletionItem("false", CompletionKind.CssValue, "false", SortText: " 1") }, current.Length);
 
         var attrDef = HtmlSchema.AttributesFor(tag).FirstOrDefault(a => a.Name.Equals(attr, StringComparison.OrdinalIgnoreCase));
         if (attrDef?.Options is { Count: > 0 })
@@ -295,6 +308,18 @@ public static partial class CompletionEngine
 
         return new CompletionResult(Array.Empty<CompletionItem>(), 0);
     }
+
+    /// <summary>Komponente zu einem Tag: Projekt vor Bibliothek vor Blazor.</summary>
+    private static ComponentDefinition? FindComponent(CompletionContext ctx, string tag) =>
+        ctx.Components.Where(c => c.TagName == tag && c.Source is ComponentSource.Blazor or ComponentSource.Project or ComponentSource.Library)
+            .OrderBy(SourceRank).FirstOrDefault();
+
+    private static string SourceRank(ComponentDefinition c) => c.Source switch
+    {
+        ComponentSource.Project => "0",
+        ComponentSource.Library => "1",
+        _ => "2",
+    };
 
     private static CompletionResult Members(CompletionContext ctx, string prefix, bool atPrefix)
     {
