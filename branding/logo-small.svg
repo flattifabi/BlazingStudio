@@ -1,19 +1,23 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- Kleine Variante (16–32 px): ohne Fensterpunkte, größere Zeichen -->
   <defs>
-    <linearGradient id="bg" x1="0.1" y1="0" x2="0.9" y2="1">
-      <stop offset="0" stop-color="#4C8DFF"/>
-      <stop offset="0.5" stop-color="#2F5BFF"/>
-      <stop offset="1" stop-color="#14B8E6"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0" stop-color="#1F2638"/>
+      <stop offset="1" stop-color="#0C0F16"/>
     </linearGradient>
-    <mask id="b">
-      <rect x="58" y="40" width="48" height="176" rx="12" fill="#fff"/>
-      <rect x="58" y="40" width="124" height="88" rx="44" fill="#fff"/>
-      <rect x="58" y="116" width="140" height="100" rx="50" fill="#fff"/>
-      <rect x="84" y="40" width="50" height="176" fill="#fff"/>
-      <rect x="106" y="76" width="36" height="16" rx="8" fill="#000"/>
-      <rect x="106" y="148" width="48" height="32" rx="16" fill="#000"/>
+    <mask id="b" maskUnits="userSpaceOnUse" x="0" y="0" width="256" height="256">
+      <g transform="translate(104 62) scale(0.66) translate(-58 -40)">
+        <rect x="58" y="40" width="48" height="176" rx="12" fill="#fff"/>
+        <rect x="58" y="40" width="124" height="88" rx="44" fill="#fff"/>
+        <rect x="58" y="116" width="140" height="100" rx="50" fill="#fff"/>
+        <rect x="84" y="40" width="50" height="176" fill="#fff"/>
+        <rect x="106" y="76" width="36" height="16" rx="8" fill="#000"/>
+        <rect x="106" y="148" width="48" height="32" rx="16" fill="#000"/>
+      </g>
     </mask>
   </defs>
   <rect x="0" y="0" width="256" height="256" rx="56" fill="url(#bg)"/>
-  <rect x="40" y="30" width="180" height="200" fill="#FFFFFF" mask="url(#b)"/>
+  <polyline points="34,88 82,128 34,168" fill="none" stroke="#2FC6FF" stroke-width="26" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="98" y="56" width="104" height="128" fill="#FFFFFF" mask="url(#b)"/>
+  <rect x="196" y="174" width="34" height="22" rx="5" fill="#4C8DFF"/>
 </svg>

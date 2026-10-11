@@ -26,6 +26,55 @@
 
   studio.focusSelector = (sel, select) => studio.focus(document.querySelector(sel), select);
 
+  // Inspector durchsuchen: Felder (Parameter, CSS-Eigenschaften, Events) nach Name/Eigenschaft/Überschrift filtern
+  studio.inspectorFilter = (query) => {
+    const root = document.querySelector('.ins-body');
+    if (!root) return;
+    root.querySelectorAll('[data-flt]').forEach(e => e.removeAttribute('data-flt'));
+    root.removeAttribute('data-empty');
+    const q = (query || '').trim().toLowerCase();
+    if (!q) return;
+    const UNITS = '.param, .f, .kv, .ev, .states, .lab + *, .seg, .dd';
+    const hide = (el) => el.setAttribute('data-flt', 'h');
+    const hidden = (el) => !!el.closest('[data-flt="h"]');
+    // Parameter: nur Kopfzeile (Name + Typ), nicht die Beschreibung
+    const words = (el) => [el.matches('.param') ? (el.querySelector('.ph')?.textContent ?? '') : el.textContent, el.title, ...[...el.querySelectorAll('[title]')].map(x => x.title),
+      ...[...el.querySelectorAll('input')].map(i => i.placeholder + ' ' + i.value)].join(' ').toLowerCase();
+    const labelOf = (u) => {
+      let p = u.previousElementSibling;
+      if (p && p.classList.contains('lab')) return p.textContent;
+      const grid = u.parentElement;
+      if (grid && /\b(g2|g3|g4|flexrow)\b/.test(grid.className) && grid.previousElementSibling?.classList.contains('lab')) return grid.previousElementSibling.textContent;
+      return '';
+    };
+    const topUnits = (scope) => [...scope.querySelectorAll(UNITS)].filter(u => !u.parentElement.closest('.param, .f, .kv, .ev, .states'));
+    const blocks = [...root.querySelectorAll('.sec, .evg')];
+    for (const b of blocks) {
+      const head = b.querySelector(':scope > h4, :scope > h6');
+      if (head && head.textContent.toLowerCase().includes(q)) continue;
+      let any = false;
+      for (const u of topUnits(b)) {
+        if (words(u).includes(q) || labelOf(u).toLowerCase().includes(q)) any = true;
+        else hide(u);
+      }
+      b.querySelectorAll('.lab').forEach(l => { const n = l.nextElementSibling; if (!n || hidden(n)) hide(l); });
+      b.querySelectorAll('.g2, .g3, .g4, .flexrow').forEach(g => { if ([...g.children].every(hidden)) hide(g); });
+      b.querySelectorAll('.hint').forEach(hide);
+      if (!any) hide(b);
+    }
+    // Felder außerhalb von Abschnitten (Parameter-Liste)
+    for (const u of topUnits(root).filter(u => !u.closest('.sec, .evg'))) {
+      if (!(words(u).includes(q) || labelOf(u).toLowerCase().includes(q))) hide(u);
+    }
+    root.querySelectorAll(':scope > .tabgrp > .sec .hint, :scope > .tabgrp > .hint').forEach(hide);
+    let anyVisible = false;
+    for (const g of root.querySelectorAll('.tabgrp')) {
+      const vis = [...g.querySelectorAll(UNITS)].some(u => !hidden(u));
+      if (!vis) hide(g); else anyVisible = true;
+    }
+    if (!anyVisible) root.setAttribute('data-empty', '1');
+  };
+
   studio.scrollToBottom = (el) => { if (el) el.scrollTop = el.scrollHeight; };
   // Kontextmenü im sichtbaren Bereich halten (auch Untermenüs nach links klappen)
   studio.fitMenu = (id) => {

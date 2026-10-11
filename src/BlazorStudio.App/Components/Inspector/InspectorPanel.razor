@@ -1,7 +1,8 @@
-﻿@implements IDisposable
+@implements IDisposable
 @inject Workspace Ws
 @inject DesignActions Design
 @inject Localizer L
+@inject IJSRuntime JS
 
 @if (Session is null)
 {
@@ -45,14 +46,27 @@ else
                     @if (EventCount(node) > 0) { <span class="cnt" style="margin-left:2px">@EventCount(node)</span> }
                 </button>
             </div>
+            <div class="ins-search @(_query.Length > 0 ? "on" : "")">
+                <Icon Name="search" Class="sm" />
+                <input id="ins-search" placeholder="@L["inspector.search"]" spellcheck="false" value="@_query" @oninput="OnQuery" @onkeydown="SearchKey" />
+                @if (_query.Length > 0) { <button class="ibtn sm" title="@L["action.clear"]" @onclick="ClearQuery"><Icon Name="x" /></button> }
+            </div>
         }
     </div>
-    <div class="scroll" style="flex:1">
+    <div class="scroll ins-body" style="flex:1">
         @if (Session.HasErrors)
         {
             <div class="sec"><div class="hint warn"><Icon Name="alert" />@L["designer.readonlyToast"]</div></div>
         }
-        @if (node.IsTagLike)
+        @if (node.IsTagLike && _query.Length > 0)
+        {
+            @* Suche: alle Reiter untereinander, gefiltert (studio.inspectorFilter) *@
+            <div class="tabgrp"><div class="tabgrp-h">@L["inspector.tabProps"]</div><PropsTab Session="Session" Node="node" Definition="Definition" /></div>
+            <div class="tabgrp"><div class="tabgrp-h">@L["inspector.tabDesign"]</div><DesignTab Session="Session" Node="node" /></div>
+            <div class="tabgrp"><div class="tabgrp-h">@L["inspector.tabEvents"]</div><EventsTab Session="Session" Node="node" Definition="Definition" /></div>
+            <div class="ins-noresult"><Icon Name="search" /><span>@L.F("inspector.noResults", _query)</span></div>
+        }
+        else if (node.IsTagLike)
         {
             @switch (_tab)
             {
@@ -70,6 +84,28 @@ else
 
 @code {
     private string _tab = "design";
+    private string _query = "";
+    private bool _filterApplied;
+
+    private void OnQuery(ChangeEventArgs e) => _query = e.Value?.ToString() ?? "";
+
+    private void ClearQuery() => _query = "";
+
+    private async Task SearchKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape") { _query = ""; await JS.InvokeVoidAsync("studio.focusSelector", "#ins-search", false); }
+    }
+
+    // Filter nach jedem Rendern neu anwenden (Blazor rendert die Felder bei Änderungen neu)
+    protected override async Task OnAfterRenderAsync(bool first)
+    {
+        if (_query.Length > 0 || _filterApplied)
+        {
+            _filterApplied = _query.Length > 0;
+            try { await JS.InvokeVoidAsync("studio.inspectorFilter", _query); }
+            catch (JSDisconnectedException) { }
+        }
+    }
     private DocumentSession? _subscribed;
     private string? _lastKind;
 
