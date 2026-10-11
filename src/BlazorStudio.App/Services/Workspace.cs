@@ -502,6 +502,7 @@ public sealed class Workspace : IDisposable
         var root = RootDirectory;
         if (root is null) return Task.CompletedTask;
         var refs = StartupItem?.Project?.ResolvedPackages.SelectMany(p => p.Assemblies).ToList() ?? new List<string>();
+        var tfm = StartupItem?.Project?.TargetFrameworks.FirstOrDefault();
         var dirs = Solution?.AllProjects.Where(p => p.Project is not null && !IsUnloaded(p.Path)).Select(p => Path.GetDirectoryName(p.Path)!).ToList() ?? new List<string> { root };
         return _highlighterLoad = Task.Run(() =>
         {
@@ -524,7 +525,7 @@ public sealed class Workspace : IDisposable
                 {
                 }
             }
-            Highlighter.Load(root, files, refs);
+            Highlighter.Load(root, files, refs, tfm);
         });
     }
 

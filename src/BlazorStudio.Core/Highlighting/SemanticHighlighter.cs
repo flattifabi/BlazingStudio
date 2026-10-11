@@ -32,10 +32,10 @@ public sealed partial class SemanticHighlighter : IDisposable
     private string? _loadedFor;
 
     /// <summary>Workspace für ein Projekt aufbauen (Quelldateien + Referenzen). Mehrfachaufruf ist billig.</summary>
-    public void Load(string projectDirectory, IEnumerable<string> sourceFiles, IEnumerable<string> referenceDlls)
+    public void Load(string projectDirectory, IEnumerable<string> sourceFiles, IEnumerable<string> referenceDlls, string? targetFramework = null)
     {
         var files = sourceFiles.ToList();
-        var key = projectDirectory + "|" + files.Count + "|" + string.Join(';', referenceDlls.Take(3));
+        var key = projectDirectory + "|" + targetFramework + "|" + files.Count + "|" + string.Join(';', referenceDlls.Take(3));
         if (key == _loadedFor && _workspace is not null) return;
 
         _lock.Wait();
@@ -45,7 +45,7 @@ public sealed partial class SemanticHighlighter : IDisposable
             _docs.Clear();
             var host = MefHostServices.Create(MefHostServices.DefaultAssemblies);
             _workspace = new AdhocWorkspace(host);
-            var refs = PlatformReferences().Concat(referenceDlls).Distinct(StringComparer.OrdinalIgnoreCase)
+            var refs = PlatformReferences(targetFramework).Concat(referenceDlls).Distinct(StringComparer.OrdinalIgnoreCase)
                 .Select(ToReference).Where(r => r is not null).Select(r => r!).ToList();
             var info = ProjectInfo.Create(ProjectId.CreateNewId(), VersionStamp.Create(), "Highlight", "Highlight", LanguageNames.CSharp,
                 compilationOptions: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable),
@@ -250,28 +250,11 @@ public sealed partial class SemanticHighlighter : IDisposable
         });
     }
 
-    /// <summary>.NET-, ASP.NET-Core-Assemblies (für Typen wie ComponentBase, List&lt;T&gt; …).</summary>
-    public static IEnumerable<string> PlatformReferences()
-    {
-        var runtimeDir = System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory();
-        foreach (var f in Directory.GetFiles(runtimeDir, "*.dll").Where(IsManagedRefCandidate)) yield return f;
-        var shared = Path.GetDirectoryName(Path.GetDirectoryName(runtimeDir.TrimEnd(Path.DirectorySeparatorChar)));
-        var aspnet = shared is null ? null : Path.Combine(shared, "Microsoft.AspNetCore.App");
-        if (aspnet is not null && Directory.Exists(aspnet))
-        {
-            var latest = Directory.GetDirectories(aspnet).OrderByDescending(d => Path.GetFileName(d), Comparer<string>.Create(NuGet.NuGetClient.CompareVersions)).FirstOrDefault();
-            if (latest is not null) foreach (var f in Directory.GetFiles(latest, "*.dll")) yield return f;
-        }
-    }
-
-    private static bool IsManagedRefCandidate(string f)
-    {
-        var n = Path.GetFileName(f);
-        return !n.StartsWith("api-ms-", StringComparison.OrdinalIgnoreCase) && !n.StartsWith("Microsoft.DiaSymReader.Native", StringComparison.OrdinalIgnoreCase)
-               && !n.Equals("clrjit.dll", StringComparison.OrdinalIgnoreCase) && !n.Equals("coreclr.dll", StringComparison.OrdinalIgnoreCase)
-               && !n.StartsWith("mscordaccore", StringComparison.OrdinalIgnoreCase) && !n.Equals("hostpolicy.dll", StringComparison.OrdinalIgnoreCase)
-               && !n.Contains("Native", StringComparison.Ordinal) && !n.Equals("clrgc.dll", StringComparison.OrdinalIgnoreCase) && !n.StartsWith("msquic", StringComparison.OrdinalIgnoreCase);
-    }
+    /// <summary>
+    /// .NET- und ASP.NET-Core-Referenzen (für Typen wie ComponentBase, WebApplication, List&lt;T&gt; …) aus dem
+    /// installierten SDK – nicht aus der Runtime von Blazor Studio, die im Setup ohne ASP.NET Core ausgeliefert wird.
+    /// </summary>
+    public static IEnumerable<string> PlatformReferences(string? targetFramework = null) => ReferenceAssemblies.Find(targetFramework);
 
     public void Dispose() => _workspace?.Dispose();
 }
