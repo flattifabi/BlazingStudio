@@ -51,9 +51,10 @@ public static class LibraryScanner
                 try
                 {
                     var asm = mlc.LoadFromAssemblyPath(dll);
+                    var docs = XmlDocs.Load(Path.ChangeExtension(dll, ".xml"));
                     foreach (var t in SafeTypes(asm))
                     {
-                        var def = TryCreate(t, id);
+                        var def = TryCreate(t, id, docs);
                         if (def is not null) found.Add(def);
                     }
                 }
@@ -75,7 +76,7 @@ public static class LibraryScanner
         catch (Exception e) when (e is FileNotFoundException or TypeLoadException) { return Array.Empty<Type>(); }
     }
 
-    private static ComponentDefinition? TryCreate(Type t, string packageId)
+    private static ComponentDefinition? TryCreate(Type t, string packageId, XmlDocs? docs = null)
     {
         try
         {
@@ -105,7 +106,7 @@ public static class LibraryScanner
                     prefix = pt.Name + ".";
                 }
                 parameters.Add(new ParameterDefinition(p.Name, typeName, editor, options,
-                    attrs.Contains("Microsoft.AspNetCore.Components.EditorRequiredAttribute"), null, false, prefix));
+                    attrs.Contains("Microsoft.AspNetCore.Components.EditorRequiredAttribute"), docs?.Property(p.DeclaringType ?? t, p.Name), false, prefix));
             }
             if (parameters.Count == 0 && !t.GetInterfaces().Any()) return null;
             parameters = parameters.Select(p =>
@@ -132,6 +133,8 @@ public static class LibraryScanner
                 Namespace = t.Namespace,
                 Library = packageId,
                 Keywords = t.FullName ?? name,
+                Summary = docs?.Type(t),
+                TypeName = t.FullName,
             };
         }
         catch (Exception e) when (e is not OutOfMemoryException)
@@ -222,5 +225,60 @@ public static class LibraryScanner
             var latest = Directory.GetDirectories(aspnet).OrderByDescending(d => Path.GetFileName(d), Comparer<string>.Create(NuGet.NuGetClient.CompareVersions)).FirstOrDefault();
             if (latest is not null) foreach (var f in Directory.GetFiles(latest, "*.dll")) yield return f;
         }
+    }
+}
+
+/// <summary>XML-Dokumentation einer Paket-DLL (MudBlazor.xml …): Zusammenfassungen von Typen und Properties.</summary>
+internal sealed class XmlDocs
+{
+    private readonly Dictionary<string, string> _members = new(StringComparer.Ordinal);
+
+    public static XmlDocs? Load(string path)
+    {
+        if (!File.Exists(path)) return null;
+        try
+        {
+            var docs = new XmlDocs();
+            var x = System.Xml.Linq.XDocument.Load(path);
+            foreach (var m in x.Descendants("member"))
+            {
+                var name = (string?)m.Attribute("name");
+                var summary = m.Element("summary");
+                if (name is null || summary is null) continue;
+                var text = string.Join(" ", summary.DescendantNodes().Select(n => n switch
+                {
+                    System.Xml.Linq.XText t => t.Value,
+                    System.Xml.Linq.XElement e when e.Name == "see" || e.Name == "seealso" => ((string?)e.Attribute("cref") ?? (string?)e.Attribute("langword") ?? "").Split('.').Last().Split('`')[0],
+                    System.Xml.Linq.XElement e when e.Name == "paramref" || e.Name == "typeparamref" => (string?)e.Attribute("name") ?? "",
+                    _ => "",
+                }).Where(s => s.Length > 0));
+                text = System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
+                if (text.Length > 0) docs._members[name] = text;
+            }
+            return docs;
+        }
+        catch (Exception e) when (e is System.Xml.XmlException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    public string? Type(Type t) => t.FullName is { } n && _members.TryGetValue("T:" + n, out var s) ? s : null;
+
+    public string? Property(Type declaring, string name)
+    {
+        for (var t = declaring; t is not null; t = SafeBase(t))
+        {
+            if (t.FullName is { } n && _members.TryGetValue("P:" + n + "." + name, out var s)) return s;
+            // generische Basistypen: P:MudBlazor.MudBaseInput`1.Label
+            if (t.IsGenericType && t.GetGenericTypeDefinition().FullName is { } g && _members.TryGetValue("P:" + g + "." + name, out var gs)) return gs;
+        }
+        return null;
+    }
+
+    private static Type? SafeBase(Type t)
+    {
+        try { return t.BaseType; }
+        catch (Exception e) when (e is FileNotFoundException or TypeLoadException) { return null; }
     }
 }

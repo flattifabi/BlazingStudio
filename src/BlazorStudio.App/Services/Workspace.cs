@@ -301,8 +301,12 @@ public sealed class Workspace : IDisposable
         ScheduleRescan();
     }
 
+    /// <summary>Datei auf der Festplatte geändert (Watcher), z. B. für den Live-Designer.</summary>
+    public event Action<string>? FileChangedOnDisk;
+
     private void OnFileChanged(string path)
     {
+        FileChangedOnDisk?.Invoke(path);
         var sep = Path.DirectorySeparatorChar;
         if (path.Contains($"{sep}bin{sep}") || path.Contains($"{sep}obj{sep}") || path.Contains($"{sep}.git") || path.Contains($"{sep}.vs{sep}")) return;
 
@@ -331,6 +335,17 @@ public sealed class Workspace : IDisposable
     // ------------------------------------------------------------------
     // Dokumente
     // ------------------------------------------------------------------
+
+    /// <summary>Datei öffnen und einen Bereich markieren (z. B. Gehe zu Definition).</summary>
+    public DocumentSession? OpenAt(string path, int offset, int length)
+    {
+        var doc = Open(path, activate: true);
+        if (doc is null) return null;
+        doc.RevealSelection = (offset, length);
+        if (doc.Kind == DocumentKind.Razor && doc.View == ViewMode.Design) doc.View = ViewMode.Split;
+        Changed?.Invoke();
+        return doc;
+    }
 
     public DocumentSession? Open(string path, int? line = null, bool activate = true)
     {
@@ -504,7 +519,8 @@ public sealed class Workspace : IDisposable
         var refs = StartupItem?.Project?.ResolvedPackages.SelectMany(p => p.Assemblies).ToList() ?? new List<string>();
         var tfm = StartupItem?.Project?.TargetFrameworks.FirstOrDefault();
         var dirs = Solution?.AllProjects.Where(p => p.Project is not null && !IsUnloaded(p.Path)).Select(p => Path.GetDirectoryName(p.Path)!).ToList() ?? new List<string> { root };
-        return _highlighterLoad = Task.Run(() =>
+        var openTexts = Documents.Where(d => d.Kind == DocumentKind.Razor).ToDictionary(d => d.Path, d => d.Text, StringComparer.OrdinalIgnoreCase);
+        return _highlighterLoad = Task.Run(async () =>
         {
             var files = dirs.SelectMany(ProjectIndex.EnumerateFiles).Where(f => f.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase).Take(3000).ToList();
             // ImplicitUsings des SDK (obj/<Konfig>/<TFM>/<Projekt>.GlobalUsings.g.cs, jeweils die neueste)
@@ -526,6 +542,26 @@ public sealed class Workspace : IDisposable
                 }
             }
             Highlighter.Load(root, files, refs, tfm);
+
+            // .razor-Dateien (über ihre @code-Blöcke) für Verwendungen, Umbenennen und Gehe-zu-Definition
+            var razorFiles = dirs.SelectMany(ProjectIndex.EnumerateFiles)
+                .Where(f => f.EndsWith(".razor", StringComparison.OrdinalIgnoreCase) && !Path.GetFileName(f).Equals("_Imports.razor", StringComparison.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase).Take(1500).ToList();
+            var projections = new List<(string, BlazorStudio.Core.Razor.RazorProjection)>();
+            foreach (var f in razorFiles)
+            {
+                try
+                {
+                    var text = openTexts.TryGetValue(f, out var t) ? t : ReadText(f);
+                    if (text is null) continue;
+                    var (cls, ns, usings) = RazorContextFor(f);
+                    projections.Add((f, BlazorStudio.Core.Razor.RazorCSharpProjection.ClassFor(text, cls, ns, usings)));
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException)
+                {
+                }
+            }
+            await Highlighter.IndexRazorAsync(projections);
         });
     }
 
@@ -585,15 +621,20 @@ public sealed class Workspace : IDisposable
     };
 
     /// <summary>Klassenname, Namespace und @using-Einträge (inkl. _Imports.razor) für eine .razor-Datei.</summary>
-    public (string ClassName, string Namespace, List<string> Usings) RazorContextFor(DocumentSession doc)
+    public (string ClassName, string Namespace, List<string> Usings) RazorContextFor(DocumentSession doc) => RazorContextFor(doc.Path);
+
+    public (string ClassName, string Namespace, List<string> Usings) RazorContextFor(string razorPath)
     {
+        var doc = new { Path = razorPath };
         var cls = Path.GetFileNameWithoutExtension(doc.Path);
         var proj = Solution?.AllProjects.Where(p => p.Project is not null && doc.Path.StartsWith(Path.GetDirectoryName(p.Path)! + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(p => p.Path.Length).FirstOrDefault();
         var root = proj is not null ? Path.GetDirectoryName(proj.Path)! : RootDirectory ?? Path.GetDirectoryName(doc.Path)!;
         string? ns = null;
-        if (CodeBehindPath(doc) is { } cb)
+        var cbCandidate = razorPath + ".cs";
+        if (File.Exists(cbCandidate) || Documents.Any(d => d.Path.Equals(cbCandidate, StringComparison.OrdinalIgnoreCase)))
         {
+            var cb = cbCandidate;
             var cbText = Documents.FirstOrDefault(d => d.Path.Equals(cb, StringComparison.OrdinalIgnoreCase))?.Text ?? (File.Exists(cb) ? File.ReadAllText(cb) : "");
             var m = System.Text.RegularExpressions.Regex.Match(cbText, @"^\s*namespace\s+([\w.]+)", System.Text.RegularExpressions.RegexOptions.Multiline);
             if (m.Success) ns = m.Groups[1].Value;

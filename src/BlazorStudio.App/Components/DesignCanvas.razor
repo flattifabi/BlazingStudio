@@ -3,22 +3,30 @@
 @inject DesignActions Design
 @inject Localizer L
 @inject IJSRuntime JS
+@inject LiveDesignService Live
 
 <div class="stage" @ref="_stage">
     <div class="stage-inner">
-        <div class="frame @(Session.DeviceWidth == 0 ? "full" : "") @(Session.DevicePreset is "phone" or "tablet" ? "dev-" + Session.DevicePreset + (Session.DeviceLandscape ? " land" : "") : "")"
+        <div class="frame @(LiveUrl is not null ? "live" : "") @(Session.DeviceWidth == 0 ? "full" : "") @(Session.DevicePreset is "phone" or "tablet" ? "dev-" + Session.DevicePreset + (Session.DeviceLandscape ? " land" : "") : "")"
              style="@(Session.DeviceWidth > 0 ? $"--device:{Session.DeviceWidth}px;" : "")zoom:@((Session.Zoom / 100.0).ToString(CultureInfo.InvariantCulture))">
             <div class="wlabel">
                 <span>@(Session.DeviceWidth > 0 ? $"{Session.DeviceWidth} px · {L["dev." + (Session.DevicePreset == "custom" ? "custom" : Session.DevicePreset)]}{(Session.DeviceLandscape ? " · " + L["dev.landscape"] : "")}" : L["canvas.fullWidth"])</span>
                 <span>@(Session.Doc?.PageRoute ?? Session.Name)</span>
             </div>
-            <CanvasStyles Css="@(IsActive ? Ws.PreviewCss : "")" />
-            <div class="bs-page">
-                @if (IsActive && Session.Doc is not null)
-                {
-                    @_renderer.Render(Session.Doc)
-                }
-            </div>
+            @if (LiveUrl is { } url)
+            {
+                <iframe @ref="_frame" class="bs-live" src="@url" title="Live" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"></iframe>
+            }
+            else
+            {
+                <CanvasStyles Css="@(IsActive ? Ws.PreviewCss : "")" />
+                <div class="bs-page">
+                    @if (IsActive && Session.Doc is not null)
+                    {
+                        @_renderer.Render(Session.Doc)
+                    }
+                </div>
+            }
         </div>
     </div>
 </div>
@@ -43,9 +51,53 @@
         Session.Changed += OnChanged;
         Session.SelectionChanged += OnSelectionChanged;
         Ws.PreviewCssChanged += OnCssChanged;
+        Live.Changed += OnLiveChanged;
+        Live.RefreshRequested += OnLiveRefresh;
     }
 
-    private void OnChanged(ChangeOrigin _) => InvokeAsync(StateHasChanged);
+    private void OnLiveRefresh() => InvokeAsync(async () =>
+    {
+        if (_liveAttachedFor is null || _disposed) return;
+        try { await JS.InvokeVoidAsync("studio.liveDesign.refresh", _frame); }
+        catch (JSException) { }
+    });
+
+    private ElementReference _frame;
+    private string? _liveAttachedFor;
+    private bool _liveInteract;
+    private int _liveZoom;
+
+    /// <summary>URL der echten App, wenn der Live-Designer bereit ist (sonst Nachzeichnung).</summary>
+    private string? LiveUrl
+    {
+        get
+        {
+            if (!IsActive || !Live.Enabled || Session.Kind != DocumentKind.Razor || Session.Doc is null) return null;
+            if (Live.State is not (LiveDesignState.Ready or LiveDesignState.Rebuilding)) return null;
+            if (Live.ProjectFile is null || Live.PrefixFor(Session.Path) is null) return null;
+            return Live.UrlFor(Session);
+        }
+    }
+
+    private void OnLiveChanged() => InvokeAsync(StateHasChanged);
+
+    private void OnChanged(ChangeOrigin origin)
+    {
+        if (origin == ChangeOrigin.Design) _ = PatchSelectedAsync();
+        InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>Style/Klasse sofort im Live-iframe anwenden, bis Hot Reload den echten Stand liefert.</summary>
+    private async Task PatchSelectedAsync()
+    {
+        if (_liveAttachedFor is null || Session.Selected is not { Kind: Core.Model.NodeKind.Element } node) return;
+        var prefix = Live.PrefixFor(Session.Path);
+        if (prefix is null) return;
+        string? Static(string name) => node.GetAttribute(name) is { } v && !v.Contains('@') ? v : null;
+        var attrs = new Dictionary<string, string?> { ["style"] = Static("style"), ["class"] = Static("class") };
+        try { await InvokeAsync(() => JS.InvokeVoidAsync("studio.liveDesign.patch", _frame, prefix + node.Id, attrs).AsTask()); }
+        catch (JSException) { }
+    }
 
     private void OnSelectionChanged() => InvokeAsync(SyncSelectionAsync);
 
@@ -61,7 +113,11 @@
     /// <summary>Nur neu rendern, wenn sich Inhalt, Gerät, Zoom, CSS oder Sichtbarkeit geändert haben.</summary>
     protected override bool ShouldRender()
     {
-        var key = $"{Session.Version}|{Session.DeviceWidth}|{Session.DeviceLandscape}|{Session.Zoom}|{IsActive}|{_cssVersion}|{L.Language}|{Ws.ScanVersion}";
+        var live = LiveUrl;
+        // Im Live-Modus kommt der Inhalt per Hot Reload – nur bei URL-/Geräte-/Zoom-Wechsel neu rendern
+        var key = live is not null
+            ? $"live|{live}|{Session.DeviceWidth}|{Session.DeviceLandscape}|{Session.Zoom}|{IsActive}|{Live.Interact}"
+            : $"{Session.Version}|{Session.DeviceWidth}|{Session.DeviceLandscape}|{Session.Zoom}|{IsActive}|{_cssVersion}|{L.Language}|{Ws.ScanVersion}";
         if (key == _lastRenderKey) return false;
         _lastRenderKey = key;
         return true;
@@ -78,10 +134,72 @@
             _lastSelected = null;
         }
         if (_attached) await SyncSelectionAsync();
+        await SyncLiveAsync();
+    }
+
+    private async Task SyncLiveAsync()
+    {
+        var url = LiveUrl;
+        if (url is null)
+        {
+            if (_liveAttachedFor is not null)
+            {
+                _liveAttachedFor = null;
+                try { await JS.InvokeVoidAsync("studio.liveDesign.detach", _frame); } catch (JSException) { }
+            }
+            return;
+        }
+        var prefix = Live.PrefixFor(Session.Path)!;
+        if (_liveAttachedFor != url)
+        {
+            _ref ??= DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("studio.liveDesign.attach", _frame, _ref, prefix, Session.Zoom / 100.0);
+            _liveAttachedFor = url;
+            _lastSelected = null;
+        }
+        if (_liveInteract != Live.Interact || _liveZoom != Session.Zoom)
+        {
+            _liveInteract = Live.Interact;
+            _liveZoom = Session.Zoom;
+            await JS.InvokeVoidAsync("studio.liveDesign.config", _frame, prefix, Live.Interact, Session.Zoom / 100.0);
+        }
+        var sel = Session.Selected;
+        var id = sel is null ? null : prefix + sel.Id;
+        var label = sel is null ? null : CanvasRenderer.LabelOf(sel);
+        if (id != _liveSelected || label != _liveLabel)
+        {
+            _liveSelected = id;
+            _liveLabel = label;
+            await JS.InvokeVoidAsync("studio.liveDesign.select", _frame, id, label);
+        }
+        var state = Session.DesignState;
+        if (state != _liveState)
+        {
+            _liveState = state;
+            await JS.InvokeVoidAsync("studio.liveDesign.state", _frame, id, state);
+        }
+    }
+
+    private string? _liveSelected, _liveLabel, _liveState;
+
+    /// <summary>Ids aus dem iframe tragen das Datei-Präfix – für den Designer abschneiden.</summary>
+    private string? StripPrefix(string? id)
+    {
+        var prefix = Live.PrefixFor(Session.Path);
+        return id is not null && prefix is not null && id.StartsWith(prefix, StringComparison.Ordinal) ? id[prefix.Length..] : id;
+    }
+
+    [JSInvokable]
+    public Task OnLiveReady(string url)
+    {
+        _liveSelected = null;
+        _liveState = null;
+        return InvokeAsync(SyncLiveAsync);
     }
 
     private async Task SyncSelectionAsync()
     {
+        if (_liveAttachedFor is not null && !_disposed) await SyncLiveAsync();
         if (!_attached || _disposed) return;
         var sel = Session.Selected;
         var id = sel?.Id;
@@ -103,10 +221,11 @@
     // ------------------------------------------------------------------
 
     [JSInvokable]
-    public void OnCanvasClick(string? id) => Session.Select(id);
+    public void OnCanvasClick(string? id) => Session.Select(StripPrefix(id));
 
     [JSInvokable]
-    public void OnDrop(string kind, string payload, string? targetId, string position) => Design.Drop(kind, payload, targetId, position);
+    public void OnDrop(string kind, string payload, string? targetId, string position) =>
+        Design.Drop(kind, kind == "node" ? StripPrefix(payload)! : payload, StripPrefix(targetId), position);
 
     [JSInvokable]
     public void OnChipAction(string action)
@@ -120,10 +239,10 @@
     }
 
     [JSInvokable]
-    public void OnInlineText(string id, string text) => Design.SetText(id, text);
+    public void OnInlineText(string id, string text) => Design.SetText(StripPrefix(id)!, text);
 
     [JSInvokable]
-    public void OnCanvasContextMenu(string id, double x, double y) => Design.RequestContextMenu(id, x, y);
+    public void OnCanvasContextMenu(string id, double x, double y) => Design.RequestContextMenu(StripPrefix(id)!, x, y);
 
     public async ValueTask DisposeAsync()
     {
@@ -131,8 +250,11 @@
         Session.Changed -= OnChanged;
         Session.SelectionChanged -= OnSelectionChanged;
         Ws.PreviewCssChanged -= OnCssChanged;
+        Live.Changed -= OnLiveChanged;
+        Live.RefreshRequested -= OnLiveRefresh;
         try
         {
+            if (_liveAttachedFor is not null) await JS.InvokeVoidAsync("studio.liveDesign.detach", _frame);
             if (_attached) await JS.InvokeVoidAsync("studio.designer.detach", _stage);
         }
         catch (JSDisconnectedException) { }

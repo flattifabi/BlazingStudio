@@ -91,6 +91,7 @@
   }
 
   studio.registerShortcuts = (dotnet) => {
+    studio._shortcutDotnet = dotnet;
     window.addEventListener('error', (e) => { try { dotnet.invokeMethodAsync('OnJsError', (e.message || 'error') + ' @ ' + (e.filename || '') + ':' + (e.lineno || '')); } catch { } });
     window.addEventListener('unhandledrejection', (e) => { try { dotnet.invokeMethodAsync('OnJsError', 'Promise: ' + (e.reason && (e.reason.message || e.reason) || 'rejected')); } catch { } });
     window.addEventListener('keydown', (e) => {
@@ -234,6 +235,63 @@
     return (row.dataset.bsPath || '').split('|').includes(draggedId);
   }
 
+  // ---------------- Live-Designer (echte App im iframe) ----------------
+  const liveFrames = new Map(); // iframe → { dotnet, prefix, selected, label, interact, zoom, lastOk, req }
+  const liveSend = (frame, m) => { try { frame.contentWindow?.postMessage(Object.assign({ __bsHost: 1 }, m), '*'); } catch { } };
+  window.addEventListener('message', (e) => {
+    const m = e.data;
+    if (!m || m.__bs !== 1) return;
+    for (const [frame, st] of liveFrames) {
+      if (frame.contentWindow !== e.source) continue;
+      const d = st.dotnet;
+      switch (m.type) {
+        case 'ready':
+          liveSend(frame, { type: 'config', prefix: st.prefix, interact: st.interact });
+          liveSend(frame, { type: 'select', id: st.selected, label: st.label, scroll: false });
+          d.invokeMethodAsync('OnLiveReady', m.url);
+          break;
+        case 'click': d.invokeMethodAsync('OnCanvasClick', m.id); break;
+        case 'text': d.invokeMethodAsync('OnInlineText', m.id, m.text); break;
+        case 'chip': d.invokeMethodAsync('OnChipAction', m.action); break;
+        case 'drop': d.invokeMethodAsync('OnDrop', m.kind, m.payload, m.targetId, m.pos); break;
+        case 'contextmenu': {
+          const r = frame.getBoundingClientRect();
+          d.invokeMethodAsync('OnCanvasContextMenu', m.id, r.left + m.x * st.zoom, r.top + m.y * st.zoom);
+          break;
+        }
+        case 'key': studio._shortcutDotnet?.invokeMethodAsync('OnShortcut', m.combo); break;
+        case 'hit-result': st.lastOk = m.ok; break;
+      }
+    }
+  });
+
+  studio.liveDesign = {
+    attach(frame, dotnet, prefix, zoom) {
+      if (!frame) return;
+      const st = liveFrames.get(frame) || { selected: null, label: '', interact: false, lastOk: false, req: 0 };
+      Object.assign(st, { dotnet, prefix, zoom: zoom || 1 });
+      liveFrames.set(frame, st);
+      liveSend(frame, { type: 'config', prefix, interact: st.interact });
+    },
+    detach(frame) { liveFrames.delete(frame); },
+    select(frame, id, label) {
+      const st = liveFrames.get(frame);
+      if (!st) return;
+      st.selected = id; st.label = label;
+      liveSend(frame, { type: 'select', id, label });
+    },
+    config(frame, prefix, interact, zoom) {
+      const st = liveFrames.get(frame);
+      if (!st) return;
+      Object.assign(st, { prefix, interact: !!interact, zoom: zoom || st.zoom });
+      liveSend(frame, { type: 'config', prefix, interact: !!interact });
+    },
+    patch(frame, id, attrs) { liveSend(frame, { type: 'patch', id, attrs }); },
+    state(frame, id, state) { liveSend(frame, { type: 'state', id, state }); },
+    reload(frame) { liveSend(frame, { type: 'reload' }); },
+    refresh(frame) { liveSend(frame, { type: 'refresh' }); },
+  };
+
   // ---------------- Pointer-Drag ----------------
   // Ziehen aus Toolbox (data-bs-palette), Ebenen (data-bs-outline) und auf der Fläche (Elemente verschieben).
   const pd = { pending: null, active: false, ghost: null, stage: null, outline: null, suppressClick: false };
@@ -247,6 +305,9 @@
     return null;
   }
   function endDrag() {
+    for (const f of liveFrames.keys()) f.style.pointerEvents = '';
+    if (pd.live) liveSend(pd.live, { type: 'hit-end', commit: false });
+    pd.live = null;
     if (pd.ghost) pd.ghost.remove();
     pd.ghost = null;
     if (pd.stage) designers.get(pd.stage)?.clear?.();
@@ -292,10 +353,31 @@
       pd.ghost = g;
       document.body.classList.add('bs-dragging');
       window.getSelection()?.removeAllRanges();
+      for (const f of liveFrames.keys()) f.style.pointerEvents = 'none';
     }
     e.preventDefault();
     pd.ghost.style.transform = `translate(${e.clientX + 12}px, ${e.clientY + 10}px)`;
     const target = document.elementFromPoint(e.clientX, e.clientY);
+    // Über einem Live-iframe: Ablageposition berechnet die echte App
+    // (iframes haben beim Ziehen pointer-events:none – daher über die Position erkennen)
+    let live = null;
+    for (const f of liveFrames.keys()) {
+      const fr = f.getBoundingClientRect();
+      if (f.isConnected && e.clientX >= fr.left && e.clientX <= fr.right && e.clientY >= fr.top && e.clientY <= fr.bottom) { live = f; break; }
+    }
+    if (pd.live && pd.live !== live) liveSend(pd.live, { type: 'hit-end', commit: false });
+    pd.live = live;
+    if (live) {
+      const lst = liveFrames.get(live);
+      const r = live.getBoundingClientRect();
+      liveSend(live, { type: 'hit', x: (e.clientX - r.left) / lst.zoom, y: (e.clientY - r.top) / lst.zoom, kind: drag.kind, payload: drag.payload, req: ++lst.req });
+      if (pd.stage) designers.get(pd.stage)?.clear?.();
+      pd.stage = null;
+      if (pd.outline) pd.outline.clear();
+      pd.outline = null;
+      pd.ghost.classList.toggle('no', !lst.lastOk);
+      return;
+    }
     const st = stageOf(target);
     if (pd.stage && pd.stage !== st) designers.get(pd.stage)?.clear?.();
     pd.stage = st;
@@ -312,7 +394,11 @@
     if (!pd.active) { pd.pending = null; return; }
     const target = document.elementFromPoint(e.clientX, e.clientY);
     try {
-      if (pd.stage) designers.get(pd.stage).drop(target, e.clientX, e.clientY);
+      if (pd.live) {
+        liveSend(pd.live, { type: 'hit-end', commit: true, kind: drag.kind, payload: drag.payload });
+        pd.live = null;
+      }
+      else if (pd.stage) designers.get(pd.stage).drop(target, e.clientX, e.clientY);
       else if (pd.outline) pd.outline.drop(target);
     } finally {
       pd.suppressClick = true;
@@ -941,6 +1027,62 @@
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyH, () => dotnet.invokeMethodAsync('OnEditorShortcut', 'ctrl+shift+h'));
       editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.KeyB, () => dotnet.invokeMethodAsync('OnEditorShortcut', 'ctrl+shift+b'));
       editor.addCommand(monaco.KeyCode.F9, () => dotnet.invokeMethodAsync('OnGutterClick', editor.getPosition().lineNumber));
+
+      // Navigation wie in Rider: F12, Strg+Klick, Shift+F12, Strg+F12, F2
+      const navLang = () => ['csharp', 'razor'].includes(editor.getModel()?.getLanguageId());
+      const nav = (kind, position) => {
+        if (!navLang()) return;
+        const model = editor.getModel();
+        const offset = model.getOffsetAt(position || editor.getPosition());
+        dotnet.invokeMethodAsync('OnNavigate', kind, model.getValue(), offset);
+      };
+      const navActions = [
+        ['bs.definition', 'Gehe zu Definition', [monaco.KeyCode.F12], 'definition', 1],
+        ['bs.usages', 'Verwendungen suchen', [monaco.KeyMod.Shift | monaco.KeyCode.F12, monaco.KeyMod.Alt | monaco.KeyCode.F7], 'usages', 2],
+        ['bs.implementation', 'Gehe zu Implementierung', [monaco.KeyMod.CtrlCmd | monaco.KeyCode.F12], 'implementation', 3],
+        ['bs.rename', 'Umbenennen …', [monaco.KeyCode.F2, monaco.KeyMod.Shift | monaco.KeyCode.F6], 'rename', 4],
+      ];
+      const labels = (opts && opts.navLabels) || {};
+      for (const [aid, label, keys, kind, order] of navActions) {
+        editor.addAction({
+          id: aid,
+          label: labels[kind] || label,
+          keybindings: keys,
+          contextMenuGroupId: '0_navigation',
+          contextMenuOrder: order,
+          precondition: null,
+          run: () => nav(kind),
+        });
+      }
+      // Strg+Klick → Definition, Strg+Hover unterstreicht den Bezeichner
+      const linkDeco = editor.createDecorationsCollection();
+      editor.onMouseDown((e) => {
+        if (!(e.event.ctrlKey || e.event.metaKey) || e.event.leftButton === false) return;
+        if (e.target.type !== monaco.editor.MouseTargetType.CONTENT_TEXT || !e.target.position) return;
+        e.event.preventDefault();
+        e.event.stopPropagation();
+        linkDeco.clear();
+        nav('definition', e.target.position);
+      });
+      editor.onMouseMove((e) => {
+        if (!(e.event.ctrlKey || e.event.metaKey) || !navLang() || e.target.type !== monaco.editor.MouseTargetType.CONTENT_TEXT || !e.target.position) { linkDeco.clear(); return; }
+        const w = editor.getModel().getWordAtPosition(e.target.position);
+        if (!w) { linkDeco.clear(); return; }
+        linkDeco.set([{ range: new monaco.Range(e.target.position.lineNumber, w.startColumn, e.target.position.lineNumber, w.endColumn), options: { inlineClassName: 'bs-nav-link' } }]);
+      });
+      editor.onMouseLeave(() => linkDeco.clear());
+      editor.onKeyUp((e) => { if (e.keyCode === monaco.KeyCode.Ctrl) linkDeco.clear(); });
+    },
+
+    // Bereich markieren und in die Mitte scrollen (Gehe zu Definition, Treffer)
+    revealRange(id, start, length) {
+      const h = editors.get(id);
+      if (!h) return;
+      const model = h.editor.getModel();
+      const a = model.getPositionAt(start), b = model.getPositionAt(start + Math.max(0, length));
+      h.editor.setSelection(monaco.Range.fromPositions(a, b));
+      h.editor.revealRangeInCenterIfOutsideViewport(monaco.Range.fromPositions(a, b));
+      h.editor.focus();
     },
 
     setValue(id, value) {

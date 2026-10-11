@@ -5,6 +5,7 @@
 @inject RunService Run
 @inject SettingsService Settings
 @inject Localizer L
+@inject NavigationService Nav
 
 <div class="monaco-host" @ref="_host">
     @if (!_created) { <div class="placeholder">@L["editor.loading"]</div> }
@@ -34,7 +35,8 @@
             _ref = DotNetObjectReference.Create(this);
             var glyph = Session.Kind is DocumentKind.CSharp or DocumentKind.Razor;
             await JS.InvokeVoidAsync("studio.monaco.create", _host, _id, _ref, Session.Text, Session.MonacoLanguage,
-                new { fontSize = Settings.Current.EditorFontSize, minimap = Settings.Current.ShowMinimap && Session.Kind != DocumentKind.Razor, glyphMargin = glyph, wordWrap = Session.Kind is DocumentKind.Markdown or DocumentKind.Text });
+                new { fontSize = Settings.Current.EditorFontSize, minimap = Settings.Current.ShowMinimap && Session.Kind != DocumentKind.Razor, glyphMargin = glyph, wordWrap = Session.Kind is DocumentKind.Markdown or DocumentKind.Text,
+                    navLabels = new { definition = L["nav.goToDef"], usages = L["nav.findUsages"], implementation = L["nav.goToImpl"], rename = L["nav.rename"] + " …" } });
             if (_disposed) return;
             _created = true;
             Session.Changed += OnSessionChanged;
@@ -53,6 +55,11 @@
             Session.RevealLine = null;
             await JS.InvokeVoidAsync("studio.monaco.revealLine", _id, line, true);
         }
+        if (_created && IsVisible && Session.RevealSelection is { } sel)
+        {
+            Session.RevealSelection = null;
+            await JS.InvokeVoidAsync("studio.monaco.revealRange", _id, sel.Offset, sel.Length);
+        }
     }
 
     private void OnSessionChanged(ChangeOrigin origin) => InvokeAsync(async () =>
@@ -61,7 +68,7 @@
         if (origin != ChangeOrigin.Code) await JS.InvokeVoidAsync("studio.monaco.setValue", _id, Session.Text);
         await UpdateMarkersAsync();
         await HighlightSelectionAsync(reveal: false);
-        if (Session.RevealLine is not null) StateHasChanged();
+        if (Session.RevealLine is not null || Session.RevealSelection is not null) StateHasChanged();
     });
 
     private void OnSelectionChanged() => InvokeAsync(async () =>
@@ -210,7 +217,9 @@
             }
 
             await Ws.EnsureHighlighterAsync();
-            var cs = await Ws.Highlighter.CompleteAsync(Session.Path + ".__complete.cs", proj.Code, proj.Position, explicitInvoke: true);
+            // Ein generiertes Dokument je .razor-Datei (auch für Farben, Navigation, Verwendungen)
+            await Ws.Highlighter.UpsertRazorAsync(Session.Path, proj);
+            var cs = await Ws.Highlighter.CompleteAsync(BlazorStudio.Core.Highlighting.SemanticHighlighter.GeneratedPath(Session.Path), proj.Code, proj.Position, explicitInvoke: true);
             if (cs is null) return new { items, replaceStart, replaceEnd };
             var rs = offset - (proj.Position - cs.ReplaceStart);
             var re = offset + (cs.ReplaceEnd - proj.Position);
@@ -327,9 +336,9 @@
             }
             else
             {
-                var regions = CodeRegions(text);
-                if (regions.Count == 0) return Array.Empty<int>();
-                tokens = await Ws.Highlighter.ClassifyRazorAsync(Session.Path, text, Path.GetFileNameWithoutExtension(Session.Path), regions);
+                var (cls, ns, usings) = Ws.RazorContextFor(Session);
+                var proj = BlazorStudio.Core.Razor.RazorCSharpProjection.ClassFor(text, cls, ns, usings);
+                tokens = await Ws.Highlighter.ClassifyRazorAsync(Session.Path, proj);
             }
             return BlazorStudio.Core.Highlighting.SemanticHighlighter.Encode(text, tokens);
         }
@@ -337,26 +346,6 @@
         {
             return null;
         }
-    }
-
-    /// <summary>Innenbereiche von @code { … } / @functions { … }.</summary>
-    private static List<(int Start, int End)> CodeRegions(string text)
-    {
-        var list = new List<(int, int)>();
-        foreach (var kw in new[] { "@code", "@functions" })
-        {
-            var i = 0;
-            while ((i = text.IndexOf(kw, i, StringComparison.Ordinal)) >= 0)
-            {
-                var brace = text.IndexOf('{', i + kw.Length);
-                if (brace < 0 || text[(i + kw.Length)..brace].Trim().Length > 0) { i += kw.Length; continue; }
-                var end = BlazorStudio.Core.Razor.CSharpScanner.SkipBalanced(text, brace, '{', '}');
-                if (end < 0) end = text.Length;
-                list.Add((brace + 1, Math.Max(brace + 1, end - 1)));
-                i = end;
-            }
-        }
-        return list;
     }
 
     [JSInvokable]
@@ -378,6 +367,17 @@
 
     [JSInvokable]
     public Task OnEditorShortcut(string combo) => Shell.OnShortcut(combo);
+
+    /// <summary>F12 / Strg+Klick, Shift+F12, Strg+F12, F2.</summary>
+    [JSInvokable]
+    public Task OnNavigate(string kind, string text, int offset) => kind switch
+    {
+        "definition" => Nav.GoToDefinitionAsync(Session, text, offset),
+        "usages" => Nav.FindUsagesAsync(Session, text, offset),
+        "implementation" => Nav.GoToImplementationAsync(Session, text, offset),
+        "rename" => Nav.RenameAsync(Session, text, offset),
+        _ => Task.CompletedTask,
+    };
 
     public async ValueTask DisposeAsync()
     {

@@ -31,6 +31,9 @@ public sealed class AppSettings
 
     public bool UseHotReload { get; set; } = true;
 
+    /// <summary>Design-Tab zeigt die echte App (Schatten-Kopie mit dotnet watch) statt der Nachzeichnung.</summary>
+    public bool LiveDesign { get; set; } = true;
+
     public double WindowWidth { get; set; }
 
     public double WindowHeight { get; set; }

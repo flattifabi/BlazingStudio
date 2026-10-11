@@ -1,0 +1,126 @@
+@* Detail-Tooltip für einen Toolbox-Eintrag: Beschreibung, Parameter und echte Live-Vorschau. *@
+@using BlazorStudio.Core.Catalog
+@inject LiveDesignService Live
+@inject Localizer L
+
+@if (Item is { } d)
+{
+    <div class="tbtip" style="top:min(@Px(Top)px, calc(100vh - 480px))" @onmouseenter="() => OnHover.InvokeAsync(true)" @onmouseleave="() => OnHover.InvokeAsync(false)">
+        <div class="tbtip-head">
+            <span class="ico"><Icon Name="@d.Icon" /></span>
+            <div class="t">
+                <b>@L.Label(d)</b>
+                <code>&lt;@d.TagName&gt;</code>
+            </div>
+            @if (d.Library is not null)
+            {
+                <span class="lib">@d.Library @LibraryVersion(d)</span>
+            }
+            else
+            {
+                <span class="lib dim">@SourceLabel(d)</span>
+            }
+        </div>
+        @if (d.Summary is { Length: > 0 } sum)
+        {
+            <p class="sum">@Shorten(sum, 260)</p>
+        }
+        <div class="tbtip-preview">
+            @if (PreviewUrl is { } url)
+            {
+                <iframe src="@url" title="Vorschau" sandbox="allow-scripts allow-same-origin" tabindex="-1"></iframe>
+            }
+            else
+            {
+                <div class="ph">
+                    @if (Live.Enabled && Live.State is LiveDesignState.Starting or LiveDesignState.Rebuilding)
+                    {
+                        <Icon Name="refresh" Class="spin" /><span>@L["tip.previewStarting"]</span>
+                    }
+                    else
+                    {
+                        <Icon Name="eye" /><span>@(Live.Enabled ? L["tip.previewUnavailable"] : L["tip.previewOff"])</span>
+                    }
+                </div>
+            }
+        </div>
+        @if (d.Parameters.Count > 0)
+        {
+            <div class="tbtip-params">
+                @foreach (var p in d.Parameters.Where(p => p.Editor != ValueEditor.Callback).Take(7))
+                {
+                    <div title="@p.Description"><span class="n">@p.Name@(p.IsRequired ? "*" : "")</span><span class="ty">@p.Type</span>@if (p.Description is { Length: > 0 } pd) { <span class="ds">@Shorten(pd, 70)</span> }</div>
+                }
+                @{ var events = d.Parameters.Count(p => p.Editor == ValueEditor.Callback); var more = d.Parameters.Count(p => p.Editor != ValueEditor.Callback) - 7; }
+                @if (more > 0 || events > 0)
+                {
+                    <div class="more">@(more > 0 ? L.F("tip.moreParams", more) : "")@(more > 0 && events > 0 ? " · " : "")@(events > 0 ? L.F("tip.events", events) : "")</div>
+                }
+            </div>
+        }
+        <div class="tbtip-foot">@L["tip.hint"]</div>
+    </div>
+}
+
+@code {
+    [Parameter] public ComponentDefinition? Item { get; set; }
+
+    [Parameter] public double Top { get; set; }
+
+    [Parameter] public EventCallback<bool> OnHover { get; set; }
+
+    [Parameter] public IReadOnlyList<ComponentLibrary> Libraries { get; set; } = Array.Empty<ComponentLibrary>();
+
+    private static string Px(double v) => Math.Round(v).ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    private static string Shorten(string s, int max) => s.Length <= max ? s : s[..(max - 1)].TrimEnd() + "…";
+
+    private string LibraryVersion(ComponentDefinition d) => Libraries.FirstOrDefault(l => l.PackageId == d.Library)?.Version ?? "";
+
+    private string SourceLabel(ComponentDefinition d) => d.Source switch
+    {
+        ComponentSource.Html => "HTML",
+        ComponentSource.Blazor => "Blazor",
+        ComponentSource.Project => L["tip.project"],
+        _ => L["tip.template"],
+    };
+
+    /// <summary>Echte Vorschau über die laufende Schatten-App (Komponenten mit Beispiel-Parametern, HTML direkt).</summary>
+    private string? PreviewUrl
+    {
+        get
+        {
+            if (Item is not { } d || !Live.Enabled || Live.State != LiveDesignState.Ready) return null;
+            if (d.Source is ComponentSource.Html or ComponentSource.Template)
+            {
+                if (d.Template.Contains('@') || d.Template.Contains("$0", StringComparison.Ordinal)) return null;
+                return Live.BaseUrl + "/_bs/preview?h=" + Uri.EscapeDataString(d.Template);
+            }
+            var type = d.TypeName ?? d.TagName;
+            var (parameters, text) = DemoParameters(d);
+            return Live.PreviewUrl(type, parameters, text);
+        }
+    }
+
+    /// <summary>Beispielwerte, damit die Vorschau aussagekräftig ist (gefüllter Button, Label, Titel …).</summary>
+    private (Dictionary<string, string> Parameters, string? Text) DemoParameters(ComponentDefinition d)
+    {
+        var label = L.Label(d);
+        var p = new Dictionary<string, string>();
+        foreach (var x in d.Parameters)
+        {
+            switch (x.Name)
+            {
+                case "Variant" when x.Options?.Contains("Filled") == true: p[x.Name] = "Filled"; break;
+                case "Color" when x.Options?.Contains("Primary") == true: p[x.Name] = "Primary"; break;
+                case "ButtonStyle" when x.Options?.Contains("Primary") == true: p[x.Name] = "Primary"; break;
+                case "Label" or "Text" or "Title" or "Placeholder" or "HeaderText" when x.IsStringLike: p[x.Name] = label; break;
+                case "Elevation" when x.Editor == ValueEditor.Number: p[x.Name] = "2"; break;
+                case "Value" when x.Editor == ValueEditor.Number: p[x.Name] = "60"; break;
+                case "Open" or "Visible" or "Expanded" when x.Editor == ValueEditor.Bool: p[x.Name] = "true"; break;
+            }
+        }
+        var text = d.AcceptsChildren && !p.ContainsKey("Text") && !p.ContainsKey("Label") ? label : null;
+        return (p, text);
+    }
+}

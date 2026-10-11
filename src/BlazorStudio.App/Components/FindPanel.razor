@@ -37,7 +37,11 @@
     }
     <div class="find-sum dim">
         @if (_busy) { <Icon Name="refresh" Class="spin sm" /> }
-        @if (_result?.Error is { } err) { <span class="err">@err</span> }
+        @if (_navTitle is { } nt && _result is { } nr)
+        {
+            <span><b>@nt</b> · @L.F("find.navSummary", nr.Hits.Count, nr.Hits.Select(h => h.File).Distinct().Count())</span>
+        }
+        else if (_result?.Error is { } err) { <span class="err">@err</span> }
         else if (_result is { } r && _query.Length > 0)
         {
             <span>@L.F("find.summary", r.Hits.Count, r.Hits.Select(h => h.File).Distinct().Count(), r.FilesSearched)@(r.Truncated ? " · " + L["find.truncated"] : "")</span>
@@ -85,6 +89,17 @@
         FocusRequested?.Invoke(query);
     }
 
+    /// <summary>Ergebnisse von „Verwendungen suchen“ / „Implementierungen“ anzeigen.</summary>
+    public static void ShowResults(string title, IReadOnlyList<SearchHit> hits)
+    {
+        _navTitle = title;
+        _result = new SearchResult(hits, hits.Select(h => h.File).Distinct().Count(), false, null);
+        BottomPanel.Show?.Invoke(BottomTab.Find);
+        ResultsShown?.Invoke();
+    }
+
+    private static event Action? ResultsShown;
+    private static string? _navTitle;
     private static bool _requestReplace;
     private static string _query = "", _mask = "", _replace = "", _scope = "solution";
     private static bool _case, _word, _regex, _showReplace;
@@ -98,11 +113,22 @@
     protected override void OnInitialized()
     {
         FocusRequested += OnFocusRequested;
+        ResultsShown += OnResultsShown;
         if (_requestReplace) _showReplace = true;
     }
 
+    private void OnResultsShown() => InvokeAsync(() =>
+    {
+        _cts?.Cancel();
+        _busy = false;
+        _collapsed.Clear();
+        _sel = null;
+        StateHasChanged();
+    });
+
     private void OnFocusRequested(string? q) => InvokeAsync(() =>
     {
+        _navTitle = null;
         if (!string.IsNullOrEmpty(q)) { _query = q; Schedule(); }
         if (_requestReplace) _showReplace = true;
         _focus = true;
@@ -143,6 +169,7 @@
 
     private void Schedule(int delay = 250)
     {
+        _navTitle = null;
         _cts?.Cancel();
         var cts = _cts = new CancellationTokenSource();
         if (_query.Length == 0)
@@ -180,7 +207,7 @@
     private void OpenHit(SearchHit h)
     {
         _sel = h;
-        Ws.Open(h.File, h.Line);
+        Ws.OpenAt(h.File, h.Offset, h.Length);
     }
 
     private string Rel(string dir) => Ws.RootDirectory is { } r ? Path.GetRelativePath(r, dir).Replace('\\', '/') : dir;
@@ -234,6 +261,7 @@
     public void Dispose()
     {
         FocusRequested -= OnFocusRequested;
+        ResultsShown -= OnResultsShown;
         _cts?.Cancel();
     }
 }

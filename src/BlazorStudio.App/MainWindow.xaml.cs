@@ -25,6 +25,7 @@ public partial class MainWindow : Window
         sc.AddSingleton<Localizer>();
         sc.AddSingleton<UiService>();
         sc.AddSingleton<Workspace>();
+        sc.AddSingleton<NavigationService>();
         sc.AddSingleton<RunService>();
         sc.AddSingleton<DebugService>();
         sc.AddSingleton<DesignActions>();
@@ -35,6 +36,7 @@ public partial class MainWindow : Window
         sc.AddSingleton<GitService>();
         sc.AddSingleton<UpdateService>();
         sc.AddSingleton<ProjectActions>();
+        sc.AddSingleton<LiveDesignService>();
         _services = sc.BuildServiceProvider();
         Resources.Add("services", _services);
 
@@ -103,6 +105,7 @@ public partial class MainWindow : Window
         }
         _closeConfirmed = true;
         _services.GetRequiredService<ProfilerService>().Dispose();
+        _services.GetRequiredService<LiveDesignService>().Dispose();
         _services.GetRequiredService<RunService>().StopAll();
         _ = _services.GetRequiredService<DebugService>().StopAsync();
     }

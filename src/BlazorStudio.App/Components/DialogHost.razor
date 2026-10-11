@@ -1,3 +1,4 @@
+@implements IDisposable
 @inject UiService Ui
 @inject IJSRuntime JS
 
@@ -25,6 +26,13 @@
 
 @code {
     private DialogRequest? _focused;
+
+    // Eigenes Abo: Dialoge können aus Diensten (z. B. Umbenennen per F2) kommen, ohne dass die Shell neu rendert
+    protected override void OnInitialized() => Ui.Changed += OnChanged;
+
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Ui.Changed -= OnChanged;
 
     protected override async Task OnAfterRenderAsync(bool first)
     {

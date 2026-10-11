@@ -1,6 +1,7 @@
 @* Toolbox links: HTML/Blazor-Elemente, eigene Komponenten und erkannte Bibliotheken – alles zum Reinziehen. *@
 @inherits StudioComponent
 @inject DesignActions Design
+@inject LiveDesignService LiveDesign
 
 <aside class="island toolbox">
     <div class="split-x" data-splitter="tool" style="right:0"></div>
@@ -76,6 +77,7 @@
                 break;
         }
     </div>
+    <ToolboxTip Item="_tip" Top="_tipTop" Libraries="Ws.Libraries" OnHover="TipHover" />
 </aside>
 
 @code {
@@ -117,13 +119,62 @@
             var it = item;
             <div class="tb-item @(it.Source == ComponentSource.Library ? "lib" : it.Source == ComponentSource.Project ? "proj" : "")"
                  style="padding-left:@(22 + depth * 12)px" draggable="true" data-bs-palette="@it.Key"
-                 title="@Tooltip(it)" @onclick="() => Design.InsertAtSelection(it.Key)">
+                 @onmouseenter="e => HoverStart(it, e)" @onmouseleave="HoverEnd" @onpointerdown="HideTip" @onclick="() => Design.InsertAtSelection(it.Key)">
                 <Icon Name="@it.Icon" />
                 <span class="ellipsis">@L.Label(it)</span>
                 @if (it.Source is ComponentSource.Library or ComponentSource.Blazor && L.Label(it) != it.TagName) { <em>@it.TagName</em> }
             </div>
         }
     };
+
+    // ---------- Detail-Tooltip nach kurzem Hovern ----------
+    private ComponentDefinition? _tip;
+    private double _tipTop;
+    private CancellationTokenSource? _tipTimer;
+    private bool _overTip;
+
+    private void HoverStart(ComponentDefinition d, MouseEventArgs e)
+    {
+        _tipTimer?.Cancel();
+        var cts = _tipTimer = new CancellationTokenSource();
+        var top = Math.Max(60, e.ClientY - 60);
+        var wait = _tip is null ? 650 : 120; // bei offenem Tooltip schnell weiterwechseln
+        _ = Task.Delay(wait, cts.Token).ContinueWith(t =>
+        {
+            if (t.IsCanceled) return;
+            InvokeAsync(() =>
+            {
+                _tip = d;
+                _tipTop = top;
+                if (LiveDesign.Enabled) LiveDesign.EnsureStarted();
+                StateHasChanged();
+            });
+        }, TaskScheduler.Default);
+    }
+
+    private void HoverEnd()
+    {
+        _tipTimer?.Cancel();
+        var cts = _tipTimer = new CancellationTokenSource();
+        _ = Task.Delay(220, cts.Token).ContinueWith(t =>
+        {
+            if (t.IsCanceled || _overTip) return;
+            InvokeAsync(() => { _tip = null; StateHasChanged(); });
+        }, TaskScheduler.Default);
+    }
+
+    private void TipHover(bool over)
+    {
+        _overTip = over;
+        if (over) _tipTimer?.Cancel();
+        else HoverEnd();
+    }
+
+    private void HideTip()
+    {
+        _tipTimer?.Cancel();
+        _tip = null;
+    }
 
     private string Tooltip(ComponentDefinition d)
     {

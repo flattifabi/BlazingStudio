@@ -3,6 +3,8 @@
 @inject DesignActions Design
 @inject RunService Run
 @inject Localizer L
+@inject LiveDesignService LiveDesign
+@inject UiService Ui
 
 <div class="bpbar">
     @if (Session.View != ViewMode.Code && !_live)
@@ -51,6 +53,14 @@
             <button class="ibtn sm" title="@L["cmd.zoomIn"]" @onclick="() => Zoom(10)"><Icon Name="plus" /></button>
         </div>
     }
+    @if (Session.View != ViewMode.Code && !_live)
+    {
+        <button class="live-badge st-@LiveDesign.State.ToString().ToLowerInvariant() @(LiveDesign.Enabled ? "" : "off")" title="@L["live.menuTitle"]" @onclick="LiveMenu">
+            <i></i>
+            @(LiveDesign.Enabled ? L["live.state." + LiveDesign.State] : L["live.approx"])
+            @if (LiveDesign.Interact && LiveDesign.State == LiveDesignState.Ready) { <span class="int">@L["live.interacting"]</span> }
+        </button>
+    }
     <div class="seg">
         <button class="@(Session.View == ViewMode.Design && !_live ? "on" : "")" @onclick="() => SetView(ViewMode.Design)"><Icon Name="design" />@L["view.design"]</button>
         <button class="@(Session.View == ViewMode.Split && !_live ? "on" : "")" @onclick="() => SetView(ViewMode.Split)"><Icon Name="split" />@L["view.split"]</button>
@@ -59,6 +69,21 @@
     </div>
 </div>
 
+@if (LiveDesign.Enabled && LiveDesign.State == LiveDesignState.Failed && Session.View != ViewMode.Code && !_live)
+{
+    var le = LiveDesign.Errors.FirstOrDefault();
+    <div class="banner warn">
+        <Icon Name="alert" />
+        <span><b>@L["live.failedTitle"]</b> · @(le is not null ? $"{Path.GetFileName(le.File)}({le.Line}): {le.Message}" : L["live.failedText"])</span>
+        <span class="grow"></span>
+        @if (le is not null && File.Exists(Map(le.File)))
+        {
+            <button class="btn sm" @onclick="() => Ws.Open(Map(le.File), le.Line)">@L["designer.goToError"]</button>
+        }
+        <button class="btn sm ghost" @onclick="ShowLiveLog">@L["live.log"]</button>
+        <button class="btn sm ghost" @onclick="LiveDesign.Restart">@L["live.restart"]</button>
+    </div>
+}
 @if (Session.HasErrors && Session.View != ViewMode.Code && !_live)
 {
     var first = Session.Diagnostics.First(d => d.IsError);
@@ -150,6 +175,7 @@
         Session.Changed += OnChanged;
         Session.SelectionChanged += OnSelection;
         Run.Changed += OnRun;
+        LiveDesign.Changed += OnLiveChanged;
     }
 
     private void OnChanged(ChangeOrigin _) => InvokeAsync(StateHasChanged);
@@ -157,6 +183,43 @@
     private void OnSelection() => InvokeAsync(StateHasChanged);
 
     private void OnRun() => InvokeAsync(StateHasChanged);
+
+    private void OnLiveChanged() => InvokeAsync(StateHasChanged);
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        // Echte Darstellung starten, sobald ein Designer sichtbar ist
+        if (IsActive && Session.View != ViewMode.Code && LiveDesign.Enabled && LiveDesign.State is LiveDesignState.Off) LiveDesign.EnsureStarted();
+    }
+
+    /// <summary>Fehlerpfad aus der Schatten-Kopie auf die Originaldatei abbilden.</summary>
+    private string Map(string file)
+    {
+        var shadowRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BlazorStudio", "design");
+        if (!file.StartsWith(shadowRoot, StringComparison.OrdinalIgnoreCase) || Ws.Project?.RootDirectory is not { } root) return file;
+        var rel = Path.GetRelativePath(shadowRoot, file);
+        var parts = rel.Split(Path.DirectorySeparatorChar, 2);
+        return parts.Length == 2 ? Path.Combine(root, parts[1]) : file;
+    }
+
+    private void LiveMenu(MouseEventArgs e) => Ui.ShowMenu(e.ClientX, e.ClientY + 8, new[]
+    {
+        new MenuEntry(L["live.toggle"], "globe", () => { LiveDesign.SetEnabled(!LiveDesign.Enabled); return Task.CompletedTask; }, Checked: LiveDesign.Enabled),
+        new MenuEntry(L["live.interact"], "zap", () => { LiveDesign.SetInteract(!LiveDesign.Interact); return Task.CompletedTask; }, Disabled: !LiveDesign.Enabled, Checked: LiveDesign.Interact),
+        MenuEntry.Separator,
+        MenuEntry.Do(L["live.restart"], "restart", LiveDesign.Restart, disabled: !LiveDesign.Enabled),
+        MenuEntry.Do(L["live.log"], "terminal", ShowLiveLog),
+    });
+
+    private async Task ShowLiveLog()
+    {
+        await Ui.ShowDialogAsync(new DialogRequest
+        {
+            Title = L["live.log"],
+            Message = string.Join("\n", LiveDesign.Log.TakeLast(40)),
+            OkText = L["action.ok"],
+        });
+    }
 
     private void SetView(ViewMode v)
     {
@@ -211,6 +274,7 @@
 
     public void Dispose()
     {
+        LiveDesign.Changed -= OnLiveChanged;
         Session.Changed -= OnChanged;
         Session.SelectionChanged -= OnSelection;
         Run.Changed -= OnRun;

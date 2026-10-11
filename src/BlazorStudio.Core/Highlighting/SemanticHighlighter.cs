@@ -43,6 +43,7 @@ public sealed partial class SemanticHighlighter : IDisposable
         {
             _workspace?.Dispose();
             _docs.Clear();
+            _generated.Clear();
             var host = MefHostServices.Create(MefHostServices.DefaultAssemblies);
             _workspace = new AdhocWorkspace(host);
             var refs = PlatformReferences(targetFramework).Concat(referenceDlls).Distinct(StringComparer.OrdinalIgnoreCase)

@@ -91,6 +91,12 @@ public sealed class ComponentDefinition
     /// <summary>Zusätzliche Suchbegriffe.</summary>
     public string Keywords { get; init; } = "";
 
+    /// <summary>Beschreibung (z. B. aus der XML-Dokumentation der Bibliothek).</summary>
+    public string? Summary { get; init; }
+
+    /// <summary>Voller Typname (für die Live-Vorschau), falls bekannt.</summary>
+    public string? TypeName { get; init; }
+
     public ParameterDefinition? FindParameter(string name) =>
         Parameters.FirstOrDefault(p => string.Equals(p.Name, name, StringComparison.Ordinal));
 }

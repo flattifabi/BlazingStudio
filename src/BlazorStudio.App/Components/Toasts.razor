@@ -1,3 +1,4 @@
+@implements IDisposable
 @inject UiService Ui
 
 <div class="toasts">
@@ -11,3 +12,11 @@
         </div>
     }
 </div>
+
+@code {
+    protected override void OnInitialized() => Ui.Changed += OnChanged;
+
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+
+    public void Dispose() => Ui.Changed -= OnChanged;
+}

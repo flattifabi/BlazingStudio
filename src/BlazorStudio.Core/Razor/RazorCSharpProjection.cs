@@ -4,7 +4,18 @@ using System.Text.RegularExpressions;
 namespace BlazorStudio.Core.Razor;
 
 /// <summary>Ergebnis: generierte C#-Datei und die Cursorposition darin.</summary>
-public sealed record RazorProjection(string Code, int Position, RazorCSharpContext Context);
+/// <param name="Map">Abschnitte (generiert, original, Länge), die 1:1 aus der .razor-Datei stammen – für die Rückrechnung von Positionen.</param>
+public sealed record RazorProjection(string Code, int Position, RazorCSharpContext Context, IReadOnlyList<(int Gen, int Orig, int Len)>? Map = null)
+{
+    /// <summary>Generierte Position → Position in der .razor-Datei (null, wenn generierter Code).</summary>
+    public int? ToOriginal(int gen)
+    {
+        if (Map is null) return null;
+        foreach (var (g, o, l) in Map)
+            if (gen >= g && gen <= g + l) return o + (gen - g);
+        return null;
+    }
+}
 
 public enum RazorCSharpContext { CodeBlock, Expression, Statement, AttributeValue, Type, Using, Attribute }
 
@@ -342,15 +353,19 @@ public static partial class RazorCSharpProjection
         // Render-Methode
         sb.Append("private void __Render(global::Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder __builder)\n{\n");
         sb.Append(body);
+        var map = new List<(int Gen, int Orig, int Len)>();
         if (cursor.Value.Ctx is RazorCSharpContext.Expression or RazorCSharpContext.Statement or RazorCSharpContext.AttributeValue)
         {
             sb.Append(cursor.Value.Prefix);
             pos = sb.Length + cursor.Value.Snippet.Length;
+            var snippetStart = sb.Length;
             sb.Append(cursor.Value.Snippet);
             // Rest des aktuellen Bezeichners hinter dem Cursor
             var tail = offset;
             while (tail < text.Length && (char.IsLetterOrDigit(text[tail]) || text[tail] == '_')) tail++;
             sb.Append(text, offset, tail - offset);
+            if (offset - cursor.Value.Snippet.Length >= 0 && string.CompareOrdinal(text, offset - cursor.Value.Snippet.Length, cursor.Value.Snippet, 0, cursor.Value.Snippet.Length) == 0)
+                map.Add((snippetStart, offset - cursor.Value.Snippet.Length, cursor.Value.Snippet.Length + tail - offset));
             sb.Append("\n;");
         }
         for (var k = 0; k < open; k++) sb.Append("}\n");
@@ -363,10 +378,11 @@ public static partial class RazorCSharpProjection
             {
                 pos = sb.Length + (offset - s);
             }
+            map.Add((sb.Length, s, e - s));
             sb.Append(text, s, e - s).Append('\n');
         }
         sb.Append("}\n}\n");
-        return pos < 0 ? null : new RazorProjection(sb.ToString(), pos, cursor.Value.Ctx);
+        return pos < 0 ? null : new RazorProjection(sb.ToString(), pos, cursor.Value.Ctx, map);
     }
 
     /// <summary>Position und Text für ein neues @using in der .razor-Datei (nach dem letzten @using bzw. den Kopf-Direktiven).</summary>
@@ -494,4 +510,175 @@ public static partial class RazorCSharpProjection
 
     [GeneratedRegex(@"</?[A-Za-z][^<>]*>")]
     private static partial Regex MarkupTag();
+
+    /// <summary>Innenbereiche von @code { … } / @functions { … }.</summary>
+    public static List<(int Start, int End)> CodeRegions(string text)
+    {
+        var list = new List<(int, int)>();
+        foreach (Match m in CodeDirective().Matches(text))
+        {
+            var brace = m.Index + m.Length - 1;
+            var end = CSharpScanner.SkipBalanced(text, brace, '{', '}');
+            if (end < 0) end = text.Length;
+            if (list.Any(r => brace < r.Item2)) continue;
+            list.Add((brace + 1, Math.Max(brace + 1, end - 1)));
+        }
+        return list;
+    }
+
+    /// <summary>
+    /// Partielle Klasse einer .razor-Datei für Navigation, Verwendungen, Umbenennen und Farben:
+    /// @code-Blöcke, @inject-Eigenschaften und alle C#-Ausdrücke aus dem Markup (in einer Hilfsmethode).
+    /// Liefert Code und Abschnitts-Zuordnung.
+    /// </summary>
+    public static RazorProjection ClassFor(string text, string className, string ns, IEnumerable<string> usings, bool withBase = true)
+    {
+        var regions = CodeRegions(text);
+        bool InCode(int at) => regions.Any(r => at >= r.Start && at < r.End);
+        var allUsings = usings.ToList();
+        string? inherits = null, fileNs = null;
+        var implements = new List<string>();
+        var typeParams = new List<string>();
+        var injects = new List<(int Start, int Len)>();
+        foreach (Match m in Directive().Matches(text))
+        {
+            if (!LineStart(text, m.Index) || InCode(m.Index)) continue;
+            var vs = m.Index + m.Length;
+            var lineEnd = text.IndexOf('\n', vs);
+            if (lineEnd < 0) lineEnd = text.Length;
+            var raw = text[vs..lineEnd];
+            var value = raw.Trim();
+            switch (m.Groups[1].Value)
+            {
+                case "using": allUsings.Add(value); break;
+                case "inherits": inherits = value; break;
+                case "implements": implements.Add(value); break;
+                case "typeparam": typeParams.Add(value.Split(' ', 2)[0]); break;
+                case "namespace": fileNs = value; break;
+                case "inject": injects.Add((vs + (raw.Length - raw.TrimStart().Length), value.Length)); break;
+            }
+        }
+
+        var sb = new StringBuilder();
+        foreach (var u in allUsings.Where(u => u.Length > 0).Distinct()) sb.Append("using ").Append(u.TrimEnd(';')).Append(";\n");
+        sb.Append("namespace ").Append(fileNs ?? ns).Append("\n{\npublic partial class ").Append(className);
+        if (typeParams.Count > 0) sb.Append('<').Append(string.Join(", ", typeParams)).Append('>');
+        if (withBase)
+        {
+            var bases = new List<string> { inherits ?? "global::Microsoft.AspNetCore.Components.ComponentBase" };
+            bases.AddRange(implements);
+            sb.Append(" : ").Append(string.Join(", ", bases));
+        }
+        sb.Append("\n{\n");
+        var map = new List<(int Gen, int Orig, int Len)>();
+        foreach (var (start, len) in injects)
+        {
+            var value = text.Substring(start, len);
+            if (value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length < 2) continue;
+            sb.Append("[global::Microsoft.AspNetCore.Components.InjectAttribute] private ");
+            map.Add((sb.Length, start, len));
+            sb.Append(value).Append(" { get; set; } = default!;\n");
+        }
+        foreach (var (s, e) in regions)
+        {
+            map.Add((sb.Length, s, e - s));
+            sb.Append(text, s, e - s).Append('\n');
+        }
+        // C# aus dem Markup – nur für Symbolbezüge, Fehler darin sind egal
+        var spans = MarkupSpans(text).Where(x => !InCode(x.Start)).ToList();
+        if (spans.Count > 0)
+        {
+            sb.Append("#pragma warning disable\nprivate void __BsMarkup()\n{\n");
+            foreach (var (s, e, kind) in spans)
+            {
+                switch (kind)
+                {
+                    case MarkupSpanKind.Block:
+                        sb.Append("{\n"); map.Add((sb.Length, s + 1, Math.Max(0, e - s - 2))); sb.Append(text, s + 1, Math.Max(0, e - s - 2)).Append("\n}\n");
+                        break;
+                    case MarkupSpanKind.Head:
+                        map.Add((sb.Length, s, e - s)); sb.Append(text, s, e - s).Append(" { }\n");
+                        break;
+                    default:
+                        sb.Append("_ = "); map.Add((sb.Length, s, e - s)); sb.Append(text, s, e - s).Append(";\n");
+                        break;
+                }
+            }
+            sb.Append("}\n#pragma warning restore\n");
+        }
+        sb.Append("}\n}\n");
+        return new RazorProjection(sb.ToString(), 0, RazorCSharpContext.CodeBlock, map);
+    }
+
+    public enum MarkupSpanKind { Expression, Block, Head }
+
+    /// <summary>C#-Bereiche im Markup: implizite/explizite Ausdrücke, Blockköpfe (if/foreach …), @{ }, C#-Attributwerte.</summary>
+    public static IEnumerable<(int Start, int End, MarkupSpanKind Kind)> MarkupSpans(string text)
+    {
+        for (var i = 0; i < text.Length; i++)
+        {
+            if (text[i] != '@' || i + 1 >= text.Length) continue;
+            if (text[i + 1] == '@') { i++; continue; }
+            if (text[i + 1] == '*')
+            {
+                var close = text.IndexOf("*@", i + 2, StringComparison.Ordinal);
+                if (close < 0) yield break;
+                i = close + 1;
+                continue;
+            }
+            if (i > 0 && char.IsLetterOrDigit(text[i - 1])) continue; // E-Mail-Adresse
+            var c = text[i + 1];
+            if (c == '(' || c == '{')
+            {
+                var e = CSharpScanner.SkipBalanced(text, i + 1, c, c == '(' ? ')' : '}');
+                if (e > 0)
+                {
+                    yield return (i + 1, e, c == '{' ? MarkupSpanKind.Block : MarkupSpanKind.Expression);
+                    i = e - 1;
+                }
+                continue;
+            }
+            var hm = MarkupBlockHead().Match(text, i);
+            if (hm.Success && hm.Index == i)
+            {
+                var p = text.IndexOf('(', i);
+                var e = CSharpScanner.SkipBalanced(text, p, '(', ')');
+                if (e > 0) yield return (i + 1, e, MarkupSpanKind.Head);
+                continue;
+            }
+            if (CSharpScanner.IsIdentStart(c))
+            {
+                var e = CSharpScanner.SkipImplicitExpression(text, i + 1);
+                var word = text[(i + 1)..e];
+                if (word is "page" or "inject" or "using" or "rendermode" or "layout" or "inherits" or "implements" or "namespace" or "attribute"
+                    or "typeparam" or "code" or "functions" or "preservewhitespace" or "else" or "do" or "try" or "section") { i = e - 1; continue; }
+                // Attributwert: @onclick="Save", @bind-Value="Model.Name" → ganzen Wert nehmen
+                var ne = e;
+                while (ne < text.Length && (char.IsLetterOrDigit(text[ne]) || text[ne] is '-' or ':' or '_')) ne++;
+                var attr = MarkupAttrValueAfter().Match(text, ne);
+                if (attr.Success && attr.Index == ne)
+                {
+                    var q = attr.Groups[1].Value[0];
+                    var vs = ne + attr.Length;
+                    var ve = text.IndexOf(q, vs);
+                    if (ve > vs)
+                    {
+                        var v = text[vs..ve];
+                        if (v.StartsWith('@')) vs++;
+                        if (ve > vs) yield return (vs, ve, MarkupSpanKind.Expression);
+                        i = ve;
+                        continue;
+                    }
+                }
+                yield return (i + 1, e, MarkupSpanKind.Expression);
+                i = e - 1;
+            }
+        }
+    }
+
+    [GeneratedRegex(@"@(if|foreach|for|while|switch|using|lock)\s*\(")]
+    private static partial Regex MarkupBlockHead();
+
+    [GeneratedRegex(@"\G\s*=\s*([""'])")]
+    private static partial Regex MarkupAttrValueAfter();
 }

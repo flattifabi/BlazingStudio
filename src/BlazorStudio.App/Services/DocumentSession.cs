@@ -79,6 +79,9 @@ public sealed class DocumentSession
     /// <summary>Zeile, die der Code-Editor anzeigen soll (z. B. aus Problemen / Debugger).</summary>
     public int? RevealLine { get; set; }
 
+    /// <summary>Bereich (Offset, Länge), der im Editor markiert und angezeigt werden soll.</summary>
+    public (int Offset, int Length)? RevealSelection { get; set; }
+
     public event Action<ChangeOrigin>? Changed;
 
     public event Action? SelectionChanged;
