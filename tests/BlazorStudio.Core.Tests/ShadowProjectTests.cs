@@ -61,4 +61,47 @@ public class ShadowProjectTests
         Assert.False(File.Exists(sh.ToShadow(home)));
         Assert.True(File.Exists(Path.Combine(sh.ShadowDir, "wwwroot", "_bs", "design.js")));
     }
+
+    [Fact]
+    public void Points_references_outside_the_project_to_the_original()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "bs_shadowref_" + Guid.NewGuid().ToString("N")[..6]);
+        var app = Path.Combine(root, "src", "App");
+        Directory.CreateDirectory(app);
+        Directory.CreateDirectory(Path.Combine(root, "src", "Models"));
+        File.WriteAllText(Path.Combine(root, "Directory.Build.props"), "<Project><PropertyGroup><LangVersion>latest</LangVersion></PropertyGroup></Project>");
+        File.WriteAllText(Path.Combine(root, "nuget.config"), "<configuration><packageSources><add key=\"intern\" value=\"feed\" /><add key=\"org\" value=\"https://api.nuget.org/v3/index.json\" /></packageSources><packageSourceCredentials><intern><add key=\"Username\" value=\"max\" /></intern></packageSourceCredentials></configuration>");
+        File.WriteAllText(Path.Combine(app, "App.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <ItemGroup>
+                <ProjectReference Include="..\Models\Models.csproj" />
+                <Compile Include="..\Shared\*.cs" Link="Shared" Condition="Exists('..\Shared')" />
+                <Compile Include="Local\*.cs" />
+                <Reference Include="Legacy"><HintPath>$(MSBuildProjectDirectory)\..\lib\Legacy.dll</HintPath></Reference>
+              </ItemGroup>
+            </Project>
+            """);
+        var sh = new ShadowProject(Path.Combine(app, "App.csproj"), Path.Combine(root, "shadow"));
+        sh.SyncAll();
+
+        var csproj = File.ReadAllText(sh.ShadowProjectFile);
+        var models = Path.Combine(root, "src", "Models", "Models.csproj");
+        Assert.Contains($"Include=\"{models}\"", csproj);
+        Assert.Contains($"Include=\"{Path.Combine(root, "src", "Shared", "*.cs")}\"", csproj);
+        Assert.Contains($"Exists('{Path.Combine(root, "src", "Shared")}')", csproj);
+        Assert.Contains($"<HintPath>{Path.Combine(root, "src", "lib", "Legacy.dll")}</HintPath>", csproj);
+        Assert.Contains("Include=\"Local\\*.cs\"", csproj); // innerhalb des Projekts bleibt relativ
+
+        // Dateien von weiter oben: MSBuild per Import, nuget.config mit absoluten Ordnerpfaden
+        Assert.Contains($"<Import Project=\"{Path.Combine(root, "Directory.Build.props")}\" />", File.ReadAllText(Path.Combine(sh.ShadowDir, "Directory.Build.props")));
+        var nuget = File.ReadAllText(Path.Combine(sh.ShadowDir, "nuget.config"));
+        Assert.Contains($"value=\"{Path.Combine(root, "feed")}\"", nuget.Replace("value=\"feed\"", "value=\"feed\""));
+        Assert.Contains("value=\"max\"", nuget);
+        Assert.Contains("value=\"https://api.nuget.org/v3/index.json\"", nuget);
+
+        // zweiter Abgleich: nichts geändert, generierte Dateien bleiben
+        Assert.Equal(0, sh.SyncAll());
+        Assert.True(File.Exists(Path.Combine(sh.ShadowDir, "Directory.Build.props")));
+        Directory.Delete(root, true);
+    }
 }

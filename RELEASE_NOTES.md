@@ -1,8 +1,5 @@
-## Neu
-- **Fehler werden beim Tippen rot unterstrichen:** In `.cs`-Dateien und in den `@code`-Blöcken von `.razor`-Dateien prüft Roslyn den Code kurz nach einer Tipp-Pause – z. B. unbekannte Namen, falsche Typen, fehlende Member, falsche Argumente oder ein vergessenes Semikolon. Fährt man mit der Maus über die Unterstreichung, steht der Compilerfehler (z. B. `CS0103: …`) da.
-
-## Hinweis
-- Die Prüfung ist eine schnelle Annäherung, kein voller Build. Damit sie keine falschen Fehler anzeigt, gilt:
-  - Fehlen einer Datei Referenzen (Typ, Namespace oder Basisklasse aus einem Paket/einer RCL, die der Editor nicht kennt), werden dort nur Syntaxfehler angezeigt.
-  - C# im Markup (`@onclick`, `@bind`, Komponenten-Parameter) und `@code`-Blöcke mit Razor-Markup (RenderFragment-Vorlagen) werden nicht geprüft.
-  - Fehler wie fehlende Pakete oder doppelte Typen zeigt weiterhin der Build exakt an.
+## Behoben
+- **Echte Darstellung baut Projekte mit Verweisen außerhalb des Projektordners:** Für den Live-Designer wird das Projekt in einen eigenen Ordner gespiegelt. Relative Verweise zeigten dort ins Leere – z. B. `<ProjectReference Include="..\Models\Models.csproj" />`, was zu Fehlern wie „The type or namespace name 'Models' does not exist“ führte, obwohl alles da ist. Jetzt zeigen im Spiegel alle Verweise aus dem Projektordner hinaus auf die Originale:
+  - `ProjectReference`, `Compile`/`Content`/`None` mit `..\`, `HintPath`, `Import`, `Exists('..\…')`
+  - `Directory.Build.props`, `Directory.Build.targets` und `Directory.Packages.props` (Central Package Management) aus übergeordneten Ordnern werden eingebunden
+  - `nuget.config` (z. B. mit internen Feeds) und `global.json` aus übergeordneten Ordnern werden übernommen
