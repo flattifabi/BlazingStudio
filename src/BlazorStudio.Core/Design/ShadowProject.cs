@@ -76,6 +76,7 @@ public sealed partial class ShadowProject
             }
             else if (CopyFile(file, target)) changed++;
         }
+        changed += WriteParentBuildFiles(seen);
         // Gelöschte Dateien auch im Spiegel entfernen (bin/obj und die Brücke bleiben)
         foreach (var file in EnumerateSource(ShadowDir))
         {
@@ -147,6 +148,7 @@ public sealed partial class ShadowProject
     private bool IsTextToTransform(string path)
     {
         var name = Path.GetFileName(path);
+        if (IsBuildFile(name)) return true;
         if (name.Equals("Program.cs", StringComparison.OrdinalIgnoreCase) && string.Equals(Path.GetDirectoryName(Path.GetFullPath(path)), SourceDir, StringComparison.OrdinalIgnoreCase)) return true;
         return name.Equals("App.razor", StringComparison.OrdinalIgnoreCase) || name.Equals("index.html", StringComparison.OrdinalIgnoreCase) && path.Replace('\\', '/').Contains("/wwwroot/", StringComparison.OrdinalIgnoreCase);
     }
@@ -165,6 +167,7 @@ public sealed partial class ShadowProject
     private string Transform(string sourcePath, string text)
     {
         if (!IsTextToTransform(sourcePath)) return text;
+        if (IsBuildFile(Path.GetFileName(sourcePath))) return AbsolutizePaths(text, Path.GetDirectoryName(Path.GetFullPath(sourcePath))!);
         if (Path.GetFileName(sourcePath).Equals("Program.cs", StringComparison.OrdinalIgnoreCase))
         {
             if (text.Contains("Blazor Studio (Live-Designer)", StringComparison.Ordinal)) return text;
@@ -177,6 +180,141 @@ public sealed partial class ShadowProject
         var tag = "<script src=\"" + BridgeScript + "\"></script>";
         return text.Insert(body.Index, tag + "\n");
     }
+
+    // ------------------------------------------------------------------
+    // Pfade außerhalb des Projektordners: Der Spiegel liegt woanders, relative Verweise
+    // (ProjectReference ..\Lib, Directory.Build.props weiter oben, nuget.config …) müssen aufs Original zeigen.
+    // ------------------------------------------------------------------
+
+    /// <summary>MSBuild-/NuGet-Dateien, die von oben (Solution-Ordner) wirken.</summary>
+    private static readonly string[] ParentBuildFiles = { "Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props" };
+
+    private static bool IsBuildFile(string name) =>
+        name.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) || name.EndsWith(".props", StringComparison.OrdinalIgnoreCase)
+        || name.EndsWith(".targets", StringComparison.OrdinalIgnoreCase) || name.Equals("nuget.config", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Relative Pfade, die aus dem Projektordner hinausführen, durch absolute Pfade zum Original ersetzen:
+    /// Include/Update/Remove/Project-Attribute, HintPath, Exists('…') und value="…" (nuget.config).
+    /// Pfade innerhalb des Projekts bleiben relativ (sie liegen ja mit im Spiegel).
+    /// </summary>
+    public string AbsolutizePaths(string text, string fileDir)
+    {
+        string Fix(string value)
+        {
+            var parts = value.Split(';');
+            for (var i = 0; i < parts.Length; i++)
+            {
+                var part = parts[i];
+                var trimmed = part.Trim();
+                if (trimmed.Length == 0 || trimmed.Contains("://", StringComparison.Ordinal)) continue;
+                // $(MSBuildThisFileDirectory)/$(MSBuildProjectDirectory) zeigen im Spiegel auf den Spiegel
+                var dirProp = DirProperty().Match(trimmed);
+                string candidate;
+                if (dirProp.Success) candidate = Path.Combine(fileDir, trimmed[dirProp.Length..].TrimStart('\\', '/'));
+                else if (trimmed.Contains("$(", StringComparison.Ordinal) || trimmed.Contains("@(", StringComparison.Ordinal) || trimmed.Contains("%(", StringComparison.Ordinal) || Path.IsPathRooted(trimmed)) continue;
+                else candidate = Path.Combine(fileDir, trimmed);
+                string full;
+                try { full = Path.GetFullPath(candidate.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar)); }
+                catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { continue; }
+                if (IsInside(full)) continue; // liegt mit im Spiegel
+                parts[i] = part.Replace(trimmed, full, StringComparison.Ordinal);
+            }
+            return string.Join(';', parts);
+        }
+
+        // nuget.config: in <packageSources> ist jeder Wert eine URL oder ein Ordner (auch „feed“ ohne .\)
+        text = PackageSources().Replace(text, block => ValueAttribute().Replace(block.Value, m => m.Groups["pre"].Value + Fix(m.Groups["v"].Value) + m.Groups["q"].Value));
+        // sonst value="…" nur, wenn es nach Pfad aussieht – Benutzernamen, true/false usw. bleiben
+        text = PathAttribute().Replace(text, m =>
+        {
+            var v = m.Groups["v"].Value;
+            var isPath = m.Groups["name"].Value != "value" || v.StartsWith('.') || v.Contains('/') || v.Contains('\\');
+            return m.Groups["pre"].Value + (isPath ? Fix(v) : v) + m.Groups["q"].Value;
+        });
+        text = HintPath().Replace(text, m => m.Groups["pre"].Value + Fix(m.Groups["v"].Value) + m.Groups["post"].Value);
+        text = ExistsCall().Replace(text, m => m.Groups["pre"].Value + Fix(m.Groups["v"].Value) + "'");
+        return text;
+    }
+
+    private bool IsInside(string fullPath) =>
+        fullPath.Equals(SourceDir, StringComparison.OrdinalIgnoreCase)
+        || fullPath.StartsWith(SourceDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Directory.Build.props/.targets, Directory.Packages.props, nuget.config und global.json aus übergeordneten Ordnern:
+    /// MSBuild-Dateien werden im Spiegel per Import eingebunden, nuget.config/global.json mit absoluten Pfaden kopiert.
+    /// </summary>
+    private int WriteParentBuildFiles(HashSet<string> seen)
+    {
+        var changed = 0;
+        foreach (var name in ParentBuildFiles)
+        {
+            if (File.Exists(Path.Combine(SourceDir, name))) continue;
+            if (FindAbove(name) is not { } original) continue;
+            var target = Path.Combine(ShadowDir, name);
+            seen.Add(target);
+            if (WriteGenerated(target, $"<Project>\n  <!-- Blazor Studio (Live-Designer): {name} aus dem Original -->\n  <Import Project=\"{original}\" />\n</Project>\n")) changed++;
+        }
+        foreach (var name in new[] { "nuget.config", "global.json" })
+        {
+            if (FindIn(SourceDir, name) is not null || FindAbove(name) is not { } original) continue;
+            var target = Path.Combine(ShadowDir, Path.GetFileName(original));
+            seen.Add(target);
+            string text;
+            try { text = File.ReadAllText(original); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+            if (name == "nuget.config") text = AbsolutizePaths(text, Path.GetDirectoryName(original)!);
+            if (WriteGenerated(target, text)) changed++;
+        }
+        return changed;
+    }
+
+    private string? FindAbove(string name)
+    {
+        for (var d = Path.GetDirectoryName(SourceDir); !string.IsNullOrEmpty(d); d = Path.GetDirectoryName(d))
+            if (FindIn(d, name) is { } f) return f;
+        return null;
+    }
+
+    /// <summary>Datei im Ordner, Groß-/Kleinschreibung egal (nuget.config / NuGet.Config).</summary>
+    private static string? FindIn(string dir, string name)
+    {
+        try { return Directory.EnumerateFiles(dir).FirstOrDefault(f => Path.GetFileName(f).Equals(name, StringComparison.OrdinalIgnoreCase)); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    private static bool WriteGenerated(string path, string content)
+    {
+        try
+        {
+            if (File.Exists(path) && File.ReadAllText(path) == content) return false;
+            File.WriteAllText(path, content, new UTF8Encoding(false));
+            return true;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    [GeneratedRegex(@"(?<pre>\b(?<name>Include|Update|Remove|Project|value)\s*=\s*(?<q>[""']))(?<v>[^""']*)\k<q>")]
+    private static partial Regex PathAttribute();
+
+    [GeneratedRegex(@"<packageSources\b.*?</packageSources\s*>", RegexOptions.Singleline | RegexOptions.IgnoreCase)]
+    private static partial Regex PackageSources();
+
+    [GeneratedRegex(@"(?<pre>\bvalue\s*=\s*(?<q>[""']))(?<v>[^""']*)\k<q>")]
+    private static partial Regex ValueAttribute();
+
+    [GeneratedRegex(@"(?<pre><HintPath>)(?<v>[^<]*)(?<post></HintPath>)", RegexOptions.IgnoreCase)]
+    private static partial Regex HintPath();
+
+    [GeneratedRegex(@"(?<pre>\bExists\(\s*')(?<v>[^']*)'")]
+    private static partial Regex ExistsCall();
+
+    [GeneratedRegex(@"^\$\((?:MSBuildThisFileDirectory|MSBuildProjectDirectory)\)", RegexOptions.IgnoreCase)]
+    private static partial Regex DirProperty();
 
     /// <summary>Design-Brücke: Skript sowie eine Vorschau-Seite für Komponenten ohne @page (auch für Tooltips).</summary>
     public void InstallBridge()
