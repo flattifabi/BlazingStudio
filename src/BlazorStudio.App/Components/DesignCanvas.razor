@@ -6,6 +6,14 @@
 @inject LiveDesignService Live
 
 <div class="stage" @ref="_stage">
+    @if (_fallbackFor is not null && IsActive && Live.Enabled)
+    {
+        <div class="live-fallback">
+            <Icon Name="info" Class="sm" />
+            <span>@(_fallbackNoBridge ? L["live.fallbackNoBridge"] : L["live.fallbackEmpty"])</span>
+            <button class="btn sm" @onclick="RetryLive">@L["live.retry"]</button>
+        </div>
+    }
     <div class="stage-inner">
         <div class="frame @(LiveUrl is not null ? "live" : "") @(Session.DeviceWidth == 0 ? "full" : "") @(Session.DevicePreset is "phone" or "tablet" ? "dev-" + Session.DevicePreset + (Session.DeviceLandscape ? " land" : "") : "")"
              style="@(Session.DeviceWidth > 0 ? $"--device:{Session.DeviceWidth}px;" : "")zoom:@((Session.Zoom / 100.0).ToString(CultureInfo.InvariantCulture))">
@@ -75,7 +83,9 @@
             if (!IsActive || !Live.Enabled || Session.Kind != DocumentKind.Razor || Session.Doc is null) return null;
             if (Live.State is not (LiveDesignState.Ready or LiveDesignState.Rebuilding)) return null;
             if (Live.ProjectFile is null || Live.PrefixFor(Session.Path) is null) return null;
-            return Live.UrlFor(Session);
+            var url = Live.UrlFor(Session);
+            // Die echte App zeigt diese Seite nicht (Anmeldung, Fehlerseite, Ladeanzeige …) → Schnellansicht, dort klappt Auswählen/Ziehen
+            return url is not null && url == _fallbackFor ? null : url;
         }
     }
 
@@ -142,6 +152,7 @@
         var url = LiveUrl;
         if (url is null)
         {
+            _watchCts?.Cancel();
             if (_liveAttachedFor is not null)
             {
                 _liveAttachedFor = null;
@@ -152,6 +163,7 @@
         var prefix = Live.PrefixFor(Session.Path)!;
         if (_liveAttachedFor != url)
         {
+            WatchLive(url);
             _ref ??= DotNetObjectReference.Create(this);
             await JS.InvokeVoidAsync("studio.liveDesign.attach", _frame, _ref, prefix, Session.Zoom / 100.0);
             _liveAttachedFor = url;
@@ -189,9 +201,85 @@
         return id is not null && prefix is not null && id.StartsWith(prefix, StringComparison.Ordinal) ? id[prefix.Length..] : id;
     }
 
+    // ------------------------------------------------------------------
+    // Rückfall auf die Schnellansicht, wenn die echte App die Seite nicht zeigt
+    // ------------------------------------------------------------------
+
+    private string? _fallbackFor;
+    private bool _fallbackNoBridge;
+    private bool _liveBridgeSeen;
+    private int _liveOwn = -1;
+    private CancellationTokenSource? _watchCts;
+
+    /// <summary>
+    /// Beobachtet den iframe: meldet sich die Brücke nicht (z. B. Umleitung auf eine Anmeldeseite) oder zeigt die App
+    /// keinen einzigen Knoten der Datei, wechselt der Designer auf die Schnellansicht.
+    /// </summary>
+    private void WatchLive(string url)
+    {
+        _watchCts?.Cancel();
+        var cts = _watchCts = new CancellationTokenSource();
+        _liveBridgeSeen = false;
+        _liveOwn = -1;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var emptySince = DateTime.MaxValue;
+                var waited = 0;
+                while (!cts.IsCancellationRequested)
+                {
+                    await Task.Delay(500, cts.Token);
+                    // Neu-Build oder „mit der App interagieren“: nicht eingreifen
+                    if (Live.State != LiveDesignState.Ready || Live.Interact) { emptySince = DateTime.MaxValue; continue; }
+                    waited += 500;
+                    if (!_liveBridgeSeen)
+                    {
+                        if (waited >= 30000) { await FallBackAsync(url, noBridge: true); return; }
+                        continue;
+                    }
+                    if (_liveOwn == 0)
+                    {
+                        if (emptySince == DateTime.MaxValue) emptySince = DateTime.UtcNow;
+                        else if (DateTime.UtcNow - emptySince > TimeSpan.FromSeconds(6)) { await FallBackAsync(url, noBridge: false); return; }
+                    }
+                    else emptySince = DateTime.MaxValue;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        });
+    }
+
+    private Task FallBackAsync(string url, bool noBridge) => InvokeAsync(() =>
+    {
+        if (_disposed || _liveAttachedFor != url) return;
+        _fallbackFor = url;
+        _fallbackNoBridge = noBridge;
+        _lastRenderKey = null;
+        StateHasChanged();
+    });
+
+    private void RetryLive()
+    {
+        _fallbackFor = null;
+        _lastRenderKey = null;
+        _liveAttachedFor = null;
+        StateHasChanged();
+    }
+
+    [JSInvokable]
+    public void OnLiveCoverage(int own)
+    {
+        _liveBridgeSeen = true;
+        _liveOwn = own;
+    }
+
     [JSInvokable]
     public Task OnLiveReady(string url)
     {
+        _liveBridgeSeen = true;
         _liveSelected = null;
         _liveState = null;
         return InvokeAsync(SyncLiveAsync);
@@ -247,6 +335,7 @@
     public async ValueTask DisposeAsync()
     {
         _disposed = true;
+        _watchCts?.Cancel();
         Session.Changed -= OnChanged;
         Session.SelectionChanged -= OnSelectionChanged;
         Ws.PreviewCssChanged -= OnCssChanged;

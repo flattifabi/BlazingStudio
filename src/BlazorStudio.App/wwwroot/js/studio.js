@@ -310,6 +310,7 @@
         }
         case 'key': studio._shortcutDotnet?.invokeMethodAsync('OnShortcut', m.combo); break;
         case 'hit-result': st.lastOk = m.ok; break;
+        case 'coverage': d.invokeMethodAsync('OnLiveCoverage', m.own); break;
       }
     }
   });
