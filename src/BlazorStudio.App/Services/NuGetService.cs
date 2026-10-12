@@ -26,7 +26,13 @@ public sealed class NuGetService
         _host = host;
     }
 
-    public NuGetClient Client { get; } = new();
+    public NuGetClient Client { get; } = new() { EmptyQueryOnNuGetOrg = "blazor" };
+
+    /// <summary>Alle Paketquellen aus den NuGet.Config-Dateien (auch deaktivierte).</summary>
+    public IReadOnlyList<PackageSource> Sources => Client.Sources;
+
+    /// <summary>Quelle, in der gesucht wird (null = alle aktiven).</summary>
+    public string? SourceFilter { get; set; }
 
     public IReadOnlyList<InstalledInfo> Installed => _installed;
 
@@ -53,6 +59,7 @@ public sealed class NuGetService
     /// <summary>PackageReferences lesen und (optional) neueste Versionen nachschlagen.</summary>
     public async Task RefreshAsync(bool checkUpdates = true)
     {
+        ReloadSources();
         if (Csproj is null)
         {
             _installed = new List<InstalledInfo>();
@@ -82,6 +89,49 @@ public sealed class NuGetService
             _installed = _installed.Select(i => i with { Latest = latest.GetValueOrDefault(i.Id) ?? i.Latest }).ToList();
             Changed?.Invoke();
         });
+    }
+
+    // ------------------------------------------------------------------
+    // Paketquellen
+    // ------------------------------------------------------------------
+
+    /// <summary>Quellen neu einlesen (Benutzer-Config + nuget.config vom Projekt aufwärts).</summary>
+    public void ReloadSources()
+    {
+        var sources = NuGetConfig.Load(Csproj is null ? null : Path.GetDirectoryName(Csproj));
+        if (!sources.SequenceEqual(Client.Sources)) Client.Sources = sources;
+        if (SourceFilter is not null && !sources.Any(s => s.Enabled && s.Name.Equals(SourceFilter, StringComparison.OrdinalIgnoreCase))) SourceFilter = null;
+    }
+
+    /// <summary>Quelle steht in der Benutzer-Config (bearbeitbar) statt in einer nuget.config des Projekts.</summary>
+    public static bool IsUserSource(PackageSource s) =>
+        s.ConfigFile is null || string.Equals(Path.GetFullPath(s.ConfigFile), Path.GetFullPath(NuGetConfig.UserConfigPath), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Quelle speichern. Bei Quellen aus einer Projekt-Config nur die Zugangsdaten (Benutzer-Config).</summary>
+    public void SaveSource(PackageSource source, string? password, string? previousName)
+    {
+        var existing = Sources.FirstOrDefault(s => s.Name.Equals(previousName ?? source.Name, StringComparison.OrdinalIgnoreCase));
+        NuGetConfig.Save(source, password, previousName, credentialsOnly: existing is not null && !IsUserSource(existing));
+        AfterSourcesChanged();
+    }
+
+    public void DeleteSource(string name)
+    {
+        NuGetConfig.Delete(name);
+        AfterSourcesChanged();
+    }
+
+    public void SetSourceEnabled(string name, bool enabled)
+    {
+        NuGetConfig.SetEnabled(name, enabled);
+        AfterSourcesChanged();
+    }
+
+    private void AfterSourcesChanged()
+    {
+        ReloadSources();
+        Changed?.Invoke();
+        _ = RefreshAsync();
     }
 
     public Task<bool> InstallAsync(string id, string? version) =>
