@@ -226,7 +226,9 @@ kbd { font: 11px var(--mono); color: var(--muted); border: 1px solid var(--line-
 
 /* ---------- Die gerenderte Seite ---------- */
 .bs-page { background: #fff; color: #1e2235; border-radius: 8px; box-shadow: 0 0 0 1px rgba(0,0,0,.06), var(--shadow); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  min-height: 420px; position: relative; container-type: inline-size; user-select: none; overflow: hidden; text-align: left; }
+  min-height: 420px; position: relative; container-type: inline-size; user-select: none; overflow: hidden; text-align: left;
+  /* Overlays der Vorschau (position: fixed, hoher z-index) bleiben in der Seite statt das Studio zu überdecken */
+  contain: layout paint; isolation: isolate; }
 .bs-page *, .bs-page *::before, .bs-page *::after { box-sizing: border-box; }
 .bs-page [data-bs-id] { cursor: default; }
 .bs-page [data-bs-empty] { min-height: 46px; outline: 1px dashed color-mix(in srgb, var(--ac) 55%, #9aa0b4); outline-offset: -1px; background: color-mix(in srgb, var(--ac) 5%, transparent); }

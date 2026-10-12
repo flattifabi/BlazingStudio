@@ -37,7 +37,8 @@ public sealed partial class CanvasRenderer(Workspace ws, Localizer l)
         IReadOnlyDictionary<string, string>? Params,
         IReadOnlyList<DesignNode>? ChildContent,
         int Depth,
-        ImmutableStack<string> Components);
+        ImmutableStack<string> Components,
+        string Code = "");
 
     private sealed class ImmutableStack<T>(IEnumerable<T> items)
     {
@@ -71,10 +72,37 @@ public sealed partial class CanvasRenderer(Workspace ws, Localizer l)
             var n = nodes[i];
             // In Vorschauen von Komponenten nur den ersten Zweig eines if/else zeigen
             if (!ctx.Selectable && n.IsContinuation) continue;
+            // … außer der erste Zweig hängt an einem Zustand, der beim ersten Rendern aus ist (Lightbox, Dialog …):
+            // dann den else-Zweig bzw. nichts zeigen
+            if (!ctx.Selectable && IsOffInitially(n, ctx))
+            {
+                if (i + 1 < nodes.Count && nodes[i + 1] is { Kind: NodeKind.Control, IsContinuation: true } alt)
+                {
+                    b.OpenRegion(i);
+                    RenderNode(b, alt, ctx);
+                    b.CloseRegion();
+                }
+                continue;
+            }
             b.OpenRegion(i);
             RenderNode(b, n, ctx);
             b.CloseRegion();
         }
+    }
+
+    /// <summary>
+    /// <c>@if (_lightboxOpen)</c>, <c>@if (IsVisible)</c>: ein bool-Feld/-Parameter ohne Startwert ist beim ersten Rendern
+    /// false – solche Blöcke (oft Overlays mit position: fixed) gehören nicht in die Vorschau.
+    /// </summary>
+    private static bool IsOffInitially(DesignNode n, Ctx ctx)
+    {
+        if (n.Kind != NodeKind.Control || n.Name != "if") return false;
+        var m = FlagIfRegex().Match(n.Text.Trim());
+        if (!m.Success) return false;
+        var flag = m.Groups[1].Value;
+        if (ctx.Params?.TryGetValue(flag, out var value) == true) return value.Trim() == "false";
+        // mit Startwert true (Feld oder Parameter) bleibt der Block sichtbar
+        return !Regex.IsMatch(ctx.Code, $@"\b{Regex.Escape(flag)}\b[^;{{}}]*(=|=>)\s*true\s*;");
     }
 
     private void RenderNode(RenderTreeBuilder b, DesignNode n, Ctx ctx)
@@ -362,7 +390,8 @@ public sealed partial class CanvasRenderer(Workspace ws, Localizer l)
                 b.AddContent(13, name);
                 b.CloseElement();
             }
-            var inner = new Ctx(false, parameters, ctx.Selectable ? n.Children : ctx.ChildContent, ctx.Depth + 1, ctx.Components.Push(name));
+            var code = string.Join("\n", preview.CodeBlocks.Concat(preview.AllNodes().Where(x => x.Kind == NodeKind.Code).Select(x => x.Text)));
+            var inner = new Ctx(false, parameters, ctx.Selectable ? n.Children : ctx.ChildContent, ctx.Depth + 1, ctx.Components.Push(name), code);
             // Kinder ohne @ChildContent-Platzhalter trotzdem zeigen
             var usesChild = preview.AllNodes().Any(x => x.Kind == NodeKind.Expression && x.Text.Contains("ChildContent", StringComparison.Ordinal));
             RenderChildren(b, preview.Root.Children, inner);
@@ -621,4 +650,7 @@ public sealed partial class CanvasRenderer(Workspace ws, Localizer l)
 
     [GeneratedRegex(@"@[A-Za-z_][\w.]*(?:\([^)]*\))?")]
     private static partial Regex ImplicitExprRegex();
+
+    [GeneratedRegex(@"^if\s*\(\s*(?:this\.)?([A-Za-z_]\w*)(?:\s*(?:==\s*true|is\s+true))?\s*\)$")]
+    private static partial Regex FlagIfRegex();
 }
