@@ -47,6 +47,8 @@ public sealed class NuGetClient
     private readonly HttpClient _http;
     private readonly ConcurrentDictionary<string, Task<Endpoints>> _endpoints = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, (DateTime Stamp, Nuspec? Spec)> _local = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (DateTime Built, Task<List<Nuspec>> Index)> _folders = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan FolderIndexAge = TimeSpan.FromSeconds(30);
     private IReadOnlyList<PackageSource> _sources = new[] { NuGetConfig.NuGetOrg };
 
     public NuGetClient(HttpClient? http = null)
@@ -173,7 +175,8 @@ public sealed class NuGetClient
         {
             try
             {
-                return (Source: s, Items: await SearchSourceAsync(s, query, prerelease, take, ct), Error: (Exception?)null);
+                // je Quelle im Hintergrund: Ordner, DNS, große Antworten blockieren sonst die Oberfläche
+                return (Source: s, Items: await Task.Run(() => SearchSourceAsync(s, query, prerelease, take, ct), ct), Error: (Exception?)null);
             }
             catch (Exception e) when (IsFeedError(e, ct))
             {
@@ -192,7 +195,7 @@ public sealed class NuGetClient
 
     private async Task<IReadOnlyList<PackageSummary>> SearchSourceAsync(PackageSource source, string query, bool prerelease, int take, CancellationToken ct)
     {
-        if (source.IsLocal) return SearchLocal(source, query, prerelease, take);
+        if (source.IsLocal) return await SearchLocalAsync(source, query, prerelease, take, ct);
         var ep = await GetEndpointsAsync(source, ct);
         if (ep.Search is null) return Array.Empty<PackageSummary>();
         if (query.Length == 0 && source.IsNuGetOrg) query = EmptyQueryOnNuGetOrg;
@@ -210,7 +213,7 @@ public sealed class NuGetClient
     {
         var tasks = Active(source).Select(async s =>
         {
-            try { return await GetSourceVersionsAsync(s, id, ct); }
+            try { return await Task.Run(() => GetSourceVersionsAsync(s, id, ct), ct); }
             catch (Exception e) when (IsFeedError(e, ct)) { return Array.Empty<string>(); }
         });
         var list = (await Task.WhenAll(tasks)).SelectMany(v => v)
@@ -223,7 +226,7 @@ public sealed class NuGetClient
 
     private async Task<IReadOnlyList<string>> GetSourceVersionsAsync(PackageSource source, string id, CancellationToken ct)
     {
-        if (source.IsLocal) return LocalPackages(source).Where(p => p.Id.Equals(id, StringComparison.OrdinalIgnoreCase)).Select(p => p.Version).ToList();
+        if (source.IsLocal) return (await LocalPackagesAsync(source, ct)).Where(p => p.Id.Equals(id, StringComparison.OrdinalIgnoreCase)).Select(p => p.Version).ToList();
         var ep = await GetEndpointsAsync(source, ct);
         if (ep.FlatContainer is null) return Array.Empty<string>();
         var json = await GetStringAsync(source, $"{ep.FlatContainer}{id.ToLowerInvariant()}/index.json", ct);
@@ -240,7 +243,7 @@ public sealed class NuGetClient
         {
             try
             {
-                if (await GetNuspecAsync(s, id, version, ct) is { } spec)
+                if (await Task.Run(() => GetNuspecAsync(s, id, version, ct), ct) is { } spec)
                     return new PackageDetails(spec.Id, spec.Version, spec.Description, spec.Authors, spec.ProjectUrl,
                         spec.LicenseExpression, spec.LicenseUrl, null, spec.Dependencies);
             }
@@ -252,7 +255,7 @@ public sealed class NuGetClient
     private async Task<Nuspec?> GetNuspecAsync(PackageSource source, string id, string version, CancellationToken ct)
     {
         if (source.IsLocal)
-            return LocalPackages(source).FirstOrDefault(p => p.Id.Equals(id, StringComparison.OrdinalIgnoreCase) && CompareVersions(p.Version, version) == 0);
+            return (await LocalPackagesAsync(source, ct)).FirstOrDefault(p => p.Id.Equals(id, StringComparison.OrdinalIgnoreCase) && CompareVersions(p.Version, version) == 0);
         var ep = await GetEndpointsAsync(source, ct);
         if (ep.FlatContainer is null) return null;
         var lid = id.ToLowerInvariant();
@@ -268,8 +271,8 @@ public sealed class NuGetClient
     // Lokale Ordner-Feeds (*.nupkg, flach oder id/version/)
     // ------------------------------------------------------------------
 
-    private IReadOnlyList<PackageSummary> SearchLocal(PackageSource source, string query, bool prerelease, int take) =>
-        LocalPackages(source)
+    private async Task<IReadOnlyList<PackageSummary>> SearchLocalAsync(PackageSource source, string query, bool prerelease, int take, CancellationToken ct) =>
+        (await LocalPackagesAsync(source, ct))
             .Where(p => prerelease || !p.Version.Contains('-'))
             .Where(p => query.Length == 0 || p.Id.Contains(query, StringComparison.OrdinalIgnoreCase)
                         || p.Description?.Contains(query, StringComparison.OrdinalIgnoreCase) == true
@@ -281,11 +284,29 @@ public sealed class NuGetClient
             .Select(p => new PackageSummary(p.Id, p.Version, p.Description, p.Authors, 0, p.IconUrl, p.ProjectUrl, false, p.Tags, source.Name))
             .ToList();
 
-    private List<Nuspec> LocalPackages(PackageSource source)
+    /// <summary>
+    /// Paketliste eines Ordners – im Hintergrund gelesen (Netzlaufwerke, große Ordner blockieren sonst die Oberfläche)
+    /// und für kurze Zeit für alle Abfragen geteilt, statt pro Paket neu zu scannen.
+    /// </summary>
+    private Task<List<Nuspec>> LocalPackagesAsync(PackageSource source, CancellationToken ct)
     {
-        if (!Directory.Exists(source.Url)) throw new DirectoryNotFoundException(source.Url);
+        Task<List<Nuspec>> index;
+        lock (_folders)
+        {
+            var now = DateTime.UtcNow;
+            if (!_folders.TryGetValue(source.Url, out var entry)
+                || (entry.Index.IsCompleted && now - entry.Built > FolderIndexAge))
+                _folders[source.Url] = entry = (now, Task.Run(() => IndexFolder(source.Url)));
+            index = entry.Index;
+        }
+        return index.WaitAsync(ct);
+    }
+
+    private List<Nuspec> IndexFolder(string folder)
+    {
+        if (!Directory.Exists(folder)) throw new DirectoryNotFoundException(folder);
         var result = new List<Nuspec>();
-        foreach (var file in Directory.EnumerateFiles(source.Url, "*.nupkg", SearchOption.AllDirectories))
+        foreach (var file in NupkgFiles(folder, depth: 2))
         {
             if (file.EndsWith(".symbols.nupkg", StringComparison.OrdinalIgnoreCase)) continue;
             var stamp = File.GetLastWriteTimeUtc(file);
@@ -294,6 +315,25 @@ public sealed class NuGetClient
             if (cached.Spec is not null) result.Add(cached.Spec);
         }
         return result;
+    }
+
+    /// <summary>Layouts von NuGet-Ordnerfeeds: flach oder id/version/ – tiefer wird nicht gesucht.</summary>
+    private static IEnumerable<string> NupkgFiles(string dir, int depth)
+    {
+        string[] files, dirs;
+        try
+        {
+            files = Directory.GetFiles(dir, "*.nupkg");
+            dirs = depth > 0 ? Directory.GetDirectories(dir) : Array.Empty<string>();
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            yield break;
+        }
+        foreach (var f in files) yield return f;
+        foreach (var d in dirs)
+            foreach (var f in NupkgFiles(d, depth - 1))
+                yield return f;
     }
 
     private static Nuspec? ReadNupkg(string file)
