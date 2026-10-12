@@ -211,6 +211,8 @@ kbd { font: 11px var(--mono); color: var(--muted); border: 1px solid var(--line-
 .surface.live .hs, .surface.live .codepane { display: none; }
 .stage { background: var(--canvas); position: relative; min-height: 0; overflow: auto; margin: 0 6px; border-radius: 10px 10px 0 0; border: 1px solid var(--line); border-bottom: 0; }
 .surface.design .stage, .surface.live .stage { border-radius: 10px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
+.live-fallback { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px; margin: 8px 8px 0; padding: 7px 10px; border-radius: 8px; font-size: 12px; color: var(--text-2); background: color-mix(in srgb, var(--ac) 12%, var(--pop)); border: 1px solid color-mix(in srgb, var(--ac) 30%, transparent); }
+.live-fallback span { flex: 1; min-width: 0; }
 .stage-inner { display: flex; justify-content: center; padding: 30px 30px 40px; min-height: 100%; min-width: max-content; }
 .frame { position: relative; width: var(--device, 100%); max-width: none; transition: width .35s cubic-bezier(.2,.8,.2,1); height: max-content; transform-origin: top center; }
 .frame.full { width: 100%; min-width: 320px; }

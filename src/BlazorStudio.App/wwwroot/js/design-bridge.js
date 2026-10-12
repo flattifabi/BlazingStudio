@@ -411,6 +411,7 @@
     if (!m || m.__bsHost !== 1) return;
     switch (m.type) {
       case 'config':
+        if ((m.prefix ?? cfg.prefix) !== cfg.prefix) lastOwn = -1;
         Object.assign(cfg, { prefix: m.prefix ?? cfg.prefix, interact: !!m.interact });
         document.documentElement.classList.toggle('bs-interact', cfg.interact);
         markEmpty();
@@ -490,6 +491,17 @@
   setInterval(markEmpty, 400);
   // Für Tests/Fehlersuche (Designer-Brücke läuft nur im Schatten-Projekt)
   window.__bsDebug = { computeDrop, nodeOf, rectsOf, slotHostOf, slotsOf };
+
+  // Wie viele Knoten der aktiven Datei zeigt die App? (0 = Anmeldung, Fehlerseite, Ladeanzeige … → Designer nimmt die Schnellansicht)
+  let lastOwn = -1;
+  setInterval(() => {
+    if (!cfg.prefix) return;
+    let n = 0;
+    for (const el of document.querySelectorAll('[data-bs-id], template[data-bs-s]')) {
+      if (own(el.dataset.bsId || el.dataset.bsS)) { n++; break; }
+    }
+    if (n !== lastOwn) { lastOwn = n; post({ type: 'coverage', own: n }); }
+  }, 700);
 
   post({ type: 'ready', url: location.pathname + location.search });
   // Nach Blazor-Navigation (enhanced nav) erneut melden
