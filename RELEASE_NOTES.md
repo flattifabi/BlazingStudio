@@ -1,3 +1,8 @@
-## Behoben
-- **NuGet-Manager friert nicht mehr ein:** Lokale Ordner-Paketquellen (z. B. Netzlaufwerke oder große Paketordner aus der `NuGet.Config`) wurden beim Öffnen auf dem UI-Thread durchsucht – beim Update-Check sogar einmal pro installiertem Paket. Das führte zu „Keine Rückmeldung“. Alle Quellen werden jetzt im Hintergrund abgefragt; ein Ordner wird nur einmal gelesen und kurz zwischengespeichert, und nur in den üblichen Feed-Layouts (flach bzw. `id/version/`) durchsucht.
-- **Designer: Overlays aus Komponenten-Bibliotheken (RCL) überdecken nicht mehr das ganze Studio.** Lightboxen, Dialoge und Menüs mit `position: fixed` bleiben in der Seiten-Vorschau. In Vorschauen eingebetteter Komponenten werden Blöcke wie `@if (_lightboxOpen)` ausgeblendet – der Zustand ist beim ersten Rendern aus (ein `@else`-Zweig wird stattdessen gezeigt).
+## Neu
+- **Fehler werden beim Tippen rot unterstrichen:** In `.cs`-Dateien und in den `@code`-Blöcken von `.razor`-Dateien prüft Roslyn den Code kurz nach einer Tipp-Pause – z. B. unbekannte Namen, falsche Typen, fehlende Member, falsche Argumente oder ein vergessenes Semikolon. Fährt man mit der Maus über die Unterstreichung, steht der Compilerfehler (z. B. `CS0103: …`) da.
+
+## Hinweis
+- Die Prüfung ist eine schnelle Annäherung, kein voller Build. Damit sie keine falschen Fehler anzeigt, gilt:
+  - Fehlen einer Datei Referenzen (Typ, Namespace oder Basisklasse aus einem Paket/einer RCL, die der Editor nicht kennt), werden dort nur Syntaxfehler angezeigt.
+  - C# im Markup (`@onclick`, `@bind`, Komponenten-Parameter) und `@code`-Blöcke mit Razor-Markup (RenderFragment-Vorlagen) werden nicht geprüft.
+  - Fehler wie fehlende Pakete oder doppelte Typen zeigt weiterhin der Build exakt an.

@@ -27,6 +27,7 @@
     private IReadOnlyList<CodeMember> _members = Array.Empty<CodeMember>();
     private string? _lastDebugKey;
     private string? _selectionFromCursor;
+    private CancellationTokenSource? _diagCts;
 
     protected override async Task OnAfterRenderAsync(bool first)
     {
@@ -46,6 +47,7 @@
             Run.Changed += OnRunChanged;
             Settings.Changed += OnSettingsChanged;
             await UpdateMarkersAsync();
+            ScheduleCodeDiagnostics(0);
             await UpdateDebugAsync(force: true);
             await HighlightSelectionAsync(reveal: false);
             StateHasChanged();
@@ -67,6 +69,7 @@
         if (_disposed) return;
         if (origin != ChangeOrigin.Code) await JS.InvokeVoidAsync("studio.monaco.setValue", _id, Session.Text);
         await UpdateMarkersAsync();
+        ScheduleCodeDiagnostics(700);
         await HighlightSelectionAsync(reveal: false);
         if (Session.RevealLine is not null || Session.RevealSelection is not null) StateHasChanged();
     });
@@ -102,6 +105,48 @@
         if (!_created || Session.Kind != DocumentKind.Razor) return;
         var markers = Session.Diagnostics.Select(d => new { start = d.Start, end = d.End, error = d.IsError, message = L.Diagnostic(d) }).ToList();
         await JS.InvokeVoidAsync("studio.monaco.setMarkers", _id, markers);
+    }
+
+    /// <summary>C#-Fehler (Roslyn) nach einer Tipp-Pause im Hintergrund prüfen und rot unterstreichen.</summary>
+    private void ScheduleCodeDiagnostics(int delayMs)
+    {
+        if (Session.Kind is not (DocumentKind.CSharp or DocumentKind.Razor)) return;
+        _diagCts?.Cancel();
+        var cts = _diagCts = new CancellationTokenSource();
+        var text = Session.Text;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                if (delayMs > 0) await Task.Delay(delayMs, cts.Token);
+                await Ws.EnsureHighlighterAsync();
+                IReadOnlyList<BlazorStudio.Core.Highlighting.CodeDiagnostic> found;
+                if (Session.Kind == DocumentKind.CSharp)
+                {
+                    found = await Ws.Highlighter.DiagnoseCSharpAsync(Session.Path, text, cts.Token);
+                }
+                else
+                {
+                    var (cls, ns, usings) = Ws.RazorContextFor(Session);
+                    var proj = BlazorStudio.Core.Razor.RazorCSharpProjection.ClassFor(text, cls, ns, usings);
+                    found = await Ws.Highlighter.DiagnoseRazorAsync(Session.Path, text, proj, cts.Token);
+                }
+                if (cts.IsCancellationRequested) return;
+                var markers = found.Select(d => new { start = d.Start, end = d.End, error = true, message = $"{d.Code}: {d.Message}" }).ToList();
+                await InvokeAsync(async () =>
+                {
+                    if (!_created || _disposed || cts.IsCancellationRequested) return;
+                    await JS.InvokeVoidAsync("studio.monaco.setMarkers", _id, markers, "csharp");
+                });
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception e) when (e is not OutOfMemoryException)
+            {
+                // Prüfung ist nur eine Hilfe – Fehler darin dürfen den Editor nicht stören
+            }
+        });
     }
 
     private async Task UpdateBuildMarkersAsync()
@@ -382,6 +427,7 @@
     public async ValueTask DisposeAsync()
     {
         _disposed = true;
+        _diagCts?.Cancel();
         Session.Changed -= OnSessionChanged;
         Session.SelectionChanged -= OnSelectionChanged;
         Debug.Changed -= OnDebugChanged;

@@ -1194,11 +1194,11 @@
       if (reveal) h.editor.revealRangeInCenterIfOutsideViewport(new monaco.Range(a.lineNumber, 1, b.lineNumber, 1), 1);
     },
 
-    setMarkers(id, markers) {
+    setMarkers(id, markers, owner) {
       const h = editors.get(id);
       if (!h) return;
       const model = h.editor.getModel();
-      monaco.editor.setModelMarkers(model, 'blazor-studio', markers.map(m => {
+      monaco.editor.setModelMarkers(model, owner || 'blazor-studio', markers.map(m => {
         const a = model.getPositionAt(m.start), b = model.getPositionAt(Math.max(m.end, m.start + 1));
         return {
           severity: m.error ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning,
