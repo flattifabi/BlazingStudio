@@ -1,0 +1,263 @@
+@* Paketquellen verwalten: eigene/interne Feeds mit Benutzer und Passwort, lokale Ordner, an/aus. *@
+@inherits StudioComponent
+@inject NuGetService NuGet
+@inject IHostBridge Host
+
+<div class="ng-body">
+    <div class="ng-list scroll">
+        <div class="ng-srchead">
+            <span class="dim">@L["nuget.sourcesHint"]</span>
+            <button class="btn sm" @onclick="New"><Icon Name="plus" />@L["nuget.addSource"]</button>
+        </div>
+        @foreach (var src in NuGet.Sources)
+        {
+            var it = src;
+            var user = NuGetService.IsUserSource(it);
+            <div class="ng-item @(_form?.Original == it.Name ? "on" : "") @(it.Enabled ? "" : "off")" @onclick="() => Edit(it)">
+                <div class="ng-srcic"><Icon Name="@IconFor(it)" /></div>
+                <div class="ng-main">
+                    <div class="ng-title">
+                        <b>@it.Name</b>
+                        @if (it.HasCredentials) { <span class="dim" title="@L.F("nuget.signedInAs", it.UserName ?? "")"><Icon Name="lock" Class="sm" /></span> }
+                        @if (!user) { <span class="ng-tag" title="@it.ConfigFile">@L["nuget.fromProject"]</span> }
+                    </div>
+                    <div class="ng-desc mono">@it.Url</div>
+                </div>
+                <div class="ng-side" @onclick:stopPropagation="true">
+                    <label class="check" style="margin:0" title="@L["nuget.sourceEnabled"]">
+                        <input type="checkbox" checked="@it.Enabled" @onchange="e => Toggle(it, e.Value is true)" />
+                    </label>
+                </div>
+            </div>
+        }
+    </div>
+
+    <div class="ng-detail scroll">
+        @if (_form is { } f)
+        {
+            <h3 style="margin:0 0 14px;font-size:16px">@(f.Original is null ? L["nuget.newSource"] : f.Original)</h3>
+            @if (f.CredentialsOnly)
+            {
+                <div class="hint" style="margin-bottom:12px"><Icon Name="info" /><span>@L.F("nuget.credentialsOnly", f.ConfigFile ?? "")</span></div>
+            }
+            <div class="row2">
+                <label>@L["nuget.sourceName"]</label>
+                <div class="f"><input value="@f.Name" spellcheck="false" disabled="@f.CredentialsOnly" placeholder="@L["nuget.sourceNamePh"]" @oninput="e => f.Name = e.Value?.ToString() ?? string.Empty" /></div>
+            </div>
+            <div class="row2">
+                <label>@L["nuget.sourceUrl"]</label>
+                <div style="display:flex;gap:6px">
+                    <div class="f" style="flex:1"><input class="mono" value="@f.Url" spellcheck="false" disabled="@f.CredentialsOnly" placeholder="https://…/v3/index.json" @oninput="e => f.Url = e.Value?.ToString() ?? string.Empty" /></div>
+                    @if (!f.CredentialsOnly) { <button class="ibtn" title="@L["nuget.pickFolder"]" @onclick="PickFolder"><Icon Name="folder" /></button> }
+                </div>
+            </div>
+            @if (!IsLocal(f.Url))
+            {
+                <div class="row2">
+                    <label>@L["nuget.userName"]</label>
+                    <div class="f"><input value="@f.UserName" spellcheck="false" autocomplete="off" @oninput="e => f.UserName = e.Value?.ToString() ?? string.Empty" /></div>
+                </div>
+                <div class="row2">
+                    <label>@L["nuget.password"]</label>
+                    <div class="f">
+                        <input type="password" value="@f.Password" autocomplete="new-password"
+                               placeholder="@(f.HasPassword && !f.ClearPassword ? L["nuget.passwordKept"] : "")"
+                               @oninput="e => { f.Password = e.Value?.ToString() ?? string.Empty; f.ClearPassword = false; }" />
+                        @if (f.HasPassword && !f.ClearPassword && f.Password.Length == 0)
+                        {
+                            <button class="ibtn" style="width:22px;height:22px" title="@L["nuget.removePassword"]" @onclick="() => f.ClearPassword = true"><Icon Name="x" Class="sm" /></button>
+                        }
+                    </div>
+                </div>
+                <div class="hint" style="margin-bottom:12px"><Icon Name="info" /><span>@L["nuget.patHint"]</span></div>
+            }
+
+            @if (_test is { } t)
+            {
+                <div class="hint @(t.Ok ? "" : "warn")" style="margin-bottom:12px"><Icon Name="@(t.Ok ? "checkc" : "alert")" /><span>@t.Text</span></div>
+            }
+
+            <div class="ng-actions" style="grid-template-columns:1fr 1fr">
+                <button class="btn" disabled="@(_testing || f.Url.Trim().Length == 0)" @onclick="Test">
+                    <Icon Name="@(_testing ? "refresh" : "zap")" Class="@(_testing ? "spin" : "")" />@L["nuget.testSource"]
+                </button>
+                <button class="btn ac" disabled="@(!CanSave(f))" @onclick="Save"><Icon Name="save" />@L["action.save"]</button>
+                @if (f.Original is not null && !f.CredentialsOnly)
+                {
+                    <button class="btn" style="grid-column:1 / -1" @onclick="Delete"><Icon Name="trash" />@L["nuget.removeSource"]</button>
+                }
+            </div>
+            <div class="hint" style="margin-top:14px"><Icon Name="lock" /><span>@L.F("nuget.storedIn", NuGetConfig.UserConfigPath)</span></div>
+        }
+        else
+        {
+            <div class="ins-empty"><Icon Name="database" /><span>@L["nuget.pickSource"]</span></div>
+        }
+    </div>
+</div>
+
+@code {
+    private sealed class Form
+    {
+        public string? Original { get; init; }
+        public string Name { get; set; } = "";
+        public string Url { get; set; } = "";
+        public string UserName { get; set; } = "";
+        public string Password { get; set; } = "";
+        public bool HasPassword { get; init; }
+        public bool ClearPassword { get; set; }
+        public bool CredentialsOnly { get; init; }
+        public string? ConfigFile { get; init; }
+    }
+
+    private sealed record TestResult(bool Ok, string Text);
+
+    private Form? _form;
+    private TestResult? _test;
+    private bool _testing;
+
+    public static string IconFor(PackageSource s) => s.IsLocal ? "folder" : s.IsNuGetOrg ? "globe" : "database";
+
+    /// <summary>Verständliche Meldung für Fehler einer Quelle.</summary>
+    public static string Describe(Localizer l, Exception e) => e switch
+    {
+        HttpRequestException { StatusCode: System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden } => l["nuget.errAuth"],
+        HttpRequestException { StatusCode: System.Net.HttpStatusCode.NotFound } => l["nuget.errNotFound"],
+        InvalidDataException => l["nuget.errNotV3"],
+        DirectoryNotFoundException => l["nuget.errFolder"],
+        TaskCanceledException => l["nuget.errTimeout"],
+        _ => e.Message,
+    };
+
+    private static bool IsLocal(string url) => new PackageSource("x", url.Trim()).IsLocal && url.Trim().Length > 0;
+
+    private bool CanSave(Form f) =>
+        f.Name.Trim().Length > 0 && f.Url.Trim().Length > 0
+        && (f.CredentialsOnly || !NuGet.Sources.Any(s => s.Name.Equals(f.Name.Trim(), StringComparison.OrdinalIgnoreCase)
+                                                         && !s.Name.Equals(f.Original, StringComparison.OrdinalIgnoreCase)));
+
+    private void New()
+    {
+        _form = new Form();
+        _test = null;
+    }
+
+    private void Edit(PackageSource s)
+    {
+        _form = new Form
+        {
+            Original = s.Name,
+            Name = s.Name,
+            Url = s.Url,
+            UserName = s.UserName ?? "",
+            HasPassword = !string.IsNullOrEmpty(s.Password),
+            CredentialsOnly = !NuGetService.IsUserSource(s),
+            ConfigFile = s.ConfigFile,
+        };
+        _test = null;
+    }
+
+    private PackageSource ToSource(Form f)
+    {
+        var original = f.Original is null ? null : NuGet.Sources.FirstOrDefault(s => s.Name == f.Original);
+        var password = f.Password.Length > 0 ? f.Password : f.ClearPassword ? null : original?.Password;
+        var local = IsLocal(f.Url);
+        return new PackageSource(f.Name.Trim(), f.Url.Trim())
+        {
+            Enabled = original?.Enabled ?? true,
+            UserName = local || f.UserName.Trim().Length == 0 ? null : f.UserName.Trim(),
+            Password = local ? null : password,
+        };
+    }
+
+    private async Task PickFolder()
+    {
+        if (_form is null) return;
+        var dir = await Host.PickFolderAsync(L["nuget.pickFolder"], IsLocal(_form.Url) ? _form.Url : null);
+        if (dir is null) return;
+        _form.Url = dir;
+        if (_form.Name.Trim().Length == 0) _form.Name = Path.GetFileName(dir.TrimEnd('\\', '/'));
+        StateHasChanged();
+    }
+
+    private async Task Test()
+    {
+        if (_form is null) return;
+        _testing = true;
+        _test = null;
+        StateHasChanged();
+        try
+        {
+            await NuGet.Client.TestAsync(ToSource(_form));
+            _test = new TestResult(true, L["nuget.testOk"]);
+        }
+        catch (Exception e) when (e is HttpRequestException or InvalidDataException or IOException or TaskCanceledException or UriFormatException or InvalidOperationException or System.Text.Json.JsonException)
+        {
+            _test = new TestResult(false, Describe(L, e));
+        }
+        finally
+        {
+            _testing = false;
+        }
+    }
+
+    private void Save()
+    {
+        if (_form is not { } f || !CanSave(f)) return;
+        var source = ToSource(f);
+        var password = f.Password.Length > 0 ? f.Password : f.ClearPassword || IsLocal(f.Url) ? "" : null;
+        try
+        {
+            NuGet.SaveSource(source, password, f.Original);
+            Ui.ShowToast(L.F("nuget.sourceSaved", source.Name), ToastKind.Success);
+            if (NuGet.Sources.FirstOrDefault(s => s.Name.Equals(source.Name, StringComparison.OrdinalIgnoreCase)) is { } saved) Edit(saved);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+        {
+            Ui.ShowToast(e.Message, ToastKind.Error, 7000);
+        }
+    }
+
+    private async Task Delete()
+    {
+        if (_form?.Original is not { } name) return;
+        var r = await Ui.ShowDialogAsync(new DialogRequest
+        {
+            Title = L.F("nuget.removeSourceTitle", name),
+            Message = L["nuget.removeSourceText"],
+            OkText = L["nuget.removeSource"],
+            CancelText = L["action.cancel"],
+            Danger = true,
+        });
+        if (r != DialogResult.Ok) return;
+        try
+        {
+            NuGet.DeleteSource(name);
+            _form = null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+        {
+            Ui.ShowToast(e.Message, ToastKind.Error, 7000);
+        }
+    }
+
+    private void Toggle(PackageSource s, bool enabled)
+    {
+        try
+        {
+            NuGet.SetSourceEnabled(s.Name, enabled);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or System.Xml.XmlException)
+        {
+            Ui.ShowToast(e.Message, ToastKind.Error, 7000);
+        }
+    }
+
+    protected override void OnStudioInitialized() => NuGet.Changed += Refresh;
+
+    public override void Dispose()
+    {
+        base.Dispose();
+        NuGet.Changed -= Refresh;
+    }
+}

@@ -1,6 +1,11 @@
-using System.Net.Http.Json;
+using System.Collections.Concurrent;
+using System.IO.Compression;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Xml;
 using System.Xml.Linq;
 
 namespace BlazorStudio.Core.NuGet;
@@ -14,7 +19,8 @@ public sealed record PackageSummary(
     string? IconUrl,
     string? ProjectUrl,
     bool Verified,
-    IReadOnlyList<string> Tags);
+    IReadOnlyList<string> Tags,
+    string? Source = null);
 
 public sealed record PackageDetails(
     string Id,
@@ -29,94 +35,302 @@ public sealed record PackageDetails(
 
 public sealed record InstalledPackage(string Id, string Version);
 
-/// <summary>Zugriff auf nuget.org (V3-API) und die PackageReferences einer .csproj.</summary>
+/// <summary>Fehler einer einzelnen Quelle – die anderen Quellen liefern trotzdem Ergebnisse.</summary>
+public sealed record SourceError(PackageSource Source, Exception Error);
+
+public sealed record SearchResults(IReadOnlyList<PackageSummary> Packages, IReadOnlyList<SourceError> Errors);
+
+/// <summary>Zugriff auf NuGet-Feeds (V3-API, auch mit Benutzer/Passwort, oder lokale Ordner) und die PackageReferences einer .csproj.</summary>
 public sealed class NuGetClient
 {
-    private const string ServiceIndex = "https://api.nuget.org/v3/index.json";
-    private const string FlatContainer = "https://api.nuget.org/v3-flatcontainer/";
-
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     private readonly HttpClient _http;
-    private string? _searchUrl;
-    private string? _registrationUrl;
+    private readonly ConcurrentDictionary<string, Task<Endpoints>> _endpoints = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, (DateTime Stamp, Nuspec? Spec)> _local = new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<PackageSource> _sources = new[] { NuGetConfig.NuGetOrg };
 
     public NuGetClient(HttpClient? http = null)
     {
-        _http = http ?? new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+        _http = http ?? new HttpClient(new HttpClientHandler { AutomaticDecompression = System.Net.DecompressionMethods.All }) { Timeout = TimeSpan.FromSeconds(20) };
         if (!_http.DefaultRequestHeaders.UserAgent.Any())
             _http.DefaultRequestHeaders.UserAgent.ParseAdd("BlazorStudio/1.0");
     }
 
-    private async Task EnsureServicesAsync(CancellationToken ct)
+    /// <summary>Alle konfigurierten Quellen (auch deaktivierte).</summary>
+    public IReadOnlyList<PackageSource> Sources
     {
-        if (_searchUrl is not null) return;
-        using var doc = JsonDocument.Parse(await _http.GetStringAsync(ServiceIndex, ct));
-        foreach (var r in doc.RootElement.GetProperty("resources").EnumerateArray())
+        get => _sources;
+        set
         {
-            var type = r.GetProperty("@type").GetString() ?? "";
-            var id = r.GetProperty("@id").GetString();
-            if (_searchUrl is null && type.StartsWith("SearchQueryService", StringComparison.Ordinal)) _searchUrl = id;
-            if (_registrationUrl is null && type.StartsWith("RegistrationsBaseUrl/3.6.0", StringComparison.Ordinal)) _registrationUrl = id;
+            _sources = value;
+            _endpoints.Clear();
         }
-        _searchUrl ??= "https://azuresearch-usnc.nuget.org/query";
-        _registrationUrl ??= "https://api.nuget.org/v3/registration5-gz-semver2/";
     }
 
-    public async Task<IReadOnlyList<PackageSummary>> SearchAsync(string query, bool prerelease, int take = 30, CancellationToken ct = default)
+    /// <summary>Suchbegriff für nuget.org, wenn das Suchfeld leer ist (eigene Feeds listen dann alle Pakete).</summary>
+    public string EmptyQueryOnNuGetOrg { get; set; } = "";
+
+    private sealed record Endpoints(string? Search, string? FlatContainer);
+
+    private IEnumerable<PackageSource> Active(string? source) =>
+        _sources.Where(s => s.Enabled && (source is null || s.Name.Equals(source, StringComparison.OrdinalIgnoreCase)));
+
+    // ------------------------------------------------------------------
+    // HTTP
+    // ------------------------------------------------------------------
+
+    private async Task<HttpResponseMessage> SendAsync(PackageSource source, string url, CancellationToken ct)
     {
-        await EnsureServicesAsync(ct);
-        var url = $"{_searchUrl}?q={Uri.EscapeDataString(query)}&take={take}&prerelease={(prerelease ? "true" : "false")}&semVerLevel=2.0.0";
-        var result = await _http.GetFromJsonAsync<SearchResponse>(url, Json, ct);
+        using var req = new HttpRequestMessage(HttpMethod.Get, url);
+        // Zugangsdaten nur an den Host des Feeds schicken
+        if (source.HasCredentials && Uri.TryCreate(source.Url, UriKind.Absolute, out var feed) && Uri.TryCreate(url, UriKind.Absolute, out var target)
+            && feed.Host.Equals(target.Host, StringComparison.OrdinalIgnoreCase))
+        {
+            var token = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{source.UserName}:{source.Password}"));
+            req.Headers.Authorization = new AuthenticationHeaderValue("Basic", token);
+        }
+        return await _http.SendAsync(req, ct);
+    }
+
+    /// <summary>Inhalt als Text; null bei 404.</summary>
+    private async Task<string?> GetStringAsync(PackageSource source, string url, CancellationToken ct)
+    {
+        using var r = await SendAsync(source, url, ct);
+        if (r.StatusCode == HttpStatusCode.NotFound) return null;
+        r.EnsureSuccessStatusCode();
+        return await r.Content.ReadAsStringAsync(ct);
+    }
+
+    private Task<Endpoints> GetEndpointsAsync(PackageSource source, CancellationToken ct)
+    {
+        var task = _endpoints.GetOrAdd(source.Url, _ => LoadEndpointsAsync(source, CancellationToken.None));
+        // fehlgeschlagene Abfragen nicht cachen (z. B. falsches Passwort, offline)
+        if (task.IsFaulted || task.IsCanceled) _endpoints.TryRemove(new KeyValuePair<string, Task<Endpoints>>(source.Url, task));
+        return task.WaitAsync(ct);
+    }
+
+    private async Task<Endpoints> LoadEndpointsAsync(PackageSource source, CancellationToken ct)
+    {
+        try
+        {
+            var json = await GetStringAsync(source, source.Url, ct)
+                       ?? throw new HttpRequestException("404 (Not Found)", null, HttpStatusCode.NotFound);
+            JsonDocument doc;
+            try { doc = JsonDocument.Parse(json); }
+            catch (JsonException) { throw new InvalidDataException("No NuGet V3 service index (…/v3/index.json)."); }
+            using (doc)
+            {
+                if (!doc.RootElement.TryGetProperty("resources", out var resources) || resources.ValueKind != JsonValueKind.Array)
+                    throw new InvalidDataException("No NuGet V3 service index (…/v3/index.json).");
+                string? search = null, flat = null;
+                foreach (var r in resources.EnumerateArray())
+                {
+                    var type = r.TryGetProperty("@type", out var t) ? t.ValueKind == JsonValueKind.Array ? string.Join(" ", t.EnumerateArray().Select(x => x.GetString())) : t.GetString() ?? "" : "";
+                    var id = r.TryGetProperty("@id", out var i) ? i.GetString() : null;
+                    if (id is null) continue;
+                    if (search is null && type.StartsWith("SearchQueryService", StringComparison.Ordinal)) search = id;
+                    if (flat is null && type.StartsWith("PackageBaseAddress/3.0.0", StringComparison.Ordinal)) flat = id.EndsWith('/') ? id : id + "/";
+                }
+                if (source.IsNuGetOrg)
+                {
+                    search ??= "https://azuresearch-usnc.nuget.org/query";
+                    flat ??= "https://api.nuget.org/v3-flatcontainer/";
+                }
+                return new Endpoints(search, flat);
+            }
+        }
+        catch
+        {
+            _endpoints.TryRemove(source.Url, out _);
+            throw;
+        }
+    }
+
+    /// <summary>Verbindung zu einer Quelle prüfen (Service-Index bzw. Ordner). Wirft bei Fehlern.</summary>
+    public async Task TestAsync(PackageSource source, CancellationToken ct = default)
+    {
+        if (source.IsLocal)
+        {
+            if (!Directory.Exists(source.Url)) throw new DirectoryNotFoundException(source.Url);
+            return;
+        }
+        _endpoints.TryRemove(source.Url, out _);
+        await LoadEndpointsAsync(source, ct);
+        _endpoints.TryRemove(source.Url, out _);
+    }
+
+    // ------------------------------------------------------------------
+    // Suche, Versionen, Details
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Sucht in allen aktiven Quellen (oder nur in <paramref name="source"/>). Eigene Feeds zuerst, doppelte Ids
+    /// erscheinen nur einmal. Fehler einzelner Quellen landen in <see cref="SearchResults.Errors"/>.
+    /// </summary>
+    public async Task<SearchResults> SearchAsync(string query, bool prerelease, int take = 30, string? source = null, CancellationToken ct = default)
+    {
+        var tasks = Active(source).Select(async s =>
+        {
+            try
+            {
+                return (Source: s, Items: await SearchSourceAsync(s, query, prerelease, take, ct), Error: (Exception?)null);
+            }
+            catch (Exception e) when (IsFeedError(e, ct))
+            {
+                return (Source: s, Items: (IReadOnlyList<PackageSummary>)Array.Empty<PackageSummary>(), Error: e);
+            }
+        });
+        var results = await Task.WhenAll(tasks);
+        ct.ThrowIfCancellationRequested();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var packages = results.OrderBy(r => r.Source.IsNuGetOrg)
+            .SelectMany(r => r.Items)
+            .Where(p => seen.Add(p.Id))
+            .ToList();
+        return new SearchResults(packages, results.Where(r => r.Error is not null).Select(r => new SourceError(r.Source, r.Error!)).ToList());
+    }
+
+    private async Task<IReadOnlyList<PackageSummary>> SearchSourceAsync(PackageSource source, string query, bool prerelease, int take, CancellationToken ct)
+    {
+        if (source.IsLocal) return SearchLocal(source, query, prerelease, take);
+        var ep = await GetEndpointsAsync(source, ct);
+        if (ep.Search is null) return Array.Empty<PackageSummary>();
+        if (query.Length == 0 && source.IsNuGetOrg) query = EmptyQueryOnNuGetOrg;
+        var url = $"{ep.Search}{(ep.Search.Contains('?') ? '&' : '?')}q={Uri.EscapeDataString(query)}&take={take}&prerelease={(prerelease ? "true" : "false")}&semVerLevel=2.0.0";
+        var json = await GetStringAsync(source, url, ct);
+        var result = json is null ? null : JsonSerializer.Deserialize<SearchResponse>(json, Json);
         return result?.Data.Select(d => new PackageSummary(
             d.Id, d.Version, d.Description, d.Authors is { Count: > 0 } a ? string.Join(", ", a) : null,
-            d.TotalDownloads, d.IconUrl, d.ProjectUrl, d.Verified, d.Tags ?? new List<string>())).ToList()
+            d.TotalDownloads, d.IconUrl, d.ProjectUrl, d.Verified, d.Tags ?? new List<string>(), source.Name)).ToList()
             ?? (IReadOnlyList<PackageSummary>)Array.Empty<PackageSummary>();
     }
 
-    /// <summary>Alle veröffentlichten Versionen, neueste zuerst.</summary>
-    public async Task<IReadOnlyList<string>> GetVersionsAsync(string id, bool prerelease, CancellationToken ct = default)
+    /// <summary>Alle veröffentlichten Versionen aus allen aktiven Quellen (oder nur <paramref name="source"/>), neueste zuerst.</summary>
+    public async Task<IReadOnlyList<string>> GetVersionsAsync(string id, bool prerelease, string? source = null, CancellationToken ct = default)
     {
-        var url = $"{FlatContainer}{id.ToLowerInvariant()}/index.json";
-        try
+        var tasks = Active(source).Select(async s =>
         {
-            var r = await _http.GetFromJsonAsync<VersionsResponse>(url, Json, ct);
-            var list = (r?.Versions ?? new List<string>()).Where(v => prerelease || !v.Contains('-')).ToList();
-            list.Sort((a, b) => CompareVersions(b, a));
-            return list;
-        }
-        catch (HttpRequestException)
-        {
-            return Array.Empty<string>();
-        }
+            try { return await GetSourceVersionsAsync(s, id, ct); }
+            catch (Exception e) when (IsFeedError(e, ct)) { return Array.Empty<string>(); }
+        });
+        var list = (await Task.WhenAll(tasks)).SelectMany(v => v)
+            .Where(v => prerelease || !v.Contains('-'))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        list.Sort((a, b) => CompareVersions(b, a));
+        return list;
+    }
+
+    private async Task<IReadOnlyList<string>> GetSourceVersionsAsync(PackageSource source, string id, CancellationToken ct)
+    {
+        if (source.IsLocal) return LocalPackages(source).Where(p => p.Id.Equals(id, StringComparison.OrdinalIgnoreCase)).Select(p => p.Version).ToList();
+        var ep = await GetEndpointsAsync(source, ct);
+        if (ep.FlatContainer is null) return Array.Empty<string>();
+        var json = await GetStringAsync(source, $"{ep.FlatContainer}{id.ToLowerInvariant()}/index.json", ct);
+        return json is null ? Array.Empty<string>() : JsonSerializer.Deserialize<VersionsResponse>(json, Json)?.Versions ?? new List<string>();
     }
 
     public async Task<string?> GetLatestAsync(string id, bool prerelease, CancellationToken ct = default) =>
-        (await GetVersionsAsync(id, prerelease, ct)).FirstOrDefault();
+        (await GetVersionsAsync(id, prerelease, ct: ct)).FirstOrDefault();
 
-    /// <summary>Metadaten aus der .nuspec der Version.</summary>
-    public async Task<PackageDetails?> GetDetailsAsync(string id, string version, CancellationToken ct = default)
+    /// <summary>Metadaten aus der .nuspec der Version – zuerst aus <paramref name="source"/>, sonst aus den übrigen Quellen.</summary>
+    public async Task<PackageDetails?> GetDetailsAsync(string id, string version, string? source = null, CancellationToken ct = default)
     {
+        foreach (var s in Active(null).OrderBy(s => source is null || !s.Name.Equals(source, StringComparison.OrdinalIgnoreCase)))
+        {
+            try
+            {
+                if (await GetNuspecAsync(s, id, version, ct) is { } spec)
+                    return new PackageDetails(spec.Id, spec.Version, spec.Description, spec.Authors, spec.ProjectUrl,
+                        spec.LicenseExpression, spec.LicenseUrl, null, spec.Dependencies);
+            }
+            catch (Exception e) when (IsFeedError(e, ct)) { }
+        }
+        return null;
+    }
+
+    private async Task<Nuspec?> GetNuspecAsync(PackageSource source, string id, string version, CancellationToken ct)
+    {
+        if (source.IsLocal)
+            return LocalPackages(source).FirstOrDefault(p => p.Id.Equals(id, StringComparison.OrdinalIgnoreCase) && CompareVersions(p.Version, version) == 0);
+        var ep = await GetEndpointsAsync(source, ct);
+        if (ep.FlatContainer is null) return null;
         var lid = id.ToLowerInvariant();
-        var lv = version.ToLowerInvariant();
+        var xml = await GetStringAsync(source, $"{ep.FlatContainer}{lid}/{version.ToLowerInvariant()}/{lid}.nuspec", ct);
+        return xml is null ? null : ParseNuspec(XDocument.Parse(xml));
+    }
+
+    private static bool IsFeedError(Exception e, CancellationToken ct) =>
+        e is HttpRequestException or JsonException or IOException or InvalidDataException or UnauthorizedAccessException or XmlException or NotSupportedException
+        || (e is TaskCanceledException && !ct.IsCancellationRequested);
+
+    // ------------------------------------------------------------------
+    // Lokale Ordner-Feeds (*.nupkg, flach oder id/version/)
+    // ------------------------------------------------------------------
+
+    private IReadOnlyList<PackageSummary> SearchLocal(PackageSource source, string query, bool prerelease, int take) =>
+        LocalPackages(source)
+            .Where(p => prerelease || !p.Version.Contains('-'))
+            .Where(p => query.Length == 0 || p.Id.Contains(query, StringComparison.OrdinalIgnoreCase)
+                        || p.Description?.Contains(query, StringComparison.OrdinalIgnoreCase) == true
+                        || p.Tags.Any(t => t.Equals(query, StringComparison.OrdinalIgnoreCase)))
+            .GroupBy(p => p.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderByDescending(p => p.Version, Comparer<string>.Create(CompareVersions)).First())
+            .OrderBy(p => p.Id, StringComparer.OrdinalIgnoreCase)
+            .Take(take)
+            .Select(p => new PackageSummary(p.Id, p.Version, p.Description, p.Authors, 0, p.IconUrl, p.ProjectUrl, false, p.Tags, source.Name))
+            .ToList();
+
+    private List<Nuspec> LocalPackages(PackageSource source)
+    {
+        if (!Directory.Exists(source.Url)) throw new DirectoryNotFoundException(source.Url);
+        var result = new List<Nuspec>();
+        foreach (var file in Directory.EnumerateFiles(source.Url, "*.nupkg", SearchOption.AllDirectories))
+        {
+            if (file.EndsWith(".symbols.nupkg", StringComparison.OrdinalIgnoreCase)) continue;
+            var stamp = File.GetLastWriteTimeUtc(file);
+            if (!_local.TryGetValue(file, out var cached) || cached.Stamp != stamp)
+                _local[file] = cached = (stamp, ReadNupkg(file));
+            if (cached.Spec is not null) result.Add(cached.Spec);
+        }
+        return result;
+    }
+
+    private static Nuspec? ReadNupkg(string file)
+    {
         try
         {
-            var xml = await _http.GetStringAsync($"{FlatContainer}{lid}/{lv}/{lid}.nuspec", ct);
-            var doc = XDocument.Parse(xml);
-            var meta = doc.Root?.Elements().FirstOrDefault(e => e.Name.LocalName == "metadata");
-            if (meta is null) return null;
-            string? Get(string name) => meta.Elements().FirstOrDefault(e => e.Name.LocalName == name)?.Value.Trim();
-            var license = meta.Elements().FirstOrDefault(e => e.Name.LocalName == "license");
-            var deps = meta.Descendants().Where(e => e.Name.LocalName == "dependency")
-                .Select(e => $"{e.Attribute("id")?.Value} {e.Attribute("version")?.Value}".Trim())
-                .Distinct().Take(40).ToList();
-            return new PackageDetails(
-                Get("id") ?? id, Get("version") ?? version, Get("description"), Get("authors"), Get("projectUrl"),
-                license?.Attribute("type")?.Value == "expression" ? license.Value.Trim() : null, Get("licenseUrl"), null, deps);
+            using var zip = ZipFile.OpenRead(file);
+            var entry = zip.Entries.FirstOrDefault(e => !e.FullName.Contains('/') && e.Name.EndsWith(".nuspec", StringComparison.OrdinalIgnoreCase));
+            if (entry is null) return null;
+            using var stream = entry.Open();
+            return ParseNuspec(XDocument.Load(stream));
         }
-        catch (HttpRequestException)
+        catch (Exception e) when (e is IOException or InvalidDataException or XmlException or UnauthorizedAccessException)
         {
             return null;
         }
+    }
+
+    private sealed record Nuspec(
+        string Id, string Version, string? Description, string? Authors, string? ProjectUrl, string? IconUrl,
+        string? LicenseExpression, string? LicenseUrl, IReadOnlyList<string> Tags, IReadOnlyList<string> Dependencies);
+
+    private static Nuspec? ParseNuspec(XDocument doc)
+    {
+        var meta = doc.Root?.Elements().FirstOrDefault(e => e.Name.LocalName == "metadata");
+        if (meta is null) return null;
+        string? Get(string name) => meta.Elements().FirstOrDefault(e => e.Name.LocalName == name)?.Value.Trim();
+        var id = Get("id");
+        var version = Get("version");
+        if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(version)) return null;
+        var license = meta.Elements().FirstOrDefault(e => e.Name.LocalName == "license");
+        var deps = meta.Descendants().Where(e => e.Name.LocalName == "dependency")
+            .Select(e => $"{e.Attribute("id")?.Value} {e.Attribute("version")?.Value}".Trim())
+            .Distinct().Take(40).ToList();
+        var tags = (Get("tags") ?? "").Split(new[] { ' ', ',', ';' }, StringSplitOptions.RemoveEmptyEntries);
+        return new Nuspec(id, version, Get("description"), Get("authors"), Get("projectUrl"), Get("iconUrl"),
+            license?.Attribute("type")?.Value == "expression" ? license.Value.Trim() : null, Get("licenseUrl"), tags, deps);
     }
 
     // ------------------------------------------------------------------

@@ -35,19 +35,38 @@
                        @oninput="OnQuery" @onkeydown="OnKey" />
                 @if (_loading) { <Icon Name="refresh" Class="sm dim spin" /> }
             </div>
+            @if (NuGet.Sources.Count(x => x.Enabled) > 1)
+            {
+                <div style="width:180px"><Dropdown Class="sm" Value="@(NuGet.SourceFilter ?? "")" Options="SourceOptions" ValueChanged="ChangeSource" Title="@L["nuget.source"]" /></div>
+            }
             <label class="check" style="margin:0"><input type="checkbox" checked="@NuGet.IncludePrerelease" @onchange="TogglePrerelease" />@L["nuget.prerelease"]</label>
             @if (_tab == Tab.Updates && NuGet.UpdateCount > 0)
             {
                 <button class="btn ac sm" disabled="@(NuGet.BusyPackage is not null)" @onclick="NuGet.UpdateAllAsync"><Icon Name="up" />@L["nuget.updateAll"]</button>
             }
-            <button class="ibtn" title="@L["nuget.refresh"]" @onclick="() => NuGet.RefreshAsync()"><Icon Name="refresh" /></button>
+            <button class="ibtn" title="@L["nuget.refresh"]" @onclick="RefreshAll"><Icon Name="refresh" /></button>
+            <button class="ibtn @(_showSources ? "on" : "")" title="@L["nuget.sources"]" @onclick="ToggleSources"><Icon Name="gear" /></button>
         </div>
+
+        @if (_showSources)
+        {
+            <NuGetSources />
+        }
+        else
+        {
 
         <div class="ng-body">
             <div class="ng-list scroll">
                 @if (_error is not null)
                 {
                     <div class="hint warn" style="margin:12px"><Icon Name="alert" />@_error</div>
+                }
+                @if (_tab == Tab.Browse)
+                {
+                    @foreach (var err in _sourceErrors)
+                    {
+                        <div class="hint warn" style="margin:8px 12px"><Icon Name="alert" /><span>@L.F("nuget.sourceFailed", err.Source.Name, NuGetSources.Describe(L, err.Error)) <a class="ng-link" @onclick="ToggleSources">@L["nuget.sources"]</a></span></div>
+                    }
                 }
                 @foreach (var item in Items)
                 {
@@ -134,7 +153,14 @@
                         {
                             <a @onclick="() => Host.OpenExternal(url)"><Icon Name="ext" Class="sm" />@L["nuget.projectSite"]</a>
                         }
-                        <a @onclick='() => Host.OpenExternal($"https://www.nuget.org/packages/{s.Id}/{_version}")'><Icon Name="ext" Class="sm" />nuget.org</a>
+                        @if (s.Source is not null && NuGet.Sources.FirstOrDefault(x => x.Name == s.Source) is { IsNuGetOrg: false } src)
+                        {
+                            <span><b>@L["nuget.source"]</b>@src.Name</span>
+                        }
+                        else
+                        {
+                            <a @onclick='() => Host.OpenExternal($"https://www.nuget.org/packages/{s.Id}/{_version}")'><Icon Name="ext" Class="sm" />nuget.org</a>
+                        }
                     </div>
                     @if (s.Tags.Count > 0)
                     {
@@ -156,6 +182,7 @@
                 }
             </div>
         </div>
+        }
     </div>
 </div>
 
@@ -169,6 +196,8 @@
     private string _query = "";
     private bool _loading;
     private string? _error;
+    private IReadOnlyList<SourceError> _sourceErrors = Array.Empty<SourceError>();
+    private bool _showSources;
     private List<PackageSummary> _results = new();
     private PackageSummary? _selected;
     private PackageDetails? _details;
@@ -187,8 +216,33 @@
     protected override async Task OnInitializedAsync()
     {
         NuGet.Changed += Refresh;
+        NuGet.ReloadSources();
         _ = NuGet.RefreshAsync();
-        await SearchAsync("blazor");
+        await SearchAsync("");
+    }
+
+    private IEnumerable<Dropdown.Option> SourceOptions =>
+        new[] { new Dropdown.Option("", L["nuget.allSources"], null, "layers") }
+            .Concat(NuGet.Sources.Where(x => x.Enabled).Select(x => new Dropdown.Option(x.Name, x.Name, null, NuGetSources.IconFor(x))));
+
+    private async Task ChangeSource(string? v)
+    {
+        NuGet.SourceFilter = string.IsNullOrEmpty(v) ? null : v;
+        _tab = Tab.Browse;
+        await SearchAsync(_query.Trim());
+    }
+
+    private void ToggleSources()
+    {
+        _showSources = !_showSources;
+        if (!_showSources) _ = SearchAsync(_query.Trim());
+    }
+
+    private async Task RefreshAll()
+    {
+        NuGet.ReloadSources();
+        _ = NuGet.RefreshAsync();
+        if (_tab == Tab.Browse && !_showSources) await SearchAsync(_query.Trim());
     }
 
     protected override async Task OnAfterRenderAsync(bool first)
@@ -224,7 +278,7 @@
         try
         {
             await Task.Delay(350, cts.Token);
-            await SearchAsync(_query.Trim().Length == 0 ? "blazor" : _query.Trim(), cts.Token);
+            await SearchAsync(_query.Trim(), cts.Token);
         }
         catch (TaskCanceledException) { }
     }
@@ -232,12 +286,13 @@
     private async Task OnKey(KeyboardEventArgs e)
     {
         if (e.Key == "Escape" && !Embedded) Ui.CloseOverlay();
-        if (e.Key == "Enter" && _tab == Tab.Browse) await SearchAsync(_query.Trim().Length == 0 ? "blazor" : _query.Trim());
+        if (e.Key == "Enter" && _tab == Tab.Browse) await SearchAsync(_query.Trim());
     }
 
     private async Task SearchFor(string tag)
     {
         _tab = Tab.Browse;
+        _showSources = false;
         _query = tag;
         await SearchAsync(tag);
     }
@@ -249,7 +304,9 @@
         StateHasChanged();
         try
         {
-            _results = (await NuGet.Client.SearchAsync(q, NuGet.IncludePrerelease, 40, ct)).ToList();
+            var r = await NuGet.Client.SearchAsync(q, NuGet.IncludePrerelease, 40, NuGet.SourceFilter, ct);
+            _results = r.Packages.ToList();
+            _sourceErrors = r.Errors;
         }
         catch (Exception ex) when (ex is HttpRequestException or System.Text.Json.JsonException or TaskCanceledException { CancellationToken.IsCancellationRequested: false })
         {
@@ -282,7 +339,7 @@
             if (installed is not null && !_versions.Contains(installed.Version)) _versions.Add(installed.Version);
             _version = _versions.FirstOrDefault() ?? p.Version;
             StateHasChanged();
-            _details = await NuGet.Client.GetDetailsAsync(p.Id, _version);
+            _details = await NuGet.Client.GetDetailsAsync(p.Id, _version, p.Source);
         }
         catch (Exception ex) when (ex is HttpRequestException or System.Text.Json.JsonException or TaskCanceledException)
         {
@@ -293,7 +350,7 @@
     private async Task TogglePrerelease(ChangeEventArgs e)
     {
         NuGet.IncludePrerelease = e.Value is true;
-        if (_tab == Tab.Browse) await SearchAsync(_query.Trim().Length == 0 ? "blazor" : _query.Trim());
+        if (_tab == Tab.Browse) await SearchAsync(_query.Trim());
         _ = NuGet.RefreshAsync();
         if (_selected is { } s) await Select(s);
     }
