@@ -384,7 +384,7 @@ public sealed class Workspace : IDisposable
     public void Activate(DocumentSession? doc)
     {
         Active = doc;
-        if (doc is not null && Project is not null)
+        if (doc is not null && doc.Remote is null && Project is not null)
         {
             _settings.Current.LastOpenFiles[Solution?.Path ?? Project.RootDirectory] = doc.Path;
         }
@@ -435,6 +435,12 @@ public sealed class Workspace : IDisposable
             _ui.ShowToast(_l.F("toast.saveFailed", doc.Name, e.Message), ToastKind.Error, 6000);
             return false;
         }
+        if (doc.Remote is not null)
+        {
+            RemoteSaved?.Invoke(doc);
+            Changed?.Invoke();
+            return true;
+        }
 
         // Zugehörige Dateien (Code-Behind, scoped CSS), die der Designer geändert hat, mitspeichern
         if (doc.Kind == DocumentKind.Razor)
@@ -447,6 +453,9 @@ public sealed class Workspace : IDisposable
         Changed?.Invoke();
         return true;
     }
+
+    /// <summary>Ein Remote-Dokument (IIS) wurde gespeichert – der IIS-Dienst lädt es hoch.</summary>
+    public event Action<DocumentSession>? RemoteSaved;
 
     public void SaveAll()
     {

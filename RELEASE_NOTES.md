@@ -1,3 +1,14 @@
+## Neu: IIS – Authentifizierung, Konfiguration und Logs pro Site
+In **IIS-Server → Sites** eine Anwendung aufklappen:
+- **Authentifizierung:** Anonym, Windows, Standard (Basic) und Digest per Häkchen ein-/ausschalten (wird in der applicationHost.config für genau diese Site/Anwendung gesetzt). Ist ein IIS-Modul nicht installiert, steht „nicht installiert“ daneben.
+- **Konfiguration:** `web.config`, `appsettings.json` und `appsettings.<Umgebung>.json` mit **Bearbeiten** direkt im Editor von Studio öffnen. **Strg+S** speichert auf dem Server: sofort aktiv (bei appsettings wird der App-Pool recycelt) **und für alle künftigen Deployments** – die eigene Datei wird jedes Mal über die aus dem Paket gelegt (auch beim Zurückschalten auf ältere Versionen). Neue `appsettings.Production.json` usw. lassen sich direkt anlegen. „Eigene Version entfernen“ stellt wieder auf die Datei aus dem Paket um. Ungültiges XML/JSON wird abgelehnt.
+- **stdout immer an:** In jeder web.config wird bei jedem Deployment `stdoutLogEnabled="true"` gesetzt. Die Logs landen in einem festen Ordner `<DeployRoot>\<Site>\_logs\` (bleibt über Versionen erhalten, Schreibrecht für IIS_IUSRS wird gesetzt) und lassen sich unter **Logs** im Editor ansehen.
+- Remote-Dateien erkennt man im Editor am Server-Symbol im Reiter; der Tooltip zeigt Server, Site und Datei.
+- **Agent 1.7.0 nötig** – `BlazorStudio-Agent-1.7.0.zip` entpacken und `install-service.ps1` erneut ausführen.
+
+## Behoben: Strg+. änderte die falsche Datei
+- Bei mehreren offenen Reitern wurde die gewählte Schnellaktion (Strg+. / Alt+Enter) im ersten offenen Editor statt in der aktuellen Datei angewendet. Die Aktion merkt sich jetzt ihr Dokument.
+
 ## Behoben: Site zeigte nach dem Deployment weiter auf „_initial“
 - Ursache: Auf dem Server lief noch ein **älterer Agent** (vor 1.6.2) – und Studio hat das nicht als „veraltet“ markiert, weil nur Haupt- und Nebenversion verglichen wurden.
 - Studio prüft jetzt **vor dem Veröffentlichen** die Agent-Version aller Zielserver und bricht mit klarer Meldung ab, wenn ein Agent älter als 1.6.2 ist (statt ein Deployment zu starten, das den Pfad nicht umstellt).

@@ -56,11 +56,17 @@ public sealed class IisService : IDisposable
     private readonly Timer _timer;
     private int _polling;
 
-    public IisService(SettingsService settings, RunService run, Localizer l)
+    private readonly Workspace _ws;
+    private readonly UiService _ui;
+
+    public IisService(SettingsService settings, RunService run, Localizer l, Workspace ws, UiService ui)
     {
         _settings = settings;
         _run = run;
         _l = l;
+        _ws = ws;
+        _ui = ui;
+        _ws.RemoteSaved += doc => _ = UploadRemoteAsync(doc);
         // Erster Rundlauf kurz nach dem Start, dann alle 30 s – so gibt es immer einen aktuellen Status
         _timer = new Timer(_ => _ = PollAsync(), null, TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(30));
     }
@@ -253,6 +259,104 @@ public sealed class IisService : IDisposable
             .Replace("{user}", Environment.UserName, StringComparison.OrdinalIgnoreCase);
         var clean = new string(s.Select(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '+' or '-' ? c : '-').ToArray()).Trim('.', '-', '_', '+');
         return clean.Length > 64 ? clean[..64] : clean;
+    }
+
+    // ------------------------------------------------------------------
+    // Remote-Dateien (web.config, appsettings*.json, stdout-Logs) im Editor
+    // ------------------------------------------------------------------
+
+    private static string CacheDir(IisServerEntry s, string site, string appPath, string? sub = null)
+    {
+        static string Clean(string v) => string.Concat(v.Select(c => Path.GetInvalidFileNameChars().Contains(c) || c is ':' or '\\' or '/' ? '_' : c));
+        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "BlazorStudio", "remote",
+            Clean(s.Id), Clean(VersionStore.TargetFolderName(site, appPath)));
+        return sub is null ? dir : Path.Combine(dir, sub);
+    }
+
+    /// <summary>Konfigurationsdatei vom Server holen und im Editor öffnen. Speichern (Strg+S) lädt sie wieder hoch.</summary>
+    public async Task<bool> OpenRemoteConfigAsync(IisServerEntry s, string site, string appPath, string file)
+    {
+        var dir = CacheDir(s, site, appPath);
+        var path = Path.Combine(dir, file);
+        var open = _ws.Documents.FirstOrDefault(d => string.Equals(d.Path, path, StringComparison.OrdinalIgnoreCase));
+        if (open is { IsDirty: true })
+        {
+            _ws.Activate(open);
+            return true;
+        }
+        var content = await Client(s).GetConfigFileAsync(site, appPath, file);
+        Directory.CreateDirectory(dir);
+        await File.WriteAllTextAsync(path, content.Content);
+        if (open is not null)
+        {
+            open.SetText(content.Content, ChangeOrigin.External);
+            open.MarkSaved();
+            open.LastWriteOnDisk = File.GetLastWriteTimeUtc(path);
+        }
+        var doc = _ws.Open(path);
+        if (doc is null) return false;
+        doc.Remote = new RemoteFile(s.Id, s.Display, site, appPath, file);
+        _ws.NotifyChanged();
+        if (content.Source == "new") _ui.ShowToast(_l.F("iis.cfg.newFile", file), ToastKind.Info, 5000);
+        return true;
+    }
+
+    /// <summary>stdout-Log (Ende der Datei) im Editor anzeigen.</summary>
+    public async Task<bool> OpenRemoteLogAsync(IisServerEntry s, string site, string appPath, string file)
+    {
+        var content = await Client(s).GetLogAsync(site, appPath, file);
+        var dir = CacheDir(s, site, appPath, "logs");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, file);
+        await File.WriteAllTextAsync(path, content.Content);
+        var open = _ws.Documents.FirstOrDefault(d => string.Equals(d.Path, path, StringComparison.OrdinalIgnoreCase));
+        if (open is not null)
+        {
+            open.SetText(content.Content, ChangeOrigin.External);
+            open.MarkSaved();
+        }
+        var doc = _ws.Open(path);
+        if (doc is null) return false;
+        doc.Remote = new RemoteFile(s.Id, s.Display, site, appPath, file, IsLog: true);
+        doc.RevealLine = Math.Max(1, doc.Text.Count(c => c == '\n'));
+        _ws.NotifyChanged();
+        return true;
+    }
+
+    private async Task UploadRemoteAsync(DocumentSession doc)
+    {
+        if (doc.Remote is not { } r) return;
+        if (r.IsLog)
+        {
+            _ui.ShowToast(_l["iis.cfg.logReadOnly"], ToastKind.Warning, 4000);
+            return;
+        }
+        var server = Servers.FirstOrDefault(x => x.Id == r.ServerId);
+        var sent = doc.Text;
+        try
+        {
+            if (server is null) throw new AgentException(_l.F("iis.cfg.serverGone", r.Server), null);
+            var result = await Client(server).SaveConfigFileAsync(r.Site, r.AppPath, r.File, new SiteConfigWrite { Content = sent, Apply = true });
+            // Der Agent schaltet z. B. stdout ein – den gespeicherten Stand übernehmen
+            if (result.Content != sent && doc.Text == sent)
+            {
+                doc.SetText(result.Content, ChangeOrigin.External);
+                doc.MarkSaved();
+                try { await File.WriteAllTextAsync(doc.Path, result.Content); } catch (IOException) { }
+                doc.LastWriteOnDisk = File.GetLastWriteTimeUtc(doc.Path);
+            }
+            var msg = _l.F(result.Applied ? "iis.cfg.savedLive" : "iis.cfg.savedNext", r.File, r.Server);
+            if (result.Recycled) msg += " " + _l["iis.cfg.recycled"];
+            if (result.Notes.Count > 0) msg += " " + string.Join(" ", result.Notes);
+            _ui.ShowToast(msg, ToastKind.Success, 6000);
+        }
+        catch (AgentException e)
+        {
+            // Wieder als ungespeichert markieren – lokal liegt die Datei nur im Zwischenspeicher
+            if (doc.Text == sent) doc.MarkSavedAs("\0");
+            _ws.NotifyChanged();
+            _ui.ShowToast(_l.F("iis.cfg.uploadFailed", r.File, r.Server, e.Message), ToastKind.Error, 9000);
+        }
     }
 
     /// <summary>Veröffentlicht das Projekt und rollt es nacheinander auf die Server aus (Abbruch beim ersten Fehler).</summary>
