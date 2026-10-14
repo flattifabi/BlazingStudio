@@ -637,6 +637,95 @@ public sealed class Workspace : IDisposable
             .OrderBy(n => n == "ChildContent").ToList();
     }
 
+    // ------------------------------------------------------------------
+    // Automatische @using-Einträge
+    // ------------------------------------------------------------------
+
+    /// <summary>Projektordner, Stammnamespace und Projektdatei zu einer Datei.</summary>
+    public (string Root, string RootNamespace, string? ProjectFile) ProjectOf(string path)
+    {
+        var proj = Solution?.AllProjects.Where(p => p.Project is not null && path.StartsWith(Path.GetDirectoryName(p.Path)! + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(p => p.Path.Length).FirstOrDefault();
+        var root = proj is not null ? Path.GetDirectoryName(proj.Path)! : Project?.RootDirectory ?? RootDirectory ?? Path.GetDirectoryName(path)!;
+        return (root, proj?.Project?.RootNamespace ?? Path.GetFileName(root), proj?.Path);
+    }
+
+    /// <summary>Text einer Datei: offenes Dokument bevorzugt, sonst von der Platte; null, wenn es sie nicht gibt.</summary>
+    private string? ReadForImports(string path)
+    {
+        var open = Documents.FirstOrDefault(d => d.Path.Equals(path, StringComparison.OrdinalIgnoreCase));
+        if (open is not null) return open.Text;
+        try { return File.Exists(path) ? File.ReadAllText(path) : null; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    private readonly Dictionary<string, (int Scan, List<string> Usings)> _globalUsings = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>global using … aus den .cs-Dateien und &lt;Using&gt; aus der Projektdatei (je Einlesen zwischengespeichert).</summary>
+    private List<string> GlobalUsingsOf(string root, string? projectFile)
+    {
+        if (_globalUsings.TryGetValue(root, out var cached) && cached.Scan == ScanVersion) return cached.Usings;
+        var list = new List<string>();
+        if (projectFile is not null && ReadForImports(projectFile) is { } xml) list.AddRange(RazorImports.ProjectUsings(xml));
+        foreach (var f in ProjectIndex.EnumerateFiles(root).Where(f => f.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (ReadForImports(f) is { } cs && cs.Contains("global using", StringComparison.Ordinal)) list.AddRange(RazorImports.GlobalUsings(cs));
+        }
+        _globalUsings[root] = (ScanVersion, list);
+        return list;
+    }
+
+    /// <summary>Namespace, unter dem eine Komponente liegt (Projekt-Komponenten aus @namespace/Code-Behind/Ordner).</summary>
+    public string? ComponentNamespace(ComponentDefinition def)
+    {
+        if (def.Source != ComponentSource.Project || def.FilePath is null) return def.Namespace;
+        if (def.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+            return ReadForImports(def.FilePath) is { } cs ? RazorImports.CSharpNamespaceOf(cs) ?? def.Namespace : def.Namespace;
+        var (root, rootNs, _) = ProjectOf(def.FilePath);
+        return RazorImports.NamespaceOfFile(def.FilePath, root, rootNs, ReadForImports);
+    }
+
+    /// <summary>
+    /// Namespaces, die in <paramref name="doc"/> für diese Komponenten-Tags fehlen (weder _Imports.razor, Datei,
+    /// globale Usings noch eigener/übergeordneter Namespace). <paramref name="text"/> ersetzt den aktuellen Text.
+    /// </summary>
+    public List<string> MissingUsingsFor(DocumentSession doc, IEnumerable<string> tagNames, string? text = null)
+    {
+        var missing = new List<string>();
+        var resolve = UsingResolver(doc, text);
+        foreach (var tag in tagNames.Distinct(StringComparer.Ordinal))
+        {
+            if (resolve(tag) is { } ns && !missing.Contains(ns)) missing.Add(ns);
+        }
+        return missing;
+    }
+
+    /// <summary>
+    /// Liefert je Komponenten-Tag den fehlenden Namespace (oder null). Importe werden nur einmal ermittelt –
+    /// für viele Abfragen hintereinander (z. B. Vervollständigungsliste).
+    /// </summary>
+    public Func<string, string?> UsingResolver(DocumentSession doc, string? text = null)
+    {
+        if (doc.Kind != DocumentKind.Razor || Project is null) return _ => null;
+        var (root, rootNs, projectFile) = ProjectOf(doc.Path);
+        var current = text ?? doc.Text;
+        var imported = RazorImports.Imported(doc.Path, current, root, ReadForImports, GlobalUsingsOf(root, projectFile));
+        var myNs = RazorImports.NamespaceOfFile(doc.Path, root, rootNs, p => p.Equals(doc.Path, StringComparison.OrdinalIgnoreCase) ? current : ReadForImports(p));
+        // Projekt vor Bibliothek vor eingebaut – wie die Vervollständigung
+        var byTag = AllComponents.Where(c => c.Source is ComponentSource.Project or ComponentSource.Library or ComponentSource.Blazor)
+            .GroupBy(c => c.TagName, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.OrderBy(c => c.Source switch { ComponentSource.Project => 0, ComponentSource.Library => 1, _ => 2 }).First(), StringComparer.Ordinal);
+        var cache = new Dictionary<string, string?>(StringComparer.Ordinal);
+        return tag =>
+        {
+            if (tag.Length == 0 || !char.IsUpper(tag[0]) || !byTag.TryGetValue(tag, out var def)) return null;
+            if (def.FilePath is not null && def.FilePath.Equals(doc.Path, StringComparison.OrdinalIgnoreCase)) return null;
+            if (cache.TryGetValue(tag, out var known)) return known;
+            var ns = ComponentNamespace(def);
+            return cache[tag] = ns is null || RazorImports.IsVisible(ns, myNs, imported) ? null : ns;
+        };
+    }
+
     /// <summary>Klassenname, Namespace und @using-Einträge (inkl. _Imports.razor) für eine .razor-Datei.</summary>
     public (string ClassName, string Namespace, List<string> Usings) RazorContextFor(DocumentSession doc) => RazorContextFor(doc.Path);
 

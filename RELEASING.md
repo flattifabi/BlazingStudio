@@ -48,3 +48,13 @@ GitHub-API (`tag_name`, `body`, `assets[].name/browser_download_url/size`), z. B
 | `/Launch` | nach der stillen Installation starten |
 | `/WaitPid=<pid>` | vorher warten, bis dieser Prozess beendet ist |
 | `Uninstall.exe /S /RemoveSettings` | still deinstallieren und Einstellungen löschen |
+
+## IIS-Agent
+
+Das Release enthält zusätzlich `BlazorStudio-Agent-<Version>.zip` (eigenständig, win-x64). `build-installer.ps1`
+legt dieselbe Datei in die App unter `agent\`, damit *IIS-Server → Agent-Paket* sie ohne Download findet.
+Auf den Servern: ZIP entpacken und `install-service.ps1` als Administrator ausführen – ein Update erhält
+API-Schlüssel und Einstellungen. Details: `src/BlazorStudio.Agent/README.md`.
+
+Lokal testen ohne IIS: `dotnet run --project src/BlazorStudio.Agent` mit `Agent__ApiKey=test` startet die API
+(IIS-Aufrufe schlagen außerhalb von Windows/IIS erwartungsgemäß fehl, Ping/Upload/Verlauf funktionieren).

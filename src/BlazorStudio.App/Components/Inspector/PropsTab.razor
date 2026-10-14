@@ -61,11 +61,11 @@ else
                         <button class="@(Node.GetAttribute("\u0040bind:event") is null or "onchange" ? "on" : "")" @onclick='() => Design.Mutate(Node, n => n.RemoveAttribute("\u0040bind:event"))'>onchange</button>
                         <button class="@(Node.GetAttribute("\u0040bind:event") == "oninput" ? "on" : "")" @onclick='() => Design.Mutate(Node, n => n.SetAttribute("\u0040bind:event", "oninput"))'>oninput</button>
                     </div>
-                    <StyleField Label="fmt" Property="@@bind:format" Unit="@null" Value="@Node.GetAttribute("\u0040bind:format")" Placeholder="yyyy-MM-dd"
+                    <StyleField Label="fmt" Property="@("\u0040bind:format")" Unit="@null" Value="@Node.GetAttribute("\u0040bind:format")" Placeholder="yyyy-MM-dd"
                                 OnChange='v => Design.SetAttribute(Node, "\u0040bind:format", v)' />
                 </div>
                 <div style="margin-top:6px">
-                    <EventRow Name="@@bind:after" Value="@Node.GetAttribute("\u0040bind:after")" Methods="BindingScope.Methods(candidates)"
+                    <EventRow Name="@("\u0040bind:after")" Value="@Node.GetAttribute("\u0040bind:after")" Methods="BindingScope.Methods(candidates)"
                               OnSet='v => Design.SetAttribute(Node, "\u0040bind:after", v)'
                               OnCreate='() => Design.CreateHandler(Node, "\u0040bind:after", null, "On" + char.ToUpperInvariant(tag[0]) + tag[1..] + "Changed")' />
                 </div>

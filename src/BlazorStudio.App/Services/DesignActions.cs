@@ -64,19 +64,18 @@ public sealed partial class DesignActions
         var def = _ws.AllComponents.FirstOrDefault(c => c.Key == key) ?? BuiltInCatalog.Find(key);
         if (def is null) return null;
         var s = Session!;
-        DesignNode? created = null;
+        var nodes = RazorParser.ParseFragment(LocalizeTemplate(def.Template));
+        if (nodes.Count == 0) return null;
+        // Fehlende @using (auch für Komponenten in der Vorlage, z. B. MudSelectItem) im selben Rückgängig-Schritt
+        var usings = MissingUsings(nodes);
         s.Apply(d =>
         {
-            var target = d.Find(targetId);
-            var nodes = RazorParser.ParseFragment(LocalizeTemplate(def.Template));
-            if (nodes.Count == 0) return;
-            InsertNodes(d, nodes, target, pos, slot);
-            created = nodes[0];
+            InsertNodes(d, nodes, d.Find(targetId), pos, slot);
+            AddUsings(d, usings);
         });
-        if (def.Source == ComponentSource.Project && def.Namespace is null) EnsureUsingFor(def);
-        if (def.Source == ComponentSource.Library && def.Namespace is not null) EnsureNamespace(def.Namespace);
-        s.SelectNode(created);
-        return created;
+        AnnounceUsings(usings);
+        s.SelectNode(nodes[0]);
+        return nodes[0];
     }
 
     /// <summary>Klick in der Toolbox: hinter die Auswahl bzw. in einen leeren Container einfügen.</summary>
@@ -185,16 +184,18 @@ public sealed partial class DesignActions
         if (string.IsNullOrWhiteSpace(markup)) return;
         var s = Session!;
         var sel = s.Selected;
-        DesignNode? first = null;
+        var nodes = RazorParser.ParseFragment(markup);
+        if (nodes.Count == 0) return;
+        // Aus einer anderen Datei kopierte Komponenten brauchen evtl. deren @using
+        var usings = MissingUsings(nodes);
         s.Apply(d =>
         {
-            var nodes = RazorParser.ParseFragment(markup);
-            if (nodes.Count == 0) return;
             var inside = sel is not null && sel.CanHaveChildren && sel.Children.Count == 0;
             DocumentEditor.Insert(d, nodes, sel, sel is null || inside ? DropPosition.Inside : DropPosition.After);
-            first = nodes[0];
+            AddUsings(d, usings);
         });
-        s.SelectNode(first);
+        AnnounceUsings(usings);
+        s.SelectNode(nodes[0]);
     }
 
     public void SelectParent()
@@ -306,30 +307,41 @@ public sealed partial class DesignActions
     }
 
     /// <summary>Für Projekt-Komponenten aus anderen Ordnern ggf. @using ergänzen (best effort).</summary>
-    private void EnsureUsingFor(ComponentDefinition def)
+    // ------------------------------------------------------------------
+    // Automatische @using-Einträge (wie Rider)
+    // ------------------------------------------------------------------
+
+    /// <summary>Namespaces, die für die Komponenten in diesen Knoten (samt Kindern) in der aktiven Datei fehlen.</summary>
+    private List<string> MissingUsings(IEnumerable<DesignNode> nodes)
     {
-        if (def.FilePath is null || Session?.Doc is null || _ws.Project is null) return;
-        var ns = _ws.GuessNamespace(Path.GetDirectoryName(def.FilePath)!);
-        var myNs = _ws.GuessNamespace(Path.GetDirectoryName(Session.Path)!);
-        if (ns == myNs) return;
-        EnsureNamespace(ns);
+        if (Session is not { } s) return new();
+        var tags = nodes.SelectMany(n => n.Descendants().Prepend(n)).Where(n => n.Kind == NodeKind.Component).Select(n => n.Name);
+        try
+        {
+            return _ws.MissingUsingsFor(s, tags);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return new();
+        }
     }
 
-    /// <summary>@using ergänzen, falls weder _Imports.razor noch die Datei den Namespace importieren.</summary>
-    private void EnsureNamespace(string ns)
+    /// <summary>@using hinter die letzten vorhandenen (bzw. hinter @page/@layout …) einfügen.</summary>
+    public static void AddUsings(RazorDocument d, IReadOnlyList<string> namespaces)
     {
-        if (Session?.Doc is null || _ws.Project is null) return;
-        var imports = ProjectIndex.EnumerateFiles(_ws.Project.RootDirectory)
-            .Where(f => Path.GetFileName(f).Equals("_Imports.razor", StringComparison.OrdinalIgnoreCase))
-            .Select(Workspace.ReadText).Where(t => t is not null).ToList();
-        if (imports.Any(t => t!.Contains("@using " + ns, StringComparison.Ordinal))) return;
-        if (Session.Doc.Directives.Any(d => d.Trim() == "@using " + ns)) return;
-        Session.Apply(d =>
+        foreach (var ns in namespaces)
         {
+            var line = "@using " + ns;
+            if (d.Directives.Any(x => x.Trim().TrimEnd(';') == line)) continue;
             var idx = d.Directives.FindLastIndex(x => x.TrimStart().StartsWith("@using", StringComparison.Ordinal));
-            if (idx < 0) idx = d.Directives.FindLastIndex(x => x.TrimStart().StartsWith("@page", StringComparison.Ordinal));
-            d.Directives.Insert(idx + 1, "@using " + ns);
-        });
+            if (idx < 0) idx = d.Directives.FindLastIndex(x => x.TrimStart() is var t && (t.StartsWith("@page", StringComparison.Ordinal) || t.StartsWith("@rendermode", StringComparison.Ordinal)));
+            d.Directives.Insert(idx + 1, line);
+        }
+    }
+
+    private void AnnounceUsings(IReadOnlyList<string> namespaces)
+    {
+        if (namespaces.Count > 0) _ui.ShowToast(_l.F("designer.usingAdded", string.Join(", ", namespaces)), ToastKind.Info, 2600);
     }
 
     [GeneratedRegex(@"(?<=>)(Überschrift|Titel|Beschreibung|Text|Link|Label|Button|Option 1|Option 2|Option|Eintrag 1|Eintrag 2|Zitat|Senden|Sichtbar|Bitte wählen|Angemeldet|Nicht angemeldet|Fehler|Willkommen|Los geht's|Mehr erfahren|Karte 1|Karte 2|Karte 3|Marke|Start|Über uns|Kontakt|Name|E-Mail|Nachricht|Impressum · Datenschutz|© 2026 Firma|Eine kurze Beschreibung deines Angebots\.)(?=<| ?<)|(?<=placeholder="")Eingabe")]

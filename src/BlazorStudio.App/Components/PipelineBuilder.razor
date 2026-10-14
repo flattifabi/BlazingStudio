@@ -1,0 +1,556 @@
+@inherits StudioComponent
+@inject IisService Iis
+@inject GitService Git
+@inject IHostBridge Host
+@inject IJSRuntime JS
+
+<div class="backdrop" style="padding-top:3vh" @onclick="Close">
+    <div class="dialog nuget pl" @onclick:stopPropagation="true">
+        <div class="ng-head">
+            <div class="iic"><Icon Name="pipeline" /></div>
+            <div class="t">
+                <h2>@L["pl.title"]</h2>
+                <small class="dim mono">@RepoRoot</small>
+            </div>
+            @if (_saved.Count > 0)
+            {
+                <div style="width:220px">
+                    <Dropdown Class="sm" Value="@_path" Placeholder="@L["pl.open"]" Options='_saved.Select(x => new Dropdown.Option(x.Path, x.Pipeline.Name, L["pl.provider." + x.Pipeline.Provider], "pipeline"))' ValueChanged="Open" />
+                </div>
+            }
+            <button class="btn ghost sm" @onclick="() => { _p = null; _path = null; }"><Icon Name="plus" />@L["pl.new"]</button>
+            <button class="ibtn" title="@L["action.close"]" @onclick="Close"><Icon Name="x" /></button>
+        </div>
+
+        @if (_p is null)
+        {
+            @Gallery()
+        }
+        else
+        {
+            var p = _p;
+            var yaml = Generate(p);
+            var warnings = PipelineGenerator.Validate(p);
+            <div class="pl-body">
+                @* ------------------------- Aufbau ------------------------- *@
+                <div class="pl-tree scroll">
+                    <div class="pl-node @(_sel is null ? "on" : "")" @onclick="() => _sel = null"><Icon Name="gear" /><b>@p.Name</b><small>@L["pl.provider." + p.Provider]</small></div>
+                    @for (var si = 0; si < p.Stages.Count; si++)
+                    {
+                        var stage = p.Stages[si];
+                        var sIndex = si;
+                        <div class="pl-stage">
+                            <div class="pl-node stage @(_sel == stage ? "on" : "")" @onclick="() => _sel = stage">
+                                <Icon Name="layers" /><b>@stage.Name</b>
+                                <small>@StageSummary(stage)</small>
+                                <span class="grow"></span>
+                                <button class="ibtn sm" title="@L["pl.up"]" disabled="@(sIndex == 0)" @onclick:stopPropagation="true" @onclick="() => MoveStage(stage, -1)"><Icon Name="up" /></button>
+                                <button class="ibtn sm" title="@L["pl.down"]" disabled="@(sIndex == p.Stages.Count - 1)" @onclick:stopPropagation="true" @onclick="() => MoveStage(stage, 1)"><Icon Name="down" /></button>
+                            </div>
+                            @for (var i = 0; i < stage.Steps.Count; i++)
+                            {
+                                var step = stage.Steps[i];
+                                var index = i;
+                                <div class="pl-node step @(_sel == step ? "on" : "") @(step.Enabled ? "" : "off")" @onclick="() => _sel = step">
+                                    <input type="checkbox" checked="@step.Enabled" title="@L["pl.enabled"]" @onclick:stopPropagation="true" @onchange="e => step.Enabled = e.Value is true" />
+                                    <Icon Name="@StepIcon(step.Kind)" /><span>@PipelineGenerator.Title(step)</span>
+                                    <span class="grow"></span>
+                                    <button class="ibtn sm" title="@L["pl.up"]" disabled="@(index == 0)" @onclick:stopPropagation="true" @onclick="() => MoveStep(stage, step, -1)"><Icon Name="up" /></button>
+                                    <button class="ibtn sm" title="@L["pl.down"]" disabled="@(index == stage.Steps.Count - 1)" @onclick:stopPropagation="true" @onclick="() => MoveStep(stage, step, 1)"><Icon Name="down" /></button>
+                                </div>
+                            }
+                            <div class="pl-add">
+                                @foreach (var k in Enum.GetValues<StepKind>())
+                                {
+                                    var kind = k;
+                                    <button class="chip btnlike" title="@L["pl.k." + kind + ".hint"]" @onclick="() => AddStep(stage, kind)"><Icon Name="@StepIcon(kind)" />@L["pl.k." + kind]</button>
+                                }
+                            </div>
+                        </div>
+                    }
+                    <button class="btn dashed wide" style="margin-top:8px" @onclick="AddStage"><Icon Name="plus" />@L["pl.addStage"]</button>
+                </div>
+
+                @* ------------------------- Einstellungen ------------------------- *@
+                <div class="pl-edit scroll">
+                    @switch (_sel)
+                    {
+                        case PipelineStep step: @StepForm(step) break;
+                        case PipelineStage stage: @StageForm(stage) break;
+                        default: @PipelineForm(p) break;
+                    }
+                </div>
+
+                @* ------------------------- YAML ------------------------- *@
+                <div class="pl-preview">
+                    <div class="pl-preview-h">
+                        <Icon Name="code" /><span class="mono">@p.EffectiveOutputPath</span><span class="grow"></span>
+                        <button class="ibtn sm" title="@L["pl.copy"]" @onclick="() => Copy(yaml)"><Icon Name="copy" /></button>
+                    </div>
+                    @if (warnings.Count > 0)
+                    {
+                        <div class="pl-warn">
+                            @foreach (var w in warnings) { <div><Icon Name="alert" />@w</div> }
+                        </div>
+                    }
+                    <pre class="pl-yaml scroll">@yaml</pre>
+                    <div class="pl-save">
+                        @if (p.UsesDeployScript) { <small class="dim">+ @PipelineGenerator.ScriptPath</small> }
+                        <span class="grow"></span>
+                        @if (_path is not null) { <button class="btn ghost danger-text sm" @onclick="Delete"><Icon Name="trash" /></button> }
+                        <button class="btn ac" disabled="@(RepoRoot is null)" @onclick="Save"><Icon Name="save" />@L["pl.save"]</button>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private PipelineDefinition? _p;
+    private string? _path;
+    private object? _sel;
+    private List<(string Path, PipelineDefinition Pipeline)> _saved = new();
+    private PipelineProvider _galleryProvider = PipelineProvider.GitHub;
+
+    private string? RepoRoot => Git.Root ?? Ws.RootDirectory;
+
+    protected override void OnStudioInitialized()
+    {
+        Reload();
+        if (_saved.Count > 0) Open(_saved[0].Path);
+        // Vorlieben: GitHub-Remote → GitHub, sonst Datei im Repo erkennen
+        if (RepoRoot is { } root)
+        {
+            if (File.Exists(Path.Combine(root, "azure-pipelines.yml"))) _galleryProvider = PipelineProvider.AzureDevOps;
+            else if (File.Exists(Path.Combine(root, ".gitlab-ci.yml"))) _galleryProvider = PipelineProvider.GitLab;
+        }
+    }
+
+    private void Reload() => _saved = RepoRoot is { } r ? PipelineStore.LoadAll(r) : new();
+
+    private void Close()
+    {
+        Ui.CloseOverlay();
+    }
+
+    private void Open(string? path)
+    {
+        var hit = _saved.FirstOrDefault(x => x.Path == path);
+        if (hit.Pipeline is null) return;
+        // Kopie bearbeiten – erst „Speichern“ schreibt
+        _p = PipelineStore.Deserialize(PipelineStore.Serialize(hit.Pipeline));
+        _path = hit.Path;
+        _sel = null;
+    }
+
+    private string Generate(PipelineDefinition p)
+    {
+        try { return PipelineGenerator.Generate(p); }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException or FormatException) { return "# " + e.Message; }
+    }
+
+    // ------------------------------------------------------------------
+    // Projekte (relativ zum Repository)
+    // ------------------------------------------------------------------
+
+    private string Rel(string path) => RepoRoot is { } r ? Path.GetRelativePath(r, path).Replace('\\', '/') : path;
+
+    private IEnumerable<(string Rel, string Name, bool Web)> Projects()
+    {
+        if (Ws.Solution is { } sln)
+        {
+            if (sln.Path is { } slnPath && !slnPath.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase)) yield return (Rel(slnPath), Path.GetFileName(slnPath), false);
+            foreach (var x in sln.AllProjects.Where(x => x.Project is not null))
+                yield return (Rel(x.Path), x.Name, IsWeb(x.Path));
+        }
+        else if (Ws.Project?.ProjectFile is { } f)
+        {
+            yield return (Rel(f), Path.GetFileNameWithoutExtension(f), true);
+        }
+    }
+
+    private static bool IsWeb(string csproj)
+    {
+        try { return File.ReadAllText(csproj).Contains("Microsoft.NET.Sdk.Web", StringComparison.OrdinalIgnoreCase); }
+        catch (IOException) { return false; }
+    }
+
+    private string? DefaultBuildTarget() => Projects().FirstOrDefault(x => !x.Rel.EndsWith("proj", StringComparison.OrdinalIgnoreCase)).Rel ?? Projects().FirstOrDefault().Rel;
+
+    private string? DefaultWebProject() =>
+        Ws.StartupItem?.Path is { } start ? Rel(start) : Projects().FirstOrDefault(x => x.Web).Rel ?? Projects().FirstOrDefault().Rel;
+
+    // ------------------------------------------------------------------
+    // Vorlagen
+    // ------------------------------------------------------------------
+
+    private RenderFragment Gallery() => __builder =>
+    {
+        <div class="pl-gallery scroll">
+            <p class="dim">@L["pl.galleryText"]</p>
+            <div class="row2" style="max-width:460px"><label>@L["pl.provider"]</label>
+                <div class="seg fill">
+                    @foreach (var pv in Enum.GetValues<PipelineProvider>())
+                    {
+                        var prov = pv;
+                        <button class="@(_galleryProvider == prov ? "on" : "")" @onclick="() => _galleryProvider = prov">@L["pl.provider." + prov]</button>
+                    }
+                </div>
+            </div>
+            <div class="pl-cards">
+                @foreach (var t in PipelineTemplates.All)
+                {
+                    var tpl = t;
+                    <button class="pl-card" @onclick="() => Create(tpl)">
+                        <div class="iic"><Icon Name="@tpl.Icon" /></div>
+                        <b>@L["pl.t." + tpl.Id]</b>
+                        <span class="dim">@L["pl.t." + tpl.Id + ".hint"]</span>
+                    </button>
+                }
+            </div>
+            @if (RepoRoot is null) { <div class="hint warn"><Icon Name="alert" />@L["pl.noRepo"]</div> }
+        </div>
+    };
+
+    private void Create(PipelineTemplates.Template t)
+    {
+        var p = t.Create(DefaultBuildTarget(), DefaultWebProject());
+        p.Provider = _galleryProvider;
+        // IIS-Schritte mit dem zuletzt verwendeten Deploy-Profil vorbelegen
+        foreach (var step in p.Stages.SelectMany(s => s.Steps).Where(s => s.Kind == StepKind.DeployIis)) FillFromProfile(step);
+        var name = p.Name;
+        for (var i = 2; _saved.Any(x => PipelineDefinition.Slug(x.Pipeline.Name) == PipelineDefinition.Slug(name)); i++) name = p.Name + " " + i;
+        p.Name = name;
+        _p = p;
+        _path = null;
+        _sel = null;
+    }
+
+    // ------------------------------------------------------------------
+    // Bearbeiten
+    // ------------------------------------------------------------------
+
+    private void AddStage()
+    {
+        if (_p is null) return;
+        var n = _p.Stages.Count + 1;
+        var id = "stage" + n;
+        while (_p.Stages.Any(s => s.Id == id)) id = "stage" + ++n;
+        var stage = new PipelineStage { Id = id, Name = L["pl.stage"] + " " + n, Runner = _p.Stages.LastOrDefault()?.Runner ?? "windows-latest" };
+        _p.Stages.Add(stage);
+        _sel = stage;
+    }
+
+    private void AddStep(PipelineStage stage, StepKind kind)
+    {
+        var project = kind == StepKind.Publish ? DefaultWebProject() : DefaultBuildTarget();
+        var step = StepCatalog.Create(kind, project);
+        if (kind == StepKind.DeployIis) FillFromProfile(step);
+        stage.Steps.Add(step);
+        _sel = step;
+    }
+
+    private void MoveStage(PipelineStage stage, int delta)
+    {
+        if (_p is null) return;
+        var i = _p.Stages.IndexOf(stage);
+        var j = i + delta;
+        if (j < 0 || j >= _p.Stages.Count) return;
+        _p.Stages.RemoveAt(i);
+        _p.Stages.Insert(j, stage);
+    }
+
+    private static void MoveStep(PipelineStage stage, PipelineStep step, int delta)
+    {
+        var i = stage.Steps.IndexOf(step);
+        var j = i + delta;
+        if (j < 0 || j >= stage.Steps.Count) return;
+        stage.Steps.RemoveAt(i);
+        stage.Steps.Insert(j, step);
+    }
+
+    private void RemoveStep(PipelineStep step)
+    {
+        foreach (var s in _p?.Stages ?? new()) s.Steps.Remove(step);
+        _sel = _p?.Stages.FirstOrDefault(s => s.Steps.Count > 0);
+    }
+
+    private void DuplicateStep(PipelineStage stage, PipelineStep step)
+    {
+        var copy = step.Clone();
+        stage.Steps.Insert(stage.Steps.IndexOf(step) + 1, copy);
+        _sel = copy;
+    }
+
+    private void RemoveStage(PipelineStage stage)
+    {
+        _p?.Stages.Remove(stage);
+        _sel = null;
+    }
+
+    private PipelineStage? StageOf(PipelineStep step) => _p?.Stages.FirstOrDefault(s => s.Steps.Contains(step));
+
+    /// <summary>Server, Site usw. aus dem IIS-Deploy-Profil des Startprojekts übernehmen.</summary>
+    private void FillFromProfile(PipelineStep step)
+    {
+        var project = Ws.StartupItem?.Path ?? Ws.Project?.ProjectFile;
+        if (project is null || !Settings.Current.IisDeployProfiles.TryGetValue(project, out var prof))
+        {
+            if (Iis.Servers.Count > 0 && step.Get("servers").Length == 0)
+                step.Settings["servers"] = Iis.Servers[0].Address.ToString().TrimEnd('/');
+            return;
+        }
+        var servers = Iis.Servers.Where(s => prof.ServerIds.Contains(s.Id)).Select(s => s.Address.ToString().TrimEnd('/')).ToList();
+        if (servers.Count > 0) step.Settings["servers"] = string.Join(", ", servers);
+        step.Settings["site"] = prof.Site;
+        step.Settings["appPath"] = prof.AppPath;
+        if (!string.IsNullOrWhiteSpace(prof.HealthUrl)) step.Settings["healthUrl"] = prof.HealthUrl;
+        step.Settings["rollback"] = prof.Rollback ? "true" : "false";
+        if (prof.CreateSite)
+        {
+            step.Settings["createSite"] = "true";
+            step.Settings["binding"] = prof.Binding ?? "";
+            step.Settings["pool"] = prof.Pool ?? "";
+        }
+        var thumb = Iis.Servers.Where(s => prof.ServerIds.Contains(s.Id)).Select(s => s.CertificateThumbprint).FirstOrDefault(t => !string.IsNullOrEmpty(t));
+        if (thumb is not null) step.Settings["thumbprint"] = thumb;
+    }
+
+    // ------------------------------------------------------------------
+    // Speichern
+    // ------------------------------------------------------------------
+
+    private async Task Save()
+    {
+        if (_p is null || RepoRoot is not { } root) return;
+        if (string.IsNullOrWhiteSpace(_p.Name)) _p.Name = "Pipeline";
+        try
+        {
+            var target = PipelineStore.DefinitionPath(root, _p);
+            if (_path is null && File.Exists(target)
+                && await Ui.ShowDialogAsync(new DialogRequest { Title = L.F("pl.overwriteTitle", Path.GetFileName(target)), OkText = L["pl.overwrite"], CancelText = L["action.cancel"], Danger = true }) != DialogResult.Ok)
+                return;
+            var yamlTarget = Path.Combine(root, _p.EffectiveOutputPath);
+            if (File.Exists(yamlTarget) && !File.ReadAllText(yamlTarget).Contains("Pipeline-Builder von Blazor Studio", StringComparison.Ordinal)
+                && await Ui.ShowDialogAsync(new DialogRequest { Title = L.F("pl.foreignTitle", _p.EffectiveOutputPath), Message = L["pl.foreignText"], OkText = L["pl.overwrite"], CancelText = L["action.cancel"], Danger = true }) != DialogResult.Ok)
+                return;
+            var written = PipelineStore.Save(root, _p, _path);
+            _path = written[0];
+            Reload();
+            Ws.Rescan();
+            Ui.ShowToast(L.F("pl.saved", string.Join(", ", written.Select(Rel))), ToastKind.Success, 5000);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            Ui.ShowToast(e.Message, ToastKind.Error, 6000);
+        }
+    }
+
+    private async Task Delete()
+    {
+        if (_path is null || _p is null) return;
+        if (await Ui.ShowDialogAsync(new DialogRequest { Title = L.F("pl.deleteTitle", _p.Name), Message = L.F("pl.deleteText", _p.EffectiveOutputPath), OkText = L["action.delete"], CancelText = L["action.cancel"], Danger = true }) != DialogResult.Ok)
+            return;
+        try { File.Delete(_path); } catch (IOException) { }
+        _p = null;
+        _path = null;
+        Reload();
+        Ws.Rescan();
+    }
+
+    private async Task Copy(string yaml)
+    {
+        if (await JS.InvokeAsync<bool>("studio.copyText", yaml)) Ui.ShowToast(L["toast.copied"], ToastKind.Success, 1600);
+    }
+
+    // ------------------------------------------------------------------
+    // Formulare
+    // ------------------------------------------------------------------
+
+    private static string StepIcon(StepKind k) => k switch
+    {
+        StepKind.Restore => "package",
+        StepKind.Build => "hammer",
+        StepKind.Test => "checkc",
+        StepKind.Publish => "upload",
+        StepKind.DeployIis => "server",
+        _ => "terminal",
+    };
+
+    private string StageSummary(PipelineStage s) => s.Condition switch
+    {
+        StageCondition.Branch => L.F("pl.c.branchShort", string.IsNullOrWhiteSpace(s.ConditionValue) ? "main" : s.ConditionValue),
+        StageCondition.Tag => L["pl.c.Tag"],
+        StageCondition.PullRequest => L["pl.c.PullRequest"],
+        _ => s.Runner,
+    } + (s.ManualApproval ? " · " + L["pl.approval"] : "");
+
+    private static List<string> SplitList(string? s) =>
+        (s ?? "").Split(new[] { ',', ';', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+
+    private RenderFragment PipelineForm(PipelineDefinition p) => __builder =>
+    {
+        var t = p.Triggers;
+        <h3>@L["pl.settings"]</h3>
+        <div class="g2">
+            <div class="row2"><label>@L["pl.name"]</label><div class="f"><input value="@p.Name" @onchange="e => p.Name = e.Value?.ToString() ?? string.Empty" /></div></div>
+            <div class="row2"><label>.NET SDK</label><div class="f"><input class="mono" value="@p.DotnetVersion" @onchange="e => p.DotnetVersion = e.Value?.ToString() ?? string.Empty" /></div></div>
+        </div>
+        <div class="row2"><label>@L["pl.provider"]</label>
+            <div class="seg fill">
+                @foreach (var pv in Enum.GetValues<PipelineProvider>())
+                {
+                    var prov = pv;
+                    <button class="@(p.Provider == prov ? "on" : "")" @onclick="() => { p.Provider = prov; p.OutputPath = null; }">@L["pl.provider." + prov]</button>
+                }
+            </div></div>
+        <div class="row2"><label>@L["pl.file"]</label><div class="f"><input class="mono" value="@p.OutputPath" placeholder="@p.DefaultOutputPath" spellcheck="false" @onchange="e => p.OutputPath = string.IsNullOrWhiteSpace(e.Value?.ToString()) ? null : e.Value!.ToString()" /></div></div>
+
+        <h4>@L["pl.triggers"]</h4>
+        <div class="g2">
+            <div class="row2"><label>@L["pl.branches"]</label><div class="f"><input class="mono" value="@string.Join(", ", t.Branches)" placeholder="main, release/*" @onchange="e => t.Branches = SplitList(e.Value?.ToString())" /></div></div>
+            <div class="row2"><label>@L["pl.tags"]</label><div class="f"><input class="mono" value="@string.Join(", ", t.Tags)" placeholder="v*" @onchange="e => t.Tags = SplitList(e.Value?.ToString())" /></div></div>
+            <div class="row2"><label>@L["pl.paths"]</label><div class="f"><input class="mono" value="@string.Join(", ", t.Paths)" placeholder="src/**" @onchange="e => t.Paths = SplitList(e.Value?.ToString())" /></div></div>
+            <div class="row2"><label>@L["pl.schedule"]</label><div class="f"><input class="mono" value="@t.Schedule" placeholder="0 3 * * 1-5" @onchange="e => t.Schedule = e.Value?.ToString()" /></div></div>
+        </div>
+        <div class="pub-opts">
+            <label class="check"><input type="checkbox" checked="@t.PullRequests" @onchange="e => t.PullRequests = e.Value is true" />@L["pl.prs"]</label>
+            <label class="check"><input type="checkbox" checked="@t.Manual" @onchange="e => t.Manual = e.Value is true" />@L["pl.manual"]</label>
+        </div>
+
+        <h4>@L["pl.variables"]</h4>
+        @foreach (var v in p.Variables.ToList())
+        {
+            var variable = v;
+            <div class="pl-var">
+                <div class="f"><input class="mono" value="@variable.Name" placeholder="NAME" @onchange="e => variable.Name = e.Value?.ToString() ?? string.Empty" /></div>
+                <div class="f"><input class="mono" value="@variable.Value" placeholder="@L["pl.value"]" @onchange="e => variable.Value = e.Value?.ToString() ?? string.Empty" /></div>
+                <button class="ibtn sm danger" @onclick="() => p.Variables.Remove(variable)"><Icon Name="x" /></button>
+            </div>
+        }
+        <button class="btn ghost sm" @onclick="() => p.Variables.Add(new PipelineVariable())"><Icon Name="plus" />@L["pl.addVariable"]</button>
+        <div class="hint" style="margin-top:8px"><Icon Name="lock" />@L["pl.secretsHint"]</div>
+    };
+
+    private RenderFragment StageForm(PipelineStage s) => __builder =>
+    {
+        <h3><Icon Name="layers" />@s.Name</h3>
+        <div class="g2">
+            <div class="row2"><label>@L["pl.name"]</label><div class="f"><input value="@s.Name" @onchange="e => RenameStage(s, e.Value?.ToString())" /></div></div>
+            <div class="row2"><label>@L["pl.runner"]</label>
+                <div class="f"><input class="mono" value="@s.Runner" list="pl-runners" spellcheck="false" @onchange="e => SetRunner(s, e.Value?.ToString())" /></div>
+                <datalist id="pl-runners"><option value="windows-latest"></option><option value="ubuntu-latest"></option><option value="self-hosted"></option></datalist></div>
+        </div>
+        <div class="row2"><label>@L["pl.when"]</label>
+            <div class="seg fill">
+                @foreach (var c in Enum.GetValues<StageCondition>())
+                {
+                    var cond = c;
+                    <button class="@(s.Condition == cond ? "on" : "")" @onclick="() => s.Condition = cond">@L["pl.c." + cond]</button>
+                }
+            </div></div>
+        @if (s.Condition == StageCondition.Branch)
+        {
+            <div class="row2"><label>Branch</label><div class="f"><input class="mono" value="@s.ConditionValue" placeholder="main" @onchange="e => s.ConditionValue = e.Value?.ToString()" /></div></div>
+        }
+        <div class="g2">
+            <div class="row2"><label>@L["pl.environment"]</label><div class="f"><input value="@s.Environment" placeholder="Production" @onchange="e => s.Environment = e.Value?.ToString()" /></div></div>
+            <div class="row2"><label>&nbsp;</label><label class="check"><input type="checkbox" checked="@s.ManualApproval" @onchange="e => s.ManualApproval = e.Value is true" />@L["pl.approval"]</label></div>
+        </div>
+        <div class="hint"><Icon Name="info" />@L["pl.envHint." + _p!.Provider]</div>
+        <div class="btns" style="justify-content:flex-start">
+            <button class="btn ghost danger-text" disabled="@(_p.Stages.Count <= 1)" @onclick="() => RemoveStage(s)"><Icon Name="trash" />@L["pl.removeStage"]</button>
+        </div>
+    };
+
+    private static void SetRunner(PipelineStage s, string? runner) =>
+        s.Runner = string.IsNullOrWhiteSpace(runner) ? "windows-latest" : runner.Trim();
+
+    private void RenameStage(PipelineStage s, string? name)
+    {
+        s.Name = string.IsNullOrWhiteSpace(name) ? s.Name : name.Trim();
+        var id = PipelineGenerator.JobId(PipelineDefinition.Slug(s.Name).Replace('-', '_'));
+        var unique = id;
+        for (var i = 2; _p!.Stages.Any(x => x != s && x.Id == unique); i++) unique = id + i;
+        s.Id = unique;
+    }
+
+    private RenderFragment StepForm(PipelineStep step) => __builder =>
+    {
+        var stage = StageOf(step);
+        <h3><Icon Name="@StepIcon(step.Kind)" />@L["pl.k." + step.Kind]</h3>
+        <p class="dim" style="margin-top:-4px">@L["pl.k." + step.Kind + ".hint"]</p>
+        <div class="row2"><label>@L["pl.displayName"]</label><div class="f"><input value="@step.Name" placeholder="@PipelineGenerator.Title(new PipelineStep { Kind = step.Kind, Settings = step.Settings })" @onchange="e => step.Name = string.IsNullOrWhiteSpace(e.Value?.ToString()) ? null : e.Value!.ToString()" /></div></div>
+        @foreach (var f in StepCatalog.Fields[step.Kind])
+        {
+            var field = f;
+            @Field(step, field)
+        }
+        @if (step.Kind == StepKind.DeployIis)
+        {
+            <div class="hint" style="margin-top:6px"><Icon Name="lock" />@L.F("pl.secretHint." + _p!.Provider, step.Get("secret"))</div>
+            <div class="btns" style="justify-content:flex-start;margin-top:8px">
+                <button class="btn sm" @onclick="() => FillFromProfile(step)"><Icon Name="server" />@L["pl.fromProfile"]</button>
+            </div>
+        }
+        <div class="btns" style="justify-content:flex-start">
+            @if (stage is not null) { <button class="btn ghost" @onclick="() => DuplicateStep(stage, step)"><Icon Name="copy" />@L["pl.duplicate"]</button> }
+            <button class="btn ghost danger-text" @onclick="() => RemoveStep(step)"><Icon Name="trash" />@L["pl.removeStep"]</button>
+        </div>
+    };
+
+    private RenderFragment Field(PipelineStep step, StepField f) => __builder =>
+    {
+        var label = L["pl.f." + f.Key];
+        var value = step.Get(f.Key);
+        switch (f.Type)
+        {
+            case StepFieldType.Bool:
+                <label class="check"><input type="checkbox" checked="@step.GetBool(f.Key)" @onchange='e => step.Set(f.Key, e.Value is true ? "true" : "false")' />@label</label>
+                break;
+            case StepFieldType.Choice:
+                <div class="row2"><label>@label</label>
+                    <Dropdown Value="@value" Mono="true" Options='f.Options!.Select(o => new Dropdown.Option(o, o.Length == 0 ? L["pub.portable"] : o))' ValueChanged="v => step.Set(f.Key, v ?? string.Empty)" /></div>
+                break;
+            case StepFieldType.Multiline:
+                <div class="row2"><label>@label</label>
+                    <textarea class="pl-script mono" spellcheck="false" rows="8" @onchange="e => step.Set(f.Key, e.Value?.ToString())">@value</textarea></div>
+                break;
+            case StepFieldType.Project:
+                <div class="row2"><label>@label</label>
+                    <Dropdown Value="@value" Mono="true" Placeholder="@L["pl.rootProject"]"
+                              Options='Projects().Select(x => new Dropdown.Option(x.Rel, x.Name, x.Rel, x.Rel.EndsWith("proj", StringComparison.OrdinalIgnoreCase) ? "cube" : "sln")).Prepend(new Dropdown.Option(string.Empty, L["pl.rootProject"]))'
+                              ValueChanged="v => step.Set(f.Key, v ?? string.Empty)" /></div>
+                break;
+            case StepFieldType.Servers:
+                var chosen = PipelineGenerator.Servers(step);
+                <div class="row2"><label>@label</label>
+                    @if (Iis.Servers.Count > 0)
+                    {
+                        <div class="iis-targets">
+                            @foreach (var srv in Iis.Servers)
+                            {
+                                var url = srv.Address.ToString().TrimEnd('/');
+                                <label class="check"><input type="checkbox" checked="@chosen.Contains(url, StringComparer.OrdinalIgnoreCase)" @onchange="e => ToggleServer(step, url, e.Value is true)" />@srv.Display <span class="dim mono">@url</span></label>
+                            }
+                        </div>
+                    }
+                    <div class="f"><input class="mono" value="@value" placeholder="https://web01:8790, https://web02:8790" spellcheck="false" @onchange="e => step.Set(f.Key, e.Value?.ToString())" /></div>
+                </div>
+                break;
+            default:
+                <div class="row2"><label>@label</label><div class="f"><input class="@(f.Key is "site" or "pool" ? "" : "mono")" value="@value" placeholder="@L["pl.p." + f.Key]" spellcheck="false" @onchange="e => step.Set(f.Key, e.Value?.ToString())" /></div>
+                    @if (f.Key == "version") { <small class="dim">@L["pl.versionHint"]</small> }</div>
+                break;
+        }
+    };
+
+    private static void ToggleServer(PipelineStep step, string url, bool on)
+    {
+        var list = PipelineGenerator.Servers(step);
+        list.RemoveAll(x => x.Equals(url, StringComparison.OrdinalIgnoreCase));
+        if (on) list.Add(url);
+        step.Set("servers", string.Join(", ", list));
+    }
+}

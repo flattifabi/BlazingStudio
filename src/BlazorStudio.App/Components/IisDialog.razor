@@ -1,0 +1,1047 @@
+@inherits StudioComponent
+@inject IisService Iis
+@inject IHostBridge Host
+@inject IJSRuntime JS
+
+<div class="backdrop" style="padding-top:3vh" @onclick="Close">
+    <div class="dialog nuget iis" @onclick:stopPropagation="true">
+        <div class="ng-head">
+            <div class="iic"><Icon Name="server" /></div>
+            <div class="t">
+                <h2>@L["iis.title"]</h2>
+                <small class="dim">@(Iis.Servers.Count == 0 ? L["iis.subtitleEmpty"] : L.F("iis.subtitle", Iis.OnlineCount, Iis.Servers.Count))</small>
+            </div>
+            <button class="btn ghost sm" title="@L["iis.agentPackageHint"]" @onclick="OpenAgentPackage"><Icon Name="package" />@L["iis.agentPackage"]</button>
+            <button class="ibtn" title="@L["nuget.refresh"]" @onclick="RefreshAll"><Icon Name="refresh" Class="@(_refreshing ? "spin" : null)" /></button>
+            <button class="ibtn" title="@L["action.close"]" @onclick="Close"><Icon Name="x" /></button>
+        </div>
+
+        <div class="iis-body">
+            @* ------------------------------ Serverliste ------------------------------ *@
+            <div class="iis-servers scroll">
+                @foreach (var group in Iis.Servers.GroupBy(s => string.IsNullOrWhiteSpace(s.Environment) ? "" : s.Environment!.Trim()))
+                {
+                    @if (group.Key.Length > 0) { <div class="iis-group">@group.Key</div> }
+                    @foreach (var srv in group)
+                    {
+                        var s = srv;
+                        var st = Iis.Status(s);
+                        <div class="iis-srv @(s == _selected && _editing is null ? "on" : "")" @onclick="() => Select(s)" title="@(st.Error ?? s.Address.ToString())">
+                            <span class="iis-dot @HealthClass(st.Health)"></span>
+                            <div class="ng-main">
+                                <b>@s.Display</b>
+                                <small>@(st.Health == ServerHealth.Online && st.Info is { } i ? $"{i.MachineName} · CPU {i.CpuPercent:0}% · RAM {Percent(i.MemoryUsedBytes, i.MemoryTotalBytes):0}%" : HealthText(st))</small>
+                            </div>
+                        </div>
+                    }
+                }
+                <button class="btn dashed wide" style="margin-top:8px" @onclick="NewServer"><Icon Name="plus" />@L["iis.addServer"]</button>
+            </div>
+
+            @* ------------------------------ Inhalt ------------------------------ *@
+            <div class="iis-main">
+                @if (_editing is { } ed)
+                {
+                    @ServerForm(ed)
+                }
+                else if (Iis.Servers.Count == 0)
+                {
+                    <div class="iis-welcome scroll">
+                        <div class="iic" style="width:44px;height:44px"><Icon Name="server" /></div>
+                        <h3>@L["iis.welcomeTitle"]</h3>
+                        <p class="dim">@L["iis.welcomeText"]</p>
+                        <ol>
+                            <li>@L["iis.step1"] <button class="btn sm" @onclick="OpenAgentPackage"><Icon Name="package" />@L["iis.agentPackage"]</button></li>
+                            <li>@L["iis.step2"] <code>.\install-service.ps1</code></li>
+                            <li>@L["iis.step3"]</li>
+                        </ol>
+                        <button class="btn ac" @onclick="NewServer"><Icon Name="plus" />@L["iis.addServer"]</button>
+                    </div>
+                }
+                else if (_selected is { } sel)
+                {
+                    var st = Iis.Status(sel);
+                    <div class="iis-tabs">
+                        <div class="seg">
+                            @foreach (var t in Tabs)
+                            {
+                                var tab = t;
+                                <button class="@(_tab == tab.Id ? "on" : "")" @onclick="() => SetTab(tab.Id)"><Icon Name="@tab.Icon" />@L["iis.tab." + tab.Id]</button>
+                            }
+                        </div>
+                        <span class="grow"></span>
+                        <span class="dim iis-addr">@sel.Address</span>
+                        <button class="ibtn sm" title="@L["iis.editServer"]" @onclick="() => EditServer(sel)"><Icon Name="gear" /></button>
+                    </div>
+                    @if (st.Health is not (ServerHealth.Online or ServerHealth.Checking or ServerHealth.Unknown) && _tab != "deploy")
+                    {
+                        <div class="banner warn"><Icon Name="alert" /><span>@HealthText(st)@(st.Error is { } err ? ": " + err : "")</span><span class="grow"></span>
+                            <button class="btn sm" @onclick="() => EditServer(sel)">@L["iis.editServer"]</button>
+                            <button class="btn sm" @onclick="() => Iis.RefreshAsync(sel)"><Icon Name="refresh" />@L["iis.retry"]</button>
+                        </div>
+                    }
+                    @if (_error is { } e)
+                    {
+                        <div class="banner warn"><Icon Name="alert" /><span>@e</span><span class="grow"></span><button class="ibtn sm" @onclick="() => _error = null"><Icon Name="x" /></button></div>
+                    }
+                    <div class="iis-content scroll">
+                        @switch (_tab)
+                        {
+                            case "pools": @PoolsTab(sel) break;
+                            case "sites": @SitesTab(sel) break;
+                            case "deploy": @DeployTab() break;
+                            case "history": @HistoryTab(sel) break;
+                            default: @OverviewTab(st) break;
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+
+        @if (_pool is { } pe) { @PoolEditor(pe) }
+        @if (_newSite is { } ns) { @SiteEditor(ns) }
+    </div>
+</div>
+
+@code {
+    private static string? _requestedTab;
+
+    /// <summary>Beim nächsten Öffnen diesen Reiter zeigen (z. B. „deploy“ aus dem Projekt-Menü).</summary>
+    public static void Request(string? tab) => _requestedTab = tab;
+
+    private sealed record TabDef(string Id, string Icon);
+
+    private static readonly TabDef[] Tabs =
+    {
+        new("overview", "activity"), new("pools", "layers"), new("sites", "globe"), new("deploy", "rocket"), new("history", "history"),
+    };
+
+    private IisServerEntry? _selected;
+    private string _tab = "overview";
+    private string? _error;
+    private bool _refreshing;
+    private bool _busy;
+    private Timer? _timer;
+
+    // Daten des gewählten Servers
+    private List<AppPoolInfo>? _pools;
+    private List<SiteInfo>? _sites;
+    private List<DeploymentRecord>? _history;
+    private DeploymentRecord? _historyDetail;
+    private string _filter = "";
+    private string? _expandedSite;
+    private string _expandedApp = "/";
+    private List<SiteVersion>? _versions;
+
+    protected override void OnStudioInitialized()
+    {
+        Iis.Changed += Refresh;
+        _selected = Iis.Servers.FirstOrDefault(s => Iis.Status(s).Health == ServerHealth.Online) ?? Iis.Servers.FirstOrDefault();
+        if (_requestedTab is { } t) _tab = t;
+        _requestedTab = null;
+        Iis.Watched = _selected;
+        Iis.SetFastPolling(true);
+        InitDeploy();
+        _ = LoadTabAsync();
+        // Pools/Sites alle 5 s nachladen (CPU/RAM der Arbeitsprozesse, Zustände)
+        _timer = new Timer(_ => InvokeAsync(async () =>
+        {
+            if (_tab is "pools" or "sites" && !_busy && _pool is null && _newSite is null) await LoadTabAsync(quiet: true);
+            if (_tab == "history" && _history?.Any(h => !h.IsFinished) == true) await LoadTabAsync(quiet: true);
+        }), null, 5000, 5000);
+    }
+
+    public override void Dispose()
+    {
+        Iis.Changed -= Refresh;
+        Iis.SetFastPolling(false);
+        Iis.Watched = null;
+        _timer?.Dispose();
+        base.Dispose();
+    }
+
+    private void Close()
+    {
+        if (_pool is not null) { _pool = null; return; }
+        if (_newSite is not null) { _newSite = null; return; }
+        Ui.CloseOverlay();
+    }
+
+    private async Task RefreshAll()
+    {
+        _refreshing = true;
+        await Iis.RefreshAllAsync();
+        await LoadTabAsync();
+        _refreshing = false;
+    }
+
+    private void Select(IisServerEntry s)
+    {
+        _editing = null;
+        if (_selected == s) return;
+        _selected = s;
+        Iis.Watched = s;
+        _pools = null;
+        _sites = null;
+        _history = null;
+        _historyDetail = null;
+        _versions = null;
+        _expandedSite = null;
+        _error = null;
+        _ = Iis.RefreshAsync(s);
+        _ = LoadTabAsync();
+    }
+
+    private void SetTab(string tab)
+    {
+        _tab = tab;
+        _error = null;
+        _ = LoadTabAsync();
+    }
+
+    private async Task LoadTabAsync(bool quiet = false)
+    {
+        if (_selected is not { } s) return;
+        var client = Iis.Client(s);
+        try
+        {
+            switch (_tab)
+            {
+                case "pools":
+                    _pools = await client.GetPoolsAsync();
+                    break;
+                case "sites":
+                    _sites = await client.GetSitesAsync();
+                    if (_expandedSite is not null) _versions = await client.GetVersionsAsync(_expandedSite, _expandedApp);
+                    break;
+                case "history":
+                    _history = await client.GetDeploymentsAsync(null, 100);
+                    if (_historyDetail is { } hd) _historyDetail = await client.GetDeploymentAsync(hd.Id);
+                    break;
+                case "deploy":
+                    if (_sites is null && Iis.Status(s).Health == ServerHealth.Online) _sites = await client.GetSitesAsync();
+                    break;
+            }
+            if (!quiet) _error = null;
+        }
+        catch (AgentException e)
+        {
+            if (!quiet) _error = e.Message;
+        }
+        await InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>Aktion ausführen, Fehler anzeigen, danach neu laden.</summary>
+    private async Task Act(Func<AgentClient, Task> action, string? success = null)
+    {
+        if (_selected is not { } s) return;
+        _busy = true;
+        _error = null;
+        try
+        {
+            await action(Iis.Client(s));
+            if (success is not null) Ui.ShowToast(success, ToastKind.Success, 2400);
+        }
+        catch (AgentException e)
+        {
+            _error = e.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+        await LoadTabAsync(quiet: true);
+        _ = Iis.RefreshAsync(s);
+    }
+
+    private async Task<bool> Confirm(string title, string? text, string ok, bool danger = true) =>
+        await Ui.ShowDialogAsync(new DialogRequest { Title = title, Message = text, OkText = ok, CancelText = L["action.cancel"], Danger = danger }) == DialogResult.Ok;
+
+    private void OpenAgentPackage()
+    {
+        var dir = Path.Combine(AppContext.BaseDirectory, "agent");
+        if (Directory.Exists(dir) && Directory.GetFiles(dir, "*.zip").FirstOrDefault() is { } zip) Host.RevealInExplorer(zip);
+        else Host.OpenExternal("https://github.com/flattifabi/BlazingStudio/releases/latest");
+    }
+
+    // ------------------------------------------------------------------
+    // Hilfen
+    // ------------------------------------------------------------------
+
+    private static string HealthClass(ServerHealth h) => h switch
+    {
+        ServerHealth.Online => "ok",
+        ServerHealth.Checking or ServerHealth.Unknown => "busy",
+        ServerHealth.Unauthorized or ServerHealth.Error => "warn",
+        _ => "err",
+    };
+
+    private string HealthText(ServerStatus st) => st.Health switch
+    {
+        ServerHealth.Online => L["iis.h.online"],
+        ServerHealth.Checking or ServerHealth.Unknown => L["iis.h.checking"],
+        ServerHealth.Unauthorized => L["iis.h.unauthorized"],
+        ServerHealth.Offline => L["iis.h.offline"],
+        _ => L["iis.h.error"],
+    };
+
+    private static double Percent(long used, long total) => total <= 0 ? 0 : used * 100.0 / total;
+
+    private static string Size(long bytes) => IisService.ProfilerSize(bytes);
+
+    private static string StateClass(string state) => state switch
+    {
+        "Started" or "Running" or "Succeeded" => "ok",
+        "Starting" or "Stopping" or "Queued" => "busy",
+        "RolledBack" => "warn",
+        "Stopped" or "Failed" => "err",
+        _ => "",
+    };
+
+    private string StateText(string state) => L["iis.state." + state] is var t && t != "iis.state." + state ? t : state;
+
+    private static string Ago(DateTime utc)
+    {
+        var local = utc.Kind == DateTimeKind.Utc ? utc.ToLocalTime() : utc;
+        return local.Date == DateTime.Today ? local.ToString("HH:mm", CultureInfo.CurrentCulture) : local.ToString("g", CultureInfo.CurrentCulture);
+    }
+
+    private static string Uptime(double seconds)
+    {
+        var t = TimeSpan.FromSeconds(seconds);
+        return t.TotalDays >= 1 ? $"{(int)t.TotalDays} d {t.Hours} h" : t.TotalHours >= 1 ? $"{(int)t.TotalHours} h {t.Minutes} min" : $"{t.Minutes} min";
+    }
+
+    // ==================================================================
+    // Übersicht
+    // ==================================================================
+
+    private RenderFragment OverviewTab(ServerStatus st) => __builder =>
+    {
+        if (st.Info is not { } i)
+        {
+            <div class="ins-empty" style="padding-top:60px"><Icon Name="server" /><span>@HealthText(st)</span></div>
+            return;
+        }
+        var memPct = Percent(i.MemoryUsedBytes, i.MemoryTotalBytes);
+        var diskPct = Percent(i.DiskTotalBytes - i.DiskFreeBytes, i.DiskTotalBytes);
+        <div class="prof-tiles iis-tiles">
+            <div class="tile">
+                <div class="tile-h"><span>CPU (@i.ProcessorCount)</span><b>@i.CpuPercent.ToString("0", CultureInfo.CurrentCulture) %</b></div>
+                <Sparkline Values="i.CpuHistory" Color="#4c8dff" Max="100" />
+            </div>
+            <div class="tile">
+                <div class="tile-h"><span>@L["iis.memory"]</span><b>@memPct.ToString("0", CultureInfo.CurrentCulture) %</b></div>
+                <Sparkline Values="i.MemoryHistory" Color="#14b8e6" Max="100" />
+                <small class="dim">@Size(i.MemoryUsedBytes) / @Size(i.MemoryTotalBytes)</small>
+            </div>
+            <div class="tile">
+                <div class="tile-h"><span>@L["iis.disk"]</span><b>@diskPct.ToString("0", CultureInfo.CurrentCulture) %</b></div>
+                <div class="iis-bar"><i style="width:@(diskPct.ToString("0.#", CultureInfo.InvariantCulture))%" class="@(diskPct > 90 ? "err" : diskPct > 75 ? "warn" : "")"></i></div>
+                <small class="dim">@L.F("iis.diskFree", Size(i.DiskFreeBytes), i.DeployRoot)</small>
+            </div>
+            <div class="tile">
+                <div class="tile-h"><span>IIS</span><b class="@(i.IisServiceState == "Running" ? "ok-text" : "err-text")">@(i.IisInstalled ? i.IisVersion ?? "?" : "–")</b></div>
+                <small class="dim">@(i.IisInstalled ? L.F("iis.w3svc", i.IisServiceState) : L["iis.noIis"])</small>
+            </div>
+        </div>
+        <div class="iis-facts">
+            <div class="card" @onclick='() => SetTab("pools")'><h5>@L["iis.tab.pools"]</h5><div class="iis-big"><b>@i.PoolsStarted</b><span>/ @i.Pools @L["iis.started"]</span></div></div>
+            <div class="card" @onclick='() => SetTab("sites")'><h5>@L["iis.tab.sites"]</h5><div class="iis-big"><b>@i.SitesStarted</b><span>/ @i.Sites @L["iis.started"]</span></div></div>
+            <div class="card" @onclick='() => SetTab("history")'><h5>@L["iis.deployments"]</h5><div class="iis-big"><b>@i.RunningDeployments</b><span>@L["iis.running"]</span></div></div>
+            <div class="card"><h5>@L["iis.machine"]</h5>
+                <div class="iis-kv">
+                    <span>@L["iis.host"]</span><b>@i.MachineName</b>
+                    <span>@L["iis.os"]</span><b>@i.OsVersion</b>
+                    <span>@L["iis.uptime"]</span><b>@Uptime(i.UptimeSeconds)</b>
+                    <span>Agent</span><b>@i.AgentVersion @if (IsOutdated(i.AgentVersion)) { <span class="chip warnchip" title="@L["iis.agentOutdatedHint"]">@L["iis.agentOutdated"]</span> }</b>
+                    <span>@L["iis.keep"]</span><b>@i.KeepVersions</b>
+                </div>
+            </div>
+        </div>
+        <div class="dim" style="font-size:11.5px;padding:8px 2px">@L.F("iis.checked", st.Checked?.ToString("T", CultureInfo.CurrentCulture) ?? "–")</div>
+    };
+
+    private static bool IsOutdated(string agentVersion) =>
+        Version.TryParse(agentVersion, out var a) && Version.TryParse(UpdateService.CurrentVersion, out var s) && a < new Version(s.Major, s.Minor);
+
+    // ==================================================================
+    // App-Pools
+    // ==================================================================
+
+    private RenderFragment PoolsTab(IisServerEntry s) => __builder =>
+    {
+        <div class="iis-toolbar">
+            <div class="f" style="width:240px"><Icon Name="search" /><input placeholder="@L["iis.filter"]" value="@_filter" @oninput="e => _filter = e.Value?.ToString() ?? string.Empty" /></div>
+            <span class="grow"></span>
+            <button class="btn sm" @onclick="NewPool"><Icon Name="plus" />@L["iis.newPool"]</button>
+        </div>
+        if (_pools is null)
+        {
+            <div class="ins-empty"><Icon Name="refresh" Class="spin" /></div>
+            return;
+        }
+        <table class="ptable iis-table">
+            <thead><tr>
+                <th style="width:24%">@L["iis.name"]</th><th style="width:11%">@L["iis.status"]</th><th style="width:12%">.NET CLR</th>
+                <th style="width:16%">@L["iis.identity"]</th><th class="num" style="width:7%">CPU</th><th class="num" style="width:9%">RAM</th>
+                <th class="num" style="width:7%" title="@L["iis.requestsHint"]">@L["iis.requests"]</th><th style="width:14%"></th>
+            </tr></thead>
+            <tbody>
+                @foreach (var p in _pools.Where(p => _filter.Length == 0 || p.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase) || p.Applications.Any(a => a.Contains(_filter, StringComparison.OrdinalIgnoreCase))))
+                {
+                    var pool = p;
+                    <tr @ondblclick="() => EditPool(pool)">
+                        <td><b>@pool.Name</b><small class="iis-sub">@(pool.Applications.Count == 0 ? L["iis.noApps"] : string.Join(", ", pool.Applications))</small></td>
+                        <td><span class="iis-state @StateClass(pool.State)">@StateText(pool.State)</span>@if (pool.WorkerProcesses.Count > 0) { <small class="iis-sub">PID @string.Join(", ", pool.WorkerProcesses.Select(w => w.ProcessId))</small> }</td>
+                        <td>@(pool.ManagedRuntimeVersion.Length == 0 ? L["iis.noManaged"] : pool.ManagedRuntimeVersion)<small class="iis-sub">@pool.PipelineMode@(pool.Enable32Bit ? " · 32-Bit" : "")</small></td>
+                        <td>@(pool.IdentityType == "SpecificUser" ? pool.UserName : pool.IdentityType)<small class="iis-sub">@pool.StartMode</small></td>
+                        <td class="num mono">@(pool.WorkerProcesses.Count == 0 ? "–" : pool.CpuPercent.ToString("0.#", CultureInfo.CurrentCulture) + " %")</td>
+                        <td class="num mono">@(pool.WorkerProcesses.Count == 0 ? "–" : Size(pool.WorkingSetBytes))</td>
+                        <td class="num mono">@(pool.ActiveRequests?.ToString(CultureInfo.CurrentCulture) ?? "–")</td>
+                        <td class="iis-actions">
+                            @if (pool.State == "Started")
+                            {
+                                <button class="ibtn sm" title="@L["iis.recycle"]" disabled="@_busy" @onclick='() => Act(c => c.PoolActionAsync(pool.Name, "recycle"), L.F("iis.recycled", pool.Name))'><Icon Name="restart" /></button>
+                                <button class="ibtn sm danger" title="@L["iis.stop"]" disabled="@_busy" @onclick="() => StopPool(pool)"><Icon Name="stop" /></button>
+                            }
+                            else
+                            {
+                                <button class="ibtn sm" title="@L["iis.start"]" disabled="@_busy" @onclick='() => Act(c => c.PoolActionAsync(pool.Name, "start"), L.F("iis.startedToast", pool.Name))'><Icon Name="play" /></button>
+                            }
+                            <button class="ibtn sm" title="@L["iis.edit"]" @onclick="() => EditPool(pool)"><Icon Name="gear" /></button>
+                            <button class="ibtn sm danger" title="@L["action.delete"]" disabled="@(_busy || pool.Applications.Count > 0)" @onclick="() => DeletePool(pool)"><Icon Name="trash" /></button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    };
+
+    private async Task StopPool(AppPoolInfo p)
+    {
+        if (p.Applications.Count > 0 && !await Confirm(L.F("iis.stopPoolTitle", p.Name), L.F("iis.stopPoolText", string.Join(", ", p.Applications)), L["iis.stop"])) return;
+        await Act(c => c.PoolActionAsync(p.Name, "stop"), L.F("iis.stoppedToast", p.Name));
+    }
+
+    private async Task DeletePool(AppPoolInfo p)
+    {
+        if (!await Confirm(L.F("iis.deletePoolTitle", p.Name), null, L["action.delete"])) return;
+        await Act(c => c.DeletePoolAsync(p.Name), L.F("iis.deleted", p.Name));
+    }
+
+    // ---------------- Pool-Editor ----------------
+
+    private PoolSettings? _pool;
+    private bool _poolCreate;
+
+    private void NewPool()
+    {
+        _poolCreate = true;
+        _pool = new PoolSettings { Name = "", ManagedRuntimeVersion = "", PipelineMode = "Integrated", IdentityType = "ApplicationPoolIdentity", StartMode = "OnDemand", AutoStart = true, Enable32Bit = false, IdleTimeoutMinutes = 20, RecycleMinutes = 1740, QueueLength = 1000, CpuLimitPercent = 0 };
+    }
+
+    private void EditPool(AppPoolInfo p)
+    {
+        _poolCreate = false;
+        _pool = PoolSettings.From(p);
+    }
+
+    private async Task SavePool()
+    {
+        if (_pool is not { } p) return;
+        if (string.IsNullOrWhiteSpace(p.Name)) { _error = L["iis.nameMissing"]; return; }
+        var create = _poolCreate;
+        await Act(c => create ? c.CreatePoolAsync(p) : c.UpdatePoolAsync(p), L.F(create ? "iis.created" : "iis.saved", p.Name));
+        if (_error is null) _pool = null;
+    }
+
+    private RenderFragment PoolEditor(PoolSettings p) => __builder =>
+    {
+        <div class="iis-sheet-back" @onclick="() => _pool = null">
+            <div class="iis-sheet" @onclick:stopPropagation="true">
+                <h3><Icon Name="layers" />@(_poolCreate ? L["iis.newPool"] : L.F("iis.editPool", p.Name))</h3>
+                @if (_error is { } e) { <div class="hint warn" style="margin-bottom:10px"><Icon Name="alert" />@e</div> }
+                <div class="g2">
+                    <div class="row2"><label>@L["iis.name"]</label><div class="f"><input value="@p.Name" disabled="@(!_poolCreate)" spellcheck="false" @onchange="e => p.Name = e.Value?.ToString()?.Trim() ?? string.Empty" /></div></div>
+                    <div class="row2"><label>.NET CLR</label>
+                        <Dropdown Value="@p.ManagedRuntimeVersion" Options='new[] { new Dropdown.Option("", L["iis.noManaged"], "ASP.NET Core"), new Dropdown.Option("v4.0", "v4.0", ".NET Framework 4.x"), new Dropdown.Option("v2.0", "v2.0", ".NET Framework 2/3.5") }' ValueChanged="v => p.ManagedRuntimeVersion = v ?? string.Empty" /></div>
+                    <div class="row2"><label>@L["iis.pipeline"]</label>
+                        <div class="seg fill"><button class="@(p.PipelineMode == "Integrated" ? "on" : "")" @onclick='() => p.PipelineMode = "Integrated"'>Integrated</button><button class="@(p.PipelineMode == "Classic" ? "on" : "")" @onclick='() => p.PipelineMode = "Classic"'>Classic</button></div></div>
+                    <div class="row2"><label>@L["iis.startMode"]</label>
+                        <div class="seg fill"><button class="@(p.StartMode == "OnDemand" ? "on" : "")" @onclick='() => p.StartMode = "OnDemand"'>OnDemand</button><button class="@(p.StartMode == "AlwaysRunning" ? "on" : "")" @onclick='() => p.StartMode = "AlwaysRunning"'>AlwaysRunning</button></div></div>
+                    <div class="row2"><label>@L["iis.identity"]</label>
+                        <Dropdown Value="@p.IdentityType" Options='new[] { "ApplicationPoolIdentity", "NetworkService", "LocalService", "LocalSystem", "SpecificUser" }.Select(x => new Dropdown.Option(x, x == "SpecificUser" ? L["iis.specificUser"] : x))' ValueChanged="v => p.IdentityType = v" /></div>
+                    <div class="row2"><label>@L["iis.idle"]</label><div class="f"><input type="number" min="0" value="@p.IdleTimeoutMinutes" @onchange="e => p.IdleTimeoutMinutes = Int(e)" /><span class="u">min</span></div></div>
+                    @if (p.IdentityType == "SpecificUser")
+                    {
+                        <div class="row2"><label>@L["iis.user"]</label><div class="f"><input value="@p.UserName" placeholder="DOMAIN\user" spellcheck="false" @onchange="e => p.UserName = e.Value?.ToString()" /></div></div>
+                        <div class="row2"><label>@L["iis.password"]</label><div class="f"><input type="password" placeholder="@(_poolCreate ? "" : L["iis.unchanged"])" @onchange="e => p.Password = e.Value?.ToString()" /></div></div>
+                    }
+                    <div class="row2"><label>@L["iis.recycleEvery"]</label><div class="f"><input type="number" min="0" value="@p.RecycleMinutes" @onchange="e => p.RecycleMinutes = Int(e)" /><span class="u">min</span></div></div>
+                    <div class="row2"><label>@L["iis.queue"]</label><div class="f"><input type="number" min="10" value="@p.QueueLength" @onchange="e => p.QueueLength = Int(e)" /></div></div>
+                    <div class="row2"><label>@L["iis.cpuLimit"]</label><div class="f"><input type="number" min="0" max="100" value="@p.CpuLimitPercent" @onchange="e => p.CpuLimitPercent = double.TryParse(e.Value?.ToString(), NumberStyles.Float, CultureInfo.CurrentCulture, out var d) ? d : 0" /><span class="u">%</span></div></div>
+                </div>
+                <div class="pub-opts">
+                    <label class="check"><input type="checkbox" checked="@(p.AutoStart == true)" @onchange="e => p.AutoStart = e.Value is true" />@L["iis.autoStart"]</label>
+                    <label class="check"><input type="checkbox" checked="@(p.Enable32Bit == true)" @onchange="e => p.Enable32Bit = e.Value is true" />@L["iis.enable32"]</label>
+                </div>
+                <div class="btns">
+                    <button class="btn ghost" @onclick="() => _pool = null">@L["action.cancel"]</button>
+                    <button class="btn ac" disabled="@_busy" @onclick="SavePool"><Icon Name="save" />@(_poolCreate ? L["action.create"] : L["action.save"])</button>
+                </div>
+            </div>
+        </div>
+    };
+
+    private static int Int(ChangeEventArgs e) => int.TryParse(e.Value?.ToString(), out var v) ? Math.Max(0, v) : 0;
+
+    // ==================================================================
+    // Sites & Versionen
+    // ==================================================================
+
+    private RenderFragment SitesTab(IisServerEntry s) => __builder =>
+    {
+        <div class="iis-toolbar">
+            <div class="f" style="width:240px"><Icon Name="search" /><input placeholder="@L["iis.filter"]" value="@_filter" @oninput="e => _filter = e.Value?.ToString() ?? string.Empty" /></div>
+            <span class="grow"></span>
+            <button class="btn sm" @onclick='() => _newSite = new CreateSiteRequest { Binding = "http://*:8080" }'><Icon Name="plus" />@L["iis.newSite"]</button>
+        </div>
+        if (_sites is null)
+        {
+            <div class="ins-empty"><Icon Name="refresh" Class="spin" /></div>
+            return;
+        }
+        <table class="ptable iis-table">
+            <thead><tr>
+                <th style="width:22%">@L["iis.name"]</th><th style="width:11%">@L["iis.status"]</th><th style="width:27%">@L["iis.bindings"]</th>
+                <th style="width:14%">Pool</th><th style="width:15%">@L["iis.activeVersion"]</th><th style="width:11%"></th>
+            </tr></thead>
+            <tbody>
+                @foreach (var x in _sites.Where(x => _filter.Length == 0 || x.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase) || x.Bindings.Any(b => b.BindingInformation.Contains(_filter, StringComparison.OrdinalIgnoreCase))))
+                {
+                    var site = x;
+                    foreach (var a in site.Applications)
+                    {
+                        var app = a;
+                        var key = site.Name + app.Path;
+                        var open = _expandedSite == site.Name && _expandedApp == app.Path;
+                        <tr class="@(open ? "iis-open" : "")" @onclick="() => ToggleVersions(site.Name, app.Path)">
+                            <td>
+                                @if (app.Path == "/") { <b>@site.Name</b><small class="iis-sub">ID @site.Id</small> }
+                                else { <span class="iis-subapp">↳ @app.Path</span> }
+                            </td>
+                            <td>@if (app.Path == "/") { <span class="iis-state @StateClass(site.State)">@StateText(site.State)</span> }</td>
+                            <td>
+                                @if (app.Path == "/")
+                                {
+                                    @foreach (var b in site.Bindings)
+                                    {
+                                        var bind = b;
+                                        @if (bind.Url.Length > 0) { <a class="iis-link" title="@bind.BindingInformation" @onclick:stopPropagation="true" @onclick='() => Host.OpenExternal(bind.Url.TrimEnd((char)47) + (app.Path == "/" ? "/" : app.Path))'>@bind.Protocol://@(bind.Host.Length > 0 ? bind.Host : "*"):@bind.Port</a> }
+                                        else { <span class="dim">@bind.Protocol @bind.BindingInformation</span> }
+                                    }
+                                }
+                            </td>
+                            <td>@app.Pool</td>
+                            <td>@if (app.ActiveVersion is { } v) { <span class="chip mono">@v</span> } else { <small class="dim mono" title="@app.PhysicalPath">@ShortPath(app.PhysicalPath)</small> }</td>
+                            <td class="iis-actions" @onclick:stopPropagation="true">
+                                @if (app.Path == "/")
+                                {
+                                    @if (site.State == "Started")
+                                    {
+                                        <button class="ibtn sm danger" title="@L["iis.stop"]" disabled="@_busy" @onclick="() => StopSite(site)"><Icon Name="stop" /></button>
+                                    }
+                                    else
+                                    {
+                                        <button class="ibtn sm" title="@L["iis.start"]" disabled="@_busy" @onclick='() => Act(c => c.SiteActionAsync(site.Name, "start"), L.F("iis.startedToast", site.Name))'><Icon Name="play" /></button>
+                                    }
+                                    <button class="ibtn sm" title="@L["iis.deployHere"]" @onclick="() => DeployTo(site.Name, app.Path)"><Icon Name="rocket" /></button>
+                                    <button class="ibtn sm danger" title="@L["action.delete"]" disabled="@_busy" @onclick="() => DeleteSite(site)"><Icon Name="trash" /></button>
+                                }
+                                else
+                                {
+                                    <button class="ibtn sm" title="@L["iis.deployHere"]" @onclick="() => DeployTo(site.Name, app.Path)"><Icon Name="rocket" /></button>
+                                }
+                            </td>
+                        </tr>
+                        @if (open)
+                        {
+                            <tr class="iis-versions-row"><td colspan="6">@VersionsPanel(site.Name, app)</td></tr>
+                        }
+                    }
+                }
+            </tbody>
+        </table>
+    };
+
+    private static string ShortPath(string p) => p.Length <= 34 ? p : "…" + p[^33..];
+
+    private async Task ToggleVersions(string site, string app)
+    {
+        if (_expandedSite == site && _expandedApp == app)
+        {
+            _expandedSite = null;
+            _versions = null;
+            return;
+        }
+        _expandedSite = site;
+        _expandedApp = app;
+        _versions = null;
+        await LoadTabAsync(quiet: true);
+    }
+
+    private RenderFragment VersionsPanel(string site, SiteApplicationInfo app) => __builder =>
+    {
+        <div class="iis-versions">
+            <div class="iis-versions-h"><Icon Name="history" /><b>@L["iis.versions"]</b><span class="dim">@app.PhysicalPath</span></div>
+            @if (_versions is null)
+            {
+                <div class="dim" style="padding:8px"><Icon Name="refresh" Class="spin" /></div>
+            }
+            else if (_versions.Count == 0)
+            {
+                <div class="dim" style="padding:8px">@L["iis.noVersions"]</div>
+            }
+            else
+            {
+                @foreach (var v in _versions)
+                {
+                    var ver = v;
+                    <div class="iis-ver @(ver.IsActive ? "active" : "")">
+                        <span class="mono"><b>@ver.Version</b></span>
+                        @if (ver.IsActive) { <span class="iis-state ok">@L["iis.active"]</span> }
+                        else if (ver.IsPrevious) { <span class="iis-state">@L["iis.previous"]</span> }
+                        <span class="dim">@Ago(ver.DeployedAt)</span>
+                        <span class="dim">@ver.Source</span>
+                        @if (ver.Commit is { Length: > 0 } c) { <span class="chip mono" title="@c">@c[..Math.Min(7, c.Length)]</span> }
+                        <span class="dim">@Size(ver.SizeBytes) · @ver.Files @L["iis.files"]</span>
+                        <span class="grow"></span>
+                        @if (!ver.IsActive)
+                        {
+                            <button class="btn sm @(ver.IsPrevious ? "ac" : "")" disabled="@_busy" @onclick="() => Activate(site, app, ver)"><Icon Name="@(ver.IsPrevious ? "undo" : "play")" />@(ver.IsPrevious ? L["iis.rollback"] : L["iis.activate"])</button>
+                            <button class="ibtn sm danger" title="@L["action.delete"]" disabled="@_busy" @onclick="() => DeleteVersion(site, app.Path, ver)"><Icon Name="trash" /></button>
+                        }
+                    </div>
+                }
+            }
+        </div>
+    };
+
+    private async Task Activate(string site, SiteApplicationInfo app, SiteVersion v)
+    {
+        if (!await Confirm(L.F("iis.activateTitle", v.Version, site + (app.Path == "/" ? "" : app.Path)), L.F("iis.activateText", app.ActiveVersion ?? app.PhysicalPath, app.Pool), L["iis.activate"], danger: false)) return;
+        await Act(c => c.ActivateAsync(site, new ActivateRequest { Version = v.Version, AppPath = app.Path }), L.F("iis.activated", v.Version));
+    }
+
+    private async Task DeleteVersion(string site, string appPath, SiteVersion v)
+    {
+        if (!await Confirm(L.F("iis.deleteVersionTitle", v.Version), null, L["action.delete"])) return;
+        await Act(c => c.DeleteVersionAsync(site, appPath, v.Version), L.F("iis.deleted", v.Version));
+    }
+
+    private async Task StopSite(SiteInfo site)
+    {
+        if (!await Confirm(L.F("iis.stopSiteTitle", site.Name), L["iis.stopSiteText"], L["iis.stop"])) return;
+        await Act(c => c.SiteActionAsync(site.Name, "stop"), L.F("iis.stoppedToast", site.Name));
+    }
+
+    private async Task DeleteSite(SiteInfo site)
+    {
+        var r = await Ui.ShowDialogAsync(new DialogRequest
+        {
+            Title = L.F("iis.deleteSiteTitle", site.Name), Message = L["iis.deleteSiteText"],
+            OkText = L["iis.deleteSiteOnly"], AltText = L["iis.deleteSiteFiles"], CancelText = L["action.cancel"], Danger = true,
+        });
+        if (r == DialogResult.Cancel) return;
+        await Act(c => c.DeleteSiteAsync(site.Name, r == DialogResult.Alt), L.F("iis.deleted", site.Name));
+    }
+
+    // ---------------- Neue Site ----------------
+
+    private CreateSiteRequest? _newSite;
+
+    private async Task CreateSite()
+    {
+        if (_newSite is not { } r) return;
+        if (string.IsNullOrWhiteSpace(r.Name)) { _error = L["iis.nameMissing"]; return; }
+        if (!BindingParser.TryParse(r.Binding, out _, out _)) { _error = L["iis.bindingInvalid"]; return; }
+        await Act(c => c.CreateSiteAsync(r), L.F("iis.created", r.Name));
+        if (_error is null) _newSite = null;
+    }
+
+    private RenderFragment SiteEditor(CreateSiteRequest r) => __builder =>
+    {
+        var parsed = BindingParser.TryParse(r.Binding, out var proto, out var info);
+        <div class="iis-sheet-back" @onclick="() => _newSite = null">
+            <div class="iis-sheet" @onclick:stopPropagation="true">
+                <h3><Icon Name="globe" />@L["iis.newSite"]</h3>
+                @if (_error is { } e) { <div class="hint warn" style="margin-bottom:10px"><Icon Name="alert" />@e</div> }
+                <div class="row2"><label>@L["iis.name"]</label><div class="f"><input value="@r.Name" spellcheck="false" placeholder="Shop" @oninput="e => r.Name = e.Value?.ToString() ?? string.Empty" /></div></div>
+                <div class="row2"><label>@L["iis.binding"]</label><div class="f"><input class="mono" value="@r.Binding" spellcheck="false" @oninput="e => r.Binding = e.Value?.ToString() ?? string.Empty" /></div>
+                    <small class="@(parsed ? "dim" : "err-text")">@(parsed ? $"{proto} · {info}" : L["iis.bindingHint"])</small></div>
+                <div class="g2">
+                    <div class="row2"><label>Pool</label><div class="f"><input value="@r.Pool" spellcheck="false" placeholder="@(string.IsNullOrWhiteSpace(r.Name) ? L["iis.poolAuto"] : r.Name)" @onchange="e => r.Pool = e.Value?.ToString()" /></div></div>
+                    <div class="row2"><label>.NET CLR</label>
+                        <Dropdown Value="@r.ManagedRuntimeVersion" Options='new[] { new Dropdown.Option("", L["iis.noManaged"], "ASP.NET Core"), new Dropdown.Option("v4.0", "v4.0", ".NET Framework") }' ValueChanged="v => r.ManagedRuntimeVersion = v ?? string.Empty" /></div>
+                </div>
+                <div class="row2"><label>@L["iis.physicalPath"]</label><div class="f"><input class="mono" value="@r.PhysicalPath" spellcheck="false" placeholder="@L["iis.physicalPathAuto"]" @onchange="e => r.PhysicalPath = e.Value?.ToString()" /></div></div>
+                <div class="btns">
+                    <button class="btn ghost" @onclick="() => _newSite = null">@L["action.cancel"]</button>
+                    <button class="btn ac" disabled="@(_busy || !parsed)" @onclick="CreateSite"><Icon Name="plus" />@L["action.create"]</button>
+                </div>
+            </div>
+        </div>
+    };
+
+    // ==================================================================
+    // Deployment
+    // ==================================================================
+
+    private string? _deployProject;
+    private IisDeployProfile _profile = new();
+    private HashSet<string> _targets = new();
+    private string _versionPreview = "";
+
+    private IEnumerable<string> WebProjects =>
+        Ws.Solution?.AllProjects.Where(p => p.Project is not null).Select(p => p.Path) ?? (Ws.Project?.ProjectFile is { } f ? new[] { f } : Array.Empty<string>());
+
+    private void InitDeploy()
+    {
+        _deployProject ??= Ws.StartupItem?.Path ?? Ws.Project?.ProjectFile;
+        LoadProfile();
+    }
+
+    private void LoadProfile()
+    {
+        if (_deployProject is null) return;
+        _profile = Settings.Current.IisDeployProfiles.TryGetValue(_deployProject, out var p) ? p : new IisDeployProfile { Site = Path.GetFileNameWithoutExtension(_deployProject) };
+        _targets = _profile.ServerIds.Where(id => Iis.Servers.Any(s => s.Id == id)).ToHashSet();
+        if (_targets.Count == 0 && _selected is not null) _targets.Add(_selected.Id);
+        _versionPreview = IisService.ExpandVersion(_profile.VersionTemplate, _deployProject);
+    }
+
+    private void DeployTo(string site, string appPath)
+    {
+        _profile.Site = site;
+        _profile.AppPath = appPath;
+        _profile.CreateSite = false;
+        if (_selected is not null) _targets = new() { _selected.Id };
+        SetTab("deploy");
+    }
+
+    private void ToggleTarget(string id, bool on)
+    {
+        if (on) _targets.Add(id);
+        else _targets.Remove(id);
+    }
+
+    private async Task StartDeploy()
+    {
+        if (_deployProject is null) return;
+        if (string.IsNullOrWhiteSpace(_profile.Site)) { _error = L["iis.siteMissing"]; return; }
+        var servers = Iis.Servers.Where(s => _targets.Contains(s.Id)).ToList();
+        if (servers.Count == 0) { _error = L["iis.noTargets"]; return; }
+        var version = IisService.ExpandVersion(_profile.VersionTemplate, _deployProject);
+        if (!VersionStore.IsValidVersion(version)) { _error = L.F("iis.versionInvalid", version); return; }
+        var names = string.Join(", ", servers.Select(s => s.Display));
+        if (!await Confirm(L.F("iis.deployTitle", Path.GetFileNameWithoutExtension(_deployProject), version), L.F("iis.deployText", _profile.Site + (_profile.AppPath == "/" ? "" : _profile.AppPath), names), L["iis.deploy"], danger: servers.Any(s => (s.Environment ?? string.Empty).Contains("prod", StringComparison.OrdinalIgnoreCase))))
+            return;
+        _profile.ServerIds = _targets.ToList();
+        Settings.Current.IisDeployProfiles[_deployProject] = _profile;
+        Settings.Save();
+        _error = null;
+        BottomPanel.Show?.Invoke(BottomTab.Output);
+        Ws.SaveAll();
+        var d = await Iis.DeployAsync(_deployProject, _profile, servers, version);
+        if (d.Ok) Ui.ShowToast(L.F("iis.deployDone", version, names), ToastKind.Success, 6000);
+        else Ui.ShowToast(d.Error ?? L["iis.deployFailed"], ToastKind.Error, 8000);
+        _sites = null;
+    }
+
+    private RenderFragment DeployTab() => __builder =>
+    {
+        var d = Iis.CurrentDeployment;
+        var running = d is { Finished: false };
+        <div class="iis-deploy">
+            <div class="iis-deploy-form">
+                <div class="row2"><label>@L["iis.project"]</label>
+                    <Dropdown Value="@_deployProject" Options='WebProjects.Select(p => new Dropdown.Option(p, Path.GetFileNameWithoutExtension(p), null, "cube"))' ValueChanged="v => { _deployProject = v; LoadProfile(); }" /></div>
+
+                <div class="row2"><label>@L["iis.targets"]</label>
+                    <div class="iis-targets">
+                        @foreach (var srv in Iis.Servers)
+                        {
+                            var s = srv;
+                            var st = Iis.Status(s);
+                            <label class="check"><input type="checkbox" checked="@_targets.Contains(s.Id)" @onchange="e => ToggleTarget(s.Id, e.Value is true)" />
+                                <span class="iis-dot @HealthClass(st.Health)"></span>@s.Display @if (!string.IsNullOrWhiteSpace(s.Environment)) { <span class="chip">@s.Environment</span> }</label>
+                        }
+                    </div>
+                    @if (_targets.Count > 1) { <small class="dim">@L["iis.rollingHint"]</small> }
+                </div>
+
+                <div class="g2">
+                    <div class="row2"><label>Site</label>
+                        <div class="f"><input value="@_profile.Site" list="iis-sites" spellcheck="false" @oninput="e => _profile.Site = e.Value?.ToString() ?? string.Empty" /></div>
+                        <datalist id="iis-sites">@foreach (var x in _sites ?? new()) { <option value="@x.Name"></option> }</datalist></div>
+                    <div class="row2"><label>@L["iis.appPath"]</label><div class="f"><input class="mono" value="@_profile.AppPath" spellcheck="false" @onchange="e => _profile.AppPath = DeployRequest.NormalizeAppPath(e.Value?.ToString())" /></div></div>
+                    <div class="row2"><label>@L["iis.version"]</label><div class="f"><input class="mono" value="@_profile.VersionTemplate" spellcheck="false" @oninput="e => { _profile.VersionTemplate = e.Value?.ToString() ?? string.Empty; _versionPreview = IisService.ExpandVersion(_profile.VersionTemplate, _deployProject); }" /></div>
+                        <small class="dim">→ <span class="mono">@_versionPreview</span> · {version} {date} {time} {user}</small></div>
+                    <div class="row2"><label>@L["pub.configuration"]</label>
+                        <div class="seg fill"><button class="@(_profile.Configuration == "Release" ? "on" : "")" @onclick='() => _profile.Configuration = "Release"'>Release</button><button class="@(_profile.Configuration == "Debug" ? "on" : "")" @onclick='() => _profile.Configuration = "Debug"'>Debug</button></div></div>
+                    <div class="row2"><label>@L["pub.runtime"]</label>
+                        <Dropdown Value="@_profile.RuntimeIdentifier" Placeholder="@L["pub.portable"]" Mono="true" Options='new[] { "win-x64", "win-x86", "win-arm64" }.Select(r => new Dropdown.Option(r, r)).Prepend(new Dropdown.Option(null, L["pub.portable"]))' ValueChanged="v => _profile.RuntimeIdentifier = v" /></div>
+                    <div class="row2"><label>@L["pub.mode"]</label>
+                        <div class="seg fill">
+                            <button class="@(!_profile.SelfContained ? "on" : "")" title="@L["pub.fddHint"]" @onclick="() => _profile.SelfContained = false">@L["pub.fdd"]</button>
+                            <button class="@(_profile.SelfContained ? "on" : "")" disabled="@(_profile.RuntimeIdentifier is null)" title="@L["pub.scdHint"]" @onclick="() => _profile.SelfContained = true">@L["pub.scd"]</button>
+                        </div></div>
+                </div>
+                <div class="row2"><label>@L["iis.healthUrl"]</label><div class="f"><input class="mono" value="@_profile.HealthUrl" spellcheck="false" placeholder="http://localhost:8080/health" @onchange="e => _profile.HealthUrl = e.Value?.ToString()" /></div>
+                    <small class="dim">@L["iis.healthHint"]</small></div>
+                <div class="pub-opts">
+                    <label class="check"><input type="checkbox" checked="@_profile.Rollback" @onchange="e => _profile.Rollback = e.Value is true" />@L["iis.autoRollback"]</label>
+                    <label class="check"><input type="checkbox" checked="@_profile.CreateSite" @onchange="e => _profile.CreateSite = e.Value is true" />@L["iis.createSite"]</label>
+                </div>
+                @if (_profile.CreateSite)
+                {
+                    <div class="g2">
+                        <div class="row2"><label>@L["iis.binding"]</label><div class="f"><input class="mono" value="@_profile.Binding" placeholder="http://*:8080" spellcheck="false" @onchange="e => _profile.Binding = e.Value?.ToString()" /></div></div>
+                        <div class="row2"><label>Pool</label><div class="f"><input value="@_profile.Pool" placeholder="@L["iis.poolAuto"]" spellcheck="false" @onchange="e => _profile.Pool = e.Value?.ToString()" /></div></div>
+                    </div>
+                }
+                <div class="row2"><label>@L["iis.notes"]</label><div class="f"><input value="@_profile.Notes" @onchange="e => _profile.Notes = e.Value?.ToString()" /></div></div>
+                <div class="btns" style="justify-content:flex-start">
+                    <button class="btn ac" disabled="@(running || _deployProject is null || _targets.Count == 0)" @onclick="StartDeploy"><Icon Name="rocket" />@L["iis.deploy"]</button>
+                    <button class="btn ghost" @onclick='() => Ui.OpenOverlay("pipelines")'><Icon Name="pipeline" />@L["iis.asPipeline"]</button>
+                </div>
+            </div>
+
+            <div class="iis-deploy-status">
+                @if (d is null)
+                {
+                    <div class="ins-empty" style="padding-top:40px"><Icon Name="rocket" /><span>@L["iis.deployEmpty"]</span></div>
+                }
+                else
+                {
+                    <h4>@d.Site · <span class="mono">@d.Version</span></h4>
+                    <div class="iis-steps">
+                        @foreach (var step in new[] { "publish", "zip", "upload", "deploy" })
+                        {
+                            var idx = Array.IndexOf(new[] { "publish", "zip", "upload", "deploy", "done" }, d.Step);
+                            var my = Array.IndexOf(new[] { "publish", "zip", "upload", "deploy" }, step);
+                            var cls = d.Finished ? (d.Ok || my < idx ? "done" : "") : my < idx ? "done" : my == idx ? "now" : "";
+                            <div class="iis-step @cls">@if (cls == "now") { <Icon Name="refresh" Class="spin" /> } else if (cls == "done") { <Icon Name="check" /> } else { <Icon Name="dot" /> }@L["iis.step." + step]</div>
+                        }
+                    </div>
+                    @if (d.Progress is { } pr && !d.Finished)
+                    {
+                        <div class="upd-progress"><div class="bar"><i style="width:@((pr * 100).ToString("0", CultureInfo.InvariantCulture))%"></i></div><small class="dim">@d.Server · @Math.Round(pr * 100) %</small></div>
+                    }
+                    @foreach (var (server, rec) in d.Results)
+                    {
+                        <div class="iis-result">
+                            <div class="iis-result-h"><span class="iis-state @StateClass(rec.State.ToString())">@StateText(rec.State.ToString())</span><b>@server</b>@if (rec.PreviousVersion is { } pv) { <span class="dim">@pv → @rec.Version</span> }</div>
+                            <div class="iis-log mono">
+                                @foreach (var line in rec.Log.TakeLast(12)) { <div class="l-@line.Level">@line.Text</div> }
+                            </div>
+                        </div>
+                    }
+                    @if (d.Finished)
+                    {
+                        <div class="hint @(d.Ok ? "" : "warn")" style="margin-top:10px"><Icon Name="@(d.Ok ? "checkc" : "alert")" /><span>@(d.Ok ? L.F("iis.deployDone", d.Version, string.Join(", ", d.Results.Select(r => r.Server))) : d.Error)</span></div>
+                    }
+                    else
+                    {
+                        <button class="btn sm" style="margin-top:10px" @onclick="() => d.Cancel.Cancel()"><Icon Name="x" />@L["action.cancel"]</button>
+                    }
+                }
+            </div>
+        </div>
+    };
+
+    // ==================================================================
+    // Verlauf
+    // ==================================================================
+
+    private RenderFragment HistoryTab(IisServerEntry s) => __builder =>
+    {
+        if (_history is null)
+        {
+            <div class="ins-empty"><Icon Name="refresh" Class="spin" /></div>
+            return;
+        }
+        if (_history.Count == 0)
+        {
+            <div class="ins-empty" style="padding-top:50px"><Icon Name="history" /><span>@L["iis.noHistory"]</span></div>
+            return;
+        }
+        <div class="iis-history">
+            <table class="ptable iis-table">
+                <thead><tr><th style="width:15%">@L["iis.when"]</th><th style="width:13%">@L["iis.status"]</th><th style="width:22%">Site</th><th style="width:22%">@L["iis.version"]</th><th>@L["iis.source"]</th></tr></thead>
+                <tbody>
+                    @foreach (var h in _history)
+                    {
+                        var rec = h;
+                        <tr class="@(_historyDetail?.Id == rec.Id ? "iis-open" : "")" @onclick="() => ShowHistory(rec)">
+                            <td>@Ago(rec.StartedAt)</td>
+                            <td><span class="iis-state @StateClass(rec.State.ToString())">@StateText(rec.State.ToString())</span></td>
+                            <td>@rec.Site@(rec.AppPath == "/" ? "" : rec.AppPath)</td>
+                            <td class="mono">@(rec.PreviousVersion is { } pv ? pv + " → " : "")<b>@rec.Version</b></td>
+                            <td><span class="dim">@rec.Source</span>@if (rec.Commit is { Length: > 0 } c) { <span class="chip mono" style="margin-left:6px">@c[..Math.Min(7, c.Length)]</span> }</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+            @if (_historyDetail is { } hd)
+            {
+                <div class="iis-result">
+                    <div class="iis-result-h"><span class="iis-state @StateClass(hd.State.ToString())">@StateText(hd.State.ToString())</span><b>@hd.Site · @hd.Version</b>
+                        <span class="dim">@Ago(hd.StartedAt)@(hd.FinishedAt is { } f ? " · " + (f - hd.StartedAt).TotalSeconds.ToString("0.0", CultureInfo.CurrentCulture) + " s" : "")</span>
+                        @if (hd.Notes is { Length: > 0 } n) { <span class="dim">· @n</span> }</div>
+                    @if (hd.Error is { } err) { <div class="hint warn" style="margin:6px 0"><Icon Name="alert" />@err</div> }
+                    <div class="iis-log mono" style="max-height:none">
+                        @foreach (var line in hd.Log) { <div class="l-@line.Level"><span class="dim">@line.At.ToLocalTime().ToString("HH:mm:ss", CultureInfo.InvariantCulture)</span> @line.Text</div> }
+                    </div>
+                </div>
+            }
+        </div>
+    };
+
+    private async Task ShowHistory(DeploymentRecord r)
+    {
+        if (_selected is null) return;
+        try
+        {
+            _historyDetail = await Iis.Client(_selected).GetDeploymentAsync(r.Id);
+        }
+        catch (AgentException e)
+        {
+            _error = e.Message;
+        }
+    }
+
+    // ==================================================================
+    // Server anlegen/bearbeiten
+    // ==================================================================
+
+    private sealed class ServerDraft
+    {
+        public IisServerEntry? Original { get; init; }
+        public string Name { get; set; } = "";
+        public string Host { get; set; } = "";
+        public int Port { get; set; } = AgentDefaults.Port;
+        public bool Https { get; set; }
+        public string? Environment { get; set; }
+        public string? Thumbprint { get; set; }
+        public string? ApiKey { get; set; }
+        public string? TestResult { get; set; }
+        public bool TestOk { get; set; }
+        public bool Testing { get; set; }
+    }
+
+    private ServerDraft? _editing;
+
+    private void NewServer() => _editing = new ServerDraft();
+
+    private void EditServer(IisServerEntry s) => _editing = new ServerDraft
+    {
+        Original = s, Name = s.Name, Host = s.Host, Port = s.Port, Https = s.Https, Environment = s.Environment, Thumbprint = s.CertificateThumbprint,
+    };
+
+    private string? ValidateDraft(ServerDraft d)
+    {
+        if (string.IsNullOrWhiteSpace(d.Host)) return L["iis.hostMissing"];
+        try { _ = AgentClient.BuildAddress(d.Host, d.Port, d.Https); }
+        catch (UriFormatException) { return L["iis.hostInvalid"]; }
+        if (d.Original is null && string.IsNullOrWhiteSpace(d.ApiKey)) return L["iis.keyMissing"];
+        return null;
+    }
+
+    private async Task TestServer(ServerDraft d)
+    {
+        if (ValidateDraft(d) is { } problem) { d.TestResult = problem; d.TestOk = false; return; }
+        d.Testing = true;
+        d.TestResult = null;
+        StateHasChanged();
+        var key = !string.IsNullOrWhiteSpace(d.ApiKey) ? d.ApiKey.Trim() : d.Original is { } o ? IisService.ApiKeyOf(o) ?? string.Empty : "";
+        using var client = new AgentClient(AgentClient.BuildAddress(d.Host.Trim(), d.Port, d.Https), key, d.Thumbprint);
+        try
+        {
+            var ping = await client.PingAsync();
+            var info = await client.GetInfoAsync();
+            d.TestOk = true;
+            d.TestResult = L.F("iis.testOk", ping.MachineName, ping.Version, info.IisInstalled ? info.IisVersion ?? "?" : L["iis.noIis"]);
+            if (string.IsNullOrWhiteSpace(d.Name)) d.Name = ping.MachineName;
+        }
+        catch (AgentException e)
+        {
+            d.TestOk = false;
+            d.TestResult = e.IsUnauthorized ? L["iis.testUnauthorized"] : e.IsUnreachable ? L.F("iis.testOffline", e.Message) : e.Message;
+        }
+        d.Testing = false;
+    }
+
+    private void SaveServer(ServerDraft d)
+    {
+        if (ValidateDraft(d) is { } problem) { d.TestResult = problem; d.TestOk = false; return; }
+        var entry = d.Original ?? new IisServerEntry();
+        entry.Name = d.Name.Trim();
+        entry.Host = d.Host.Trim();
+        entry.Port = d.Port <= 0 ? AgentDefaults.Port : d.Port;
+        entry.Https = d.Https;
+        entry.Environment = string.IsNullOrWhiteSpace(d.Environment) ? null : d.Environment.Trim();
+        entry.CertificateThumbprint = string.IsNullOrWhiteSpace(d.Thumbprint) ? null : AgentClient.NormalizeThumbprint(d.Thumbprint);
+        Iis.Save(entry, string.IsNullOrWhiteSpace(d.ApiKey) ? null : d.ApiKey.Trim());
+        _editing = null;
+        Select(entry);
+        Ui.ShowToast(L.F("iis.serverSaved", entry.Display), ToastKind.Success, 2000);
+    }
+
+    private async Task RemoveServer(ServerDraft d)
+    {
+        if (d.Original is not { } o) return;
+        if (!await Confirm(L.F("iis.removeServerTitle", o.Display), L["iis.removeServerText"], L["action.remove"])) return;
+        Iis.Remove(o);
+        _editing = null;
+        _selected = Iis.Servers.FirstOrDefault();
+        Iis.Watched = _selected;
+        _ = LoadTabAsync();
+    }
+
+    private RenderFragment ServerForm(ServerDraft d) => __builder =>
+    {
+        <div class="iis-form scroll">
+            <h3>@(d.Original is null ? L["iis.addServer"] : L.F("iis.editServerTitle", d.Original.Display))</h3>
+            <div class="g2">
+                <div class="row2"><label>@L["iis.host"]</label><div class="f"><input class="mono" value="@d.Host" placeholder="web01.firma.local / 10.0.0.11" spellcheck="false" @oninput="e => d.Host = e.Value?.ToString() ?? string.Empty" /></div></div>
+                <div class="row2"><label>Port</label><div class="f"><input type="number" min="1" max="65535" value="@d.Port" @onchange="e => d.Port = int.TryParse(e.Value?.ToString(), out var p) ? p : AgentDefaults.Port" /></div></div>
+                <div class="row2"><label>@L["iis.displayName"]</label><div class="f"><input value="@d.Name" placeholder="@L["iis.displayNameHint"]" @oninput="e => d.Name = e.Value?.ToString() ?? string.Empty" /></div></div>
+                <div class="row2"><label>@L["iis.environment"]</label><div class="f"><input value="@d.Environment" list="iis-envs" placeholder="Test, Staging, Produktion …" @oninput="e => d.Environment = e.Value?.ToString()" /></div>
+                    <datalist id="iis-envs">@foreach (var env in Iis.Servers.Select(s => s.Environment).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct()) { <option value="@env"></option> }</datalist></div>
+            </div>
+            <div class="row2"><label>@L["iis.apiKey"]</label><div class="f"><Icon Name="lock" /><input type="password" class="mono" value="@d.ApiKey" placeholder="@(d.Original is null ? L["iis.apiKeyHint"] : L["iis.unchanged"])" autocomplete="off" @oninput="e => d.ApiKey = e.Value?.ToString()" /></div></div>
+            <label class="check"><input type="checkbox" checked="@d.Https" @onchange="e => d.Https = e.Value is true" />HTTPS</label>
+            @if (d.Https)
+            {
+                <div class="row2"><label>@L["iis.thumbprint"]</label><div class="f"><input class="mono" value="@d.Thumbprint" placeholder="@L["iis.thumbprintHint"]" spellcheck="false" @oninput="e => d.Thumbprint = e.Value?.ToString()" /></div></div>
+            }
+            else
+            {
+                <div class="hint" style="margin-bottom:8px"><Icon Name="info" />@L["iis.httpHint"]</div>
+            }
+            @if (d.TestResult is { } tr)
+            {
+                <div class="hint @(d.TestOk ? "" : "warn")" style="margin:8px 0"><Icon Name="@(d.TestOk ? "checkc" : "alert")" />@tr</div>
+            }
+            <div class="btns">
+                @if (d.Original is not null) { <button class="btn ghost left danger-text" @onclick="() => RemoveServer(d)"><Icon Name="trash" />@L["action.remove"]</button> }
+                <button class="btn ghost" @onclick="() => _editing = null">@L["action.cancel"]</button>
+                <button class="btn" disabled="@d.Testing" @onclick="() => TestServer(d)">@if (d.Testing) { <Icon Name="refresh" Class="spin" /> } else { <Icon Name="zap" /> }@L["iis.test"]</button>
+                <button class="btn ac" @onclick="() => SaveServer(d)"><Icon Name="save" />@L["action.save"]</button>
+            </div>
+            <div class="iis-install hint"><Icon Name="info" /><span>@L["iis.installHint"] <code>.\install-service.ps1</code> · <a class="iis-link" @onclick="OpenAgentPackage">@L["iis.agentPackage"]</a></span></div>
+        </div>
+    };
+}

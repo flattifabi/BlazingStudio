@@ -1,5 +1,6 @@
 @inherits StudioComponent
 @inject UpdateService Updates
+@inject IisService Iis
 
 <footer class="status">
     @if (Debug.IsActive)
@@ -35,6 +36,21 @@
         </button>
     }
 
+    @if (Iis.CurrentDeployment is { Finished: false } dep)
+    {
+        <button class="warn" title="@L["iis.title"]" @onclick='() => { IisDialog.Request("deploy"); Ui.OpenOverlay("iis"); }'>
+            <Icon Name="rocket" /> @L.F("iis.statusDeploying", dep.Version, L["iis.step." + dep.Step])@(dep.Progress is { } pr ? $" {Math.Round(pr * 100)} %" : "")
+        </button>
+    }
+    @if (Iis.Servers.Count > 0)
+    {
+        var online = Iis.OnlineCount;
+        var problems = Iis.Servers.Where(x => Iis.Status(x).Health is ServerHealth.Offline or ServerHealth.Unauthorized or ServerHealth.Error).Select(x => x.Display).ToList();
+        <button class="iis-pill" title="@(problems.Count > 0 ? L.F("iis.statusProblems", string.Join(", ", problems)) : L["iis.statusAllOnline"])" @onclick='() => { IisDialog.Request(null); Ui.OpenOverlay("iis"); }'>
+            <span class="iis-dot @(problems.Count > 0 ? (online == 0 ? "err" : "warn") : online == Iis.Servers.Count ? "ok" : "busy")"></span>IIS @online/@Iis.Servers.Count
+        </button>
+    }
+
     @if (Ws.Active is { } d)
     {
         @if (d.Kind == DocumentKind.Razor && d.HasErrors)
@@ -60,6 +76,7 @@
     {
         Ws.CursorChanged += Refresh;
         Updates.Changed += Refresh;
+        Iis.Changed += Refresh;
     }
 
     public override void Dispose()
@@ -67,6 +84,7 @@
         base.Dispose();
         Ws.CursorChanged -= Refresh;
         Updates.Changed -= Refresh;
+        Iis.Changed -= Refresh;
     }
 
     private string StopLocation => Debug.Session.CurrentFrame is { } f ? $"{Path.GetFileName(f.File)}:{f.Line}" : "";

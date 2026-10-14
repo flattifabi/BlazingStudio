@@ -70,6 +70,69 @@ public sealed class AppSettings
 
     /// <summary>Entladene Projekte je Projektmappe (wie „Unload Project“ in VS/Rider).</summary>
     public Dictionary<string, List<string>> UnloadedProjects { get; set; } = new();
+
+    /// <summary>IIS-Server mit Blazor Studio Agent (API-Schlüssel per DPAPI verschlüsselt).</summary>
+    public List<IisServerEntry> IisServers { get; set; } = new();
+
+    /// <summary>Letzte IIS-Deployment-Einstellungen je Projektdatei.</summary>
+    public Dictionary<string, IisDeployProfile> IisDeployProfiles { get; set; } = new();
+}
+
+public sealed class IisServerEntry
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+
+    public string Name { get; set; } = "";
+
+    /// <summary>Rechnername oder IP-Adresse.</summary>
+    public string Host { get; set; } = "";
+
+    public int Port { get; set; } = BlazorStudio.Deploy.AgentDefaults.Port;
+
+    public bool Https { get; set; }
+
+    /// <summary>Umgebung zum Gruppieren, z. B. „Test“ oder „Produktion“.</summary>
+    public string? Environment { get; set; }
+
+    /// <summary>SHA1-Fingerabdruck eines selbstsignierten Agent-Zertifikats, dem vertraut wird.</summary>
+    public string? CertificateThumbprint { get; set; }
+
+    /// <summary>API-Schlüssel, unter Windows mit DPAPI (aktueller Benutzer) verschlüsselt.</summary>
+    public string? ProtectedApiKey { get; set; }
+
+    public Uri Address => BlazorStudio.Deploy.AgentClient.BuildAddress(Host, Port, Https);
+
+    public string Display => string.IsNullOrWhiteSpace(Name) ? Host : Name;
+}
+
+public sealed class IisDeployProfile
+{
+    public List<string> ServerIds { get; set; } = new();
+
+    public string Site { get; set; } = "";
+
+    public string AppPath { get; set; } = "/";
+
+    public string Configuration { get; set; } = "Release";
+
+    public string? RuntimeIdentifier { get; set; }
+
+    public bool SelfContained { get; set; }
+
+    /// <summary>Vorlage, siehe <see cref="BlazorStudio.Deploy.Pipelines.PipelineGenerator.VersionExpression"/>; {version} = Projektversion.</summary>
+    public string VersionTemplate { get; set; } = "{version}-{date}.{time}";
+
+    public string? HealthUrl { get; set; }
+
+    public bool Rollback { get; set; } = true;
+
+    public bool CreateSite { get; set; }
+
+    public string? Binding { get; set; }
+
+    public string? Pool { get; set; }
+
+    public string? Notes { get; set; }
 }
 
 /// <summary>Speichert Einstellungen in %AppData%\BlazorStudio\settings.json.</summary>

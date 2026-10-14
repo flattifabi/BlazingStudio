@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Gemeinsamer Teil von Blazor Studio und dem IIS-Agent (BlazorStudio.Agent):
+    Datenmodelle der REST-API, HTTP-Client, Versionsablage und das Pipeline-Skript.
+    Bewusst ohne Paketabhängigkeiten, damit der Agent schlank bleibt.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Scripts\Deploy-BlazorStudio.ps1" LogicalName="Deploy-BlazorStudio.ps1" />
+  </ItemGroup>
+
+</Project>

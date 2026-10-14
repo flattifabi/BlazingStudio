@@ -139,7 +139,7 @@ public static class BuiltInCatalog
     private static ComponentDefinition B(string name, string icon, string template, bool children, params ParameterDefinition[] parameters) => new()
     {
         Key = "blazor:" + name, TagName = name, Label = name, Category = "blazor", Icon = icon, Template = template,
-        Source = ComponentSource.Blazor, AcceptsChildren = children, Parameters = parameters, Namespace = "Microsoft.AspNetCore.Components",
+        Source = ComponentSource.Blazor, AcceptsChildren = children, Parameters = parameters, Namespace = Razor.RazorImports.BlazorNamespace(name),
     };
 
     private static ParameterDefinition P(string name, string type, ValueEditor editor, string[]? options = null, bool required = false, bool bindable = false, string? enumPrefix = null) =>

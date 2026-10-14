@@ -7,7 +7,7 @@ namespace BlazorStudio.App.Services;
 /// <summary>
 /// Texte der Oberfläche in Deutsch und Englisch. Neue Sprachen: weiteres Wörterbuch in <see cref="Tables"/> eintragen.
 /// </summary>
-public sealed class Localizer
+public sealed partial class Localizer
 {
     public string Language { get; private set; } = "de";
 
