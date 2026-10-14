@@ -1,3 +1,18 @@
+## Behoben: Site zeigte nach dem Deployment weiter auf „_initial“
+- Ursache: Auf dem Server lief noch ein **älterer Agent** (vor 1.6.2) – und Studio hat das nicht als „veraltet“ markiert, weil nur Haupt- und Nebenversion verglichen wurden.
+- Studio prüft jetzt **vor dem Veröffentlichen** die Agent-Version aller Zielserver und bricht mit klarer Meldung ab, wenn ein Agent älter als 1.6.2 ist (statt ein Deployment zu starten, das den Pfad nicht umstellt).
+- Die Kennzeichnung „veraltet“ in der Server-Übersicht berücksichtigt jetzt auch die Patch-Version.
+- Wird in eine Unteranwendung (z. B. `/app`) deployt, während die Site selbst noch auf `_initial` zeigt, weist das Protokoll darauf hin.
+- **Agent aktualisieren:** `BlazorStudio-Agent-1.6.3.zip` auf dem Server entpacken und `install-service.ps1` erneut ausführen (Schlüssel und Einstellungen bleiben). Danach einmal deployen – die Site wird auf den Versionsordner umgeschaltet.
+
+## Neu: Ein Klick zurück auf die vorherige Version
+- In **IIS-Server → Sites** hat jede ausgerollte Anwendung jetzt den Knopf **↶ Eine Version zurück** direkt in der Zeile (neben 🚀). Nach Rückfrage wird auf die vorherige Version umgeschaltet und der App-Pool recycelt.
+- Ältere Versionen gezielt: Zeile aufklappen → Versionsliste → **Aktivieren** bzw. **Zurückschalten**. Aus der Pipeline geht es per API: `POST /api/sites/<Site>/activate` mit `{ "version": "…", "appPath": "/" }`.
+
+## Behoben: Bestätigungsdialog erschien hinter dem Fenster
+- Rückfragen (z. B. „Bereitstellen?“ im IIS-Fenster) liegen jetzt immer über offenen Fenstern wie IIS-Server oder Pipeline-Builder.
+- **Esc** schließt nur die Rückfrage, nicht gleich das Fenster darunter.
+
 ## Behoben: IIS-Deployment blieb auf „_initial“ stehen
 - Wurde beim Bereitstellen eine neue Site angelegt und schlug danach ein Schritt fehl (z. B. ein zweiter Versuch in derselben Minute mit gleichem Versionsnamen), blieb die Site auf dem leeren Ordner `…\_initial` stehen – die App mit ihren DLLs lag zwar auf dem Server, war aber nicht aktiv.
 - Neue Sites werden jetzt **erst nach dem Entpacken** angelegt – und zwar direkt auf dem Versionsordner. Den Ordner `_initial` gibt es nicht mehr.

@@ -237,4 +237,17 @@ public sealed class DeployTests : IDisposable
         Assert.Contains("BLAZORSTUDIO_AGENT_KEY", script);
         Assert.Contains("/api/deployments", script);
     }
+
+    [Theory]
+    [InlineData("1.6.1", "1.6.2", true)]
+    [InlineData("1.6.0", "1.6.2", true)]
+    [InlineData("1.5.9", "1.6.2", true)]
+    [InlineData("1.6.2", "1.6.2", false)]
+    [InlineData("1.6.2.0", "1.6.2", false)]
+    [InlineData("1.6.3+abc", "1.6.2", false)]
+    [InlineData("1.7", "1.6.2", false)]
+    [InlineData("", "1.6.2", true)]
+    [InlineData("kaputt", "1.6.2", true)]
+    public void Agent_version_comparison_includes_patch(string agent, string minimum, bool older) =>
+        Assert.Equal(older, AgentDefaults.IsOlderThan(agent, minimum));
 }

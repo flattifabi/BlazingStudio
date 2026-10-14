@@ -4,7 +4,7 @@
 
 @if (Ui.Dialog is { } d)
 {
-    <div class="backdrop" @onclick="() => Ui.CloseDialog(DialogResult.Cancel)">
+    <div class="backdrop dialog-layer" @onclick="() => Ui.CloseDialog(DialogResult.Cancel)">
         <div class="dialog" @onclick:stopPropagation="true">
             <h2>@d.Title</h2>
             @if (d.Message is not null) { <p>@d.Message</p> }

@@ -268,6 +268,16 @@ public sealed class IisService : IDisposable
         try
         {
             Directory.CreateDirectory(work);
+
+            // Vorab: alle Ziele erreichbar und mit einem Agent, der den Pfad sicher umschaltet?
+            foreach (var server in servers)
+            {
+                var ping = await Client(server).PingAsync(d.Cancel.Token);
+                if (AgentDefaults.IsOlderThan(ping.Version, AgentDefaults.MinimumDeployVersion))
+                    throw new InvalidOperationException(_l.F("iis.agentTooOld", server.Display, ping.Version, AgentDefaults.MinimumDeployVersion));
+                _run.Write(_l.F("iis.log.agent", server.Display, ping.Version), OutputKind.Muted);
+            }
+
             _run.Write(_l.F("iis.log.publish", Path.GetFileName(projectFile), version), OutputKind.Command);
             var args = new List<string> { "publish", projectFile, "-c", profile.Configuration, "-o", output, "-nologo" };
             if (!string.IsNullOrWhiteSpace(profile.RuntimeIdentifier))
