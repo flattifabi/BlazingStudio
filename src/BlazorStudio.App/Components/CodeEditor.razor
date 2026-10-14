@@ -257,7 +257,8 @@
             if (proj is null || proj.Context == BlazorStudio.Core.Razor.RazorCSharpContext.Expression && text[..offset].EndsWith('@'))
             {
                 replaceStart = offset - razor.ReplaceLength;
-                AddRazor(items, razor.Items, null);
+                // Komponenten aus nicht importierten Namespaces: @using beim Übernehmen mit einfügen (wie Rider)
+                AddRazor(items, razor.Items, null, Ws.UsingResolver(Session, text), text);
                 if (proj is null) return new { items, replaceStart, replaceEnd };
             }
 
@@ -305,10 +306,19 @@
         }
     }
 
-    private static void AddRazor(List<object> items, IEnumerable<BlazorStudio.Core.Completion.CompletionItem> source, (int Start, int End)? range)
+    private static void AddRazor(List<object> items, IEnumerable<BlazorStudio.Core.Completion.CompletionItem> source, (int Start, int End)? range,
+        Func<string, string?>? missingUsing = null, string? text = null)
     {
         foreach (var i in source.Take(400))
         {
+            string? importNs = null;
+            object? edit = null;
+            if (missingUsing is not null && text is not null && i.Kind == BlazorStudio.Core.Completion.CompletionKind.Component && missingUsing(i.Label) is { } ns)
+            {
+                var (pos, ins) = BlazorStudio.Core.Razor.RazorCSharpProjection.UsingInsertion(text, ns);
+                importNs = ns;
+                edit = new { offset = pos, text = ins };
+            }
             items.Add(new
             {
                 label = i.Label,
@@ -320,6 +330,8 @@
                 sortText = i.SortText,
                 rangeStart = range?.Start,
                 rangeEnd = range?.End,
+                importNs,
+                edit,
             });
         }
     }

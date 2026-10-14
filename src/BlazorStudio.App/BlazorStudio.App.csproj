@@ -14,7 +14,7 @@
     <AssemblyTitle>Blazor Studio</AssemblyTitle>
     <Company>Blazor Studio</Company>
     <Copyright>© 2026 Blazor Studio</Copyright>
-    <Version>1.5.4</Version>
+    <Version>1.6.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\BlazorStudio.Core\BlazorStudio.Core.csproj" />
+    <ProjectReference Include="..\BlazorStudio.Deploy\BlazorStudio.Deploy.csproj" />
   </ItemGroup>
 
   <ItemGroup>

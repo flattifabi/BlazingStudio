@@ -6,6 +6,7 @@
     .\build-installer.ps1 -SkipLogo       # Logo nicht neu rendern
 
   Ergebnis: dist\BlazorStudio-Setup-<Version>.exe (+ dist\app mit der portablen App)
+            dist\BlazorStudio-Agent-<Version>.zip (IIS-Agent für die Server, liegt auch im Setup unter agent\)
 #>
 param(
     [string]$Version,
@@ -19,6 +20,8 @@ $app = Join-Path $dist 'app'
 $stage = Join-Path $dist 'stage'
 $appProj = Join-Path $root 'src\BlazorStudio.App\BlazorStudio.App.csproj'
 $setupProj = Join-Path $root 'installer\BlazorStudio.Setup\BlazorStudio.Setup.csproj'
+$agentProj = Join-Path $root 'src\BlazorStudio.Agent\BlazorStudio.Agent.csproj'
+$agentOut = Join-Path $dist 'agent'
 
 function Step($text) { Write-Host "`n==> $text" -ForegroundColor Cyan }
 
@@ -43,6 +46,21 @@ if ($LASTEXITCODE -ne 0) { throw 'dotnet publish fehlgeschlagen' }
 foreach ($d in 'arm64', 'x86') { $p = Join-Path $app $d; if (Test-Path $p) { Remove-Item $p -Recurse -Force } }
 Get-ChildItem $app -Filter *.pdb -Recurse | Remove-Item -Force
 
+Step "IIS-Agent veröffentlichen ($Version, win-x64, self-contained)"
+if (Test-Path $agentOut) { Remove-Item $agentOut -Recurse -Force }
+dotnet publish $agentProj -c Release -r win-x64 --self-contained true -p:Version=$Version -o $agentOut -nologo -v q
+if ($LASTEXITCODE -ne 0) { throw 'Agent-Publish fehlgeschlagen' }
+Get-ChildItem $agentOut -Filter *.pdb -Recurse | Remove-Item -Force
+$agentZip = Join-Path $dist "BlazorStudio-Agent-$Version.zip"
+if (Test-Path $agentZip) { Remove-Item $agentZip -Force }
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::CreateFromDirectory($agentOut, $agentZip, [System.IO.Compression.CompressionLevel]::Optimal, $false)
+# Mit Studio ausliefern: „IIS-Server → Agent-Paket“ zeigt auf diese Datei
+$appAgent = Join-Path $app 'agent'
+New-Item -ItemType Directory -Force $appAgent | Out-Null
+Copy-Item $agentZip $appAgent -Force
+Remove-Item $agentOut -Recurse -Force
+
 Step 'Uninstaller bauen'
 dotnet build $setupProj -c Release -p:SetupKind=Uninstall -p:Version=$Version -nologo -v q
 if ($LASTEXITCODE -ne 0) { throw 'Uninstaller-Build fehlgeschlagen' }
@@ -50,7 +68,6 @@ if ($LASTEXITCODE -ne 0) { throw 'Uninstaller-Build fehlgeschlagen' }
 Step 'Nutzlast packen'
 if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
 New-Item -ItemType Directory $stage | Out-Null
-Add-Type -AssemblyName System.IO.Compression.FileSystem
 [System.IO.Compression.ZipFile]::CreateFromDirectory($app, (Join-Path $stage 'payload.zip'), [System.IO.Compression.CompressionLevel]::Optimal, $false)
 Copy-Item (Join-Path $root 'installer\BlazorStudio.Setup\bin\Uninstall\Uninstall.exe') $stage
 
@@ -63,3 +80,4 @@ Remove-Item $stage -Recurse -Force
 
 $size = (Get-Item $out).Length / 1MB
 Write-Host ("`nFertig: {0} ({1:N1} MB)" -f $out, $size) -ForegroundColor Green
+Write-Host ("       {0} ({1:N1} MB)" -f $agentZip, ((Get-Item $agentZip).Length / 1MB)) -ForegroundColor Green

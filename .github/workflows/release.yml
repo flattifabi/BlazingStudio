@@ -46,4 +46,6 @@ jobs:
           name: Blazor Studio ${{ steps.ver.outputs.version }}
           body_path: RELEASE_NOTES.md
           generate_release_notes: true
-          files: dist/BlazorStudio-Setup-${{ steps.ver.outputs.version }}.exe
+          files: |
+            dist/BlazorStudio-Setup-${{ steps.ver.outputs.version }}.exe
+            dist/BlazorStudio-Agent-${{ steps.ver.outputs.version }}.zip

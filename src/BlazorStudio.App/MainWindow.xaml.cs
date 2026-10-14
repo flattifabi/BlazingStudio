@@ -37,6 +37,7 @@ public partial class MainWindow : Window
         sc.AddSingleton<UpdateService>();
         sc.AddSingleton<ProjectActions>();
         sc.AddSingleton<LiveDesignService>();
+        sc.AddSingleton<IisService>();
         _services = sc.BuildServiceProvider();
         Resources.Add("services", _services);
 
@@ -106,6 +107,7 @@ public partial class MainWindow : Window
         _closeConfirmed = true;
         _services.GetRequiredService<ProfilerService>().Dispose();
         _services.GetRequiredService<LiveDesignService>().Dispose();
+        _services.GetRequiredService<IisService>().Dispose();
         _services.GetRequiredService<RunService>().StopAll();
         _ = _services.GetRequiredService<DebugService>().StopAsync();
     }

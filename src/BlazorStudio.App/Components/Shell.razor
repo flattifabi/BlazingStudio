@@ -49,6 +49,8 @@
         case "update": <UpdateDialog /> break;
         case "newFile": <NewFileDialog /> break;
         case "newSlnProject": <NewProjectInSolutionDialog /> break;
+        case "iis": <IisDialog /> break;
+        case "pipelines": <PipelineBuilder /> break;
     }
 </CascadingValue>
 
@@ -166,6 +168,9 @@
             new("tools.nuget", "cmd.nuget", "package", "Ctrl+Shift+N", () => { Ui.OpenOverlay("nuget"); return Task.CompletedTask; }, () => Ws.Project?.ProjectFile is not null),
             new("tools.profiler", "cmd.profiler", "activity", "Alt+F2", () => { Ui.OpenOverlay("profiler"); return Task.CompletedTask; }),
             new("tools.ef", "cmd.ef", "database", null, () => { Ui.OpenOverlay("ef"); return Task.CompletedTask; }, () => Ws.Solution is not null),
+            new("tools.iis", "cmd.iis", "server", null, () => { IisDialog.Request(null); Ui.OpenOverlay("iis"); return Task.CompletedTask; }),
+            new("tools.iisDeploy", "cmd.iisDeploy", "upload", null, () => { IisDialog.Request("deploy"); Ui.OpenOverlay("iis"); return Task.CompletedTask; }, () => Ws.Project?.ProjectFile is not null),
+            new("tools.pipelines", "cmd.pipelines", "pipeline", null, () => { Ui.OpenOverlay("pipelines"); return Task.CompletedTask; }, () => Ws.HasProject),
             new("file.rescan", "cmd.rescan", "refresh", null, () => { Ws.Rescan(); return Task.CompletedTask; }, () => Ws.HasProject),
             new("file.reveal", "cmd.reveal", "folder", null, () => { if (Active is not null) Host.RevealInExplorer(Active.Path); else if (Ws.Project is not null) Host.RevealInExplorer(Ws.Project.RootDirectory); return Task.CompletedTask; }, () => Ws.HasProject),
 
