@@ -6,6 +6,7 @@
 @inject SettingsService Settings
 @inject Localizer L
 @inject NavigationService Nav
+@inject UiService Ui
 
 <div class="monaco-host" @ref="_host">
     @if (!_created) { <div class="placeholder">@L["editor.loading"]</div> }
@@ -37,7 +38,7 @@
             var glyph = Session.Kind is DocumentKind.CSharp or DocumentKind.Razor;
             await JS.InvokeVoidAsync("studio.monaco.create", _host, _id, _ref, Session.Text, Session.MonacoLanguage,
                 new { fontSize = Settings.Current.EditorFontSize, minimap = Settings.Current.ShowMinimap && Session.Kind != DocumentKind.Razor, glyphMargin = glyph, wordWrap = Session.Kind is DocumentKind.Markdown or DocumentKind.Text,
-                    navLabels = new { definition = L["nav.goToDef"], usages = L["nav.findUsages"], implementation = L["nav.goToImpl"], rename = L["nav.rename"] + " …" } });
+                    navLabels = new { definition = L["nav.goToDef"], usages = L["nav.findUsages"], implementation = L["nav.goToImpl"], rename = L["nav.rename"] + " …", quickFix = L["editor.quickFix"] } });
             if (_disposed) return;
             _created = true;
             Session.Changed += OnSessionChanged;
@@ -281,7 +282,7 @@
             {
                 AddRazor(items, razor.Items.Where(i => i.Kind is BlazorStudio.Core.Completion.CompletionKind.CssValue), (offset - razor.ReplaceLength, offset));
             }
-            AddRoslyn(items, cs, text, rs, re, proj.Context == BlazorStudio.Core.Razor.RazorCSharpContext.AttributeValue, razor: true,
+            AddRoslyn(items, cs, text, rs, re, proj.Context == BlazorStudio.Core.Razor.RazorCSharpContext.AttributeValue, razor: true, shift: offset - proj.Position,
                 allowImports: proj.Context is not BlazorStudio.Core.Razor.RazorCSharpContext.Using);
             return new { items, replaceStart, replaceEnd };
         }
@@ -336,7 +337,8 @@
         }
     }
 
-    private void AddRoslyn(List<object> items, BlazorStudio.Core.Highlighting.CSharpCompletionList list, string text, int rangeStart, int rangeEnd, bool attributeValue, bool razor, bool allowImports = true)
+    /// <param name="shift">Verschiebung von Positionen im (generierten) C#-Dokument zur Datei im Editor (Razor-Projektion).</param>
+    private void AddRoslyn(List<object> items, BlazorStudio.Core.Highlighting.CSharpCompletionList list, string text, int rangeStart, int rangeEnd, bool attributeValue, bool razor, bool allowImports = true, int shift = 0)
     {
         var index = -1;
         var nextChar = rangeEnd < text.Length ? text[rangeEnd] : '\0';
@@ -353,6 +355,31 @@
                     ? BlazorStudio.Core.Razor.RazorCSharpProjection.UsingInsertion(text, ns)
                     : BlazorStudio.Core.Highlighting.SemanticHighlighter.UsingInsertion(text, ns);
                 edit = new { offset = pos, text = ins };
+            }
+            if (i.Edit is { } full)
+            {
+                // override/partial: ganze Member einfügen, Cursor dorthin, wo Roslyn ihn haben will
+                var start = full.Start + shift;
+                var end = full.End + shift;
+                if (start < 0 || end > text.Length || start > end) continue;
+                // Monaco filtert mit dem Text ab Bereichsanfang („override Ca“) – den gleichen Vorspann voranstellen
+                var filter = start < rangeStart && rangeStart <= text.Length ? text[start..rangeStart] + i.FilterText : i.FilterText;
+                items.Add(new
+                {
+                    label = i.Label,
+                    kind = "cs." + i.Kind,
+                    insertText = Escape(full.NewText[..full.CursorOffset]) + "$0" + Escape(full.NewText[full.CursorOffset..]),
+                    detail = i.Detail,
+                    isSnippet = true,
+                    keepWhitespace = true,
+                    sortText = i.SortText,
+                    filterText = filter,
+                    preselect = i.Preselect,
+                    rangeStart = start,
+                    rangeEnd = end,
+                    id = (int?)index,
+                });
+                continue;
             }
             items.Add(new
             {
@@ -377,6 +404,47 @@
 
     [JSInvokable]
     public Task<string?> DescribeCompletion(int id) => Ws.Highlighter.DescribeAsync(id);
+
+    /// <summary>Schnellaktionen (Strg+. / Alt+Enter): Roslyn-Fixes, bei <paramref name="invoked"/> auch Refactorings.</summary>
+    [JSInvokable]
+    public async Task<object[]> GetCodeActions(string text, int start, int end, bool invoked)
+    {
+        if (Session.Kind is not (DocumentKind.CSharp or DocumentKind.Razor)) return Array.Empty<object>();
+        try
+        {
+            await Ws.EnsureHighlighterAsync();
+            BlazorStudio.Core.Razor.RazorProjection? proj = null;
+            if (Session.Kind == DocumentKind.Razor)
+            {
+                var (cls, ns, usings) = Ws.RazorContextFor(Session);
+                proj = BlazorStudio.Core.Razor.RazorCSharpProjection.ClassFor(text, cls, ns, usings);
+            }
+            var list = await Ws.Highlighter.GetCodeActionsAsync(Session.Path, text, start, end, invoked, proj);
+            return list.Select(a => (object)new { id = a.Id, title = a.Title, kind = a.Kind, preferred = a.IsPreferred }).ToArray();
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            LogError("codeActions", e);
+            return Array.Empty<object>();
+        }
+    }
+
+    [JSInvokable]
+    public async Task<object?> ApplyCodeAction(int id, string text)
+    {
+        try
+        {
+            var r = await Ws.Highlighter.ApplyCodeActionAsync(id, text);
+            if (r.Error is not null) Ui.ShowToast(r.Error, ToastKind.Warning, 5000);
+            return new { edits = r.Edits.Select(e => new { offset = e.Offset, length = e.Length, text = e.NewText }), error = r.Error };
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            LogError("applyCodeAction", e);
+            Ui.ShowToast(e.Message, ToastKind.Error, 5000);
+            return null;
+        }
+    }
 
     /// <summary>Semantische Tokens (Roslyn) für .cs-Dateien und die @code-Blöcke in .razor.</summary>
     [JSInvokable]

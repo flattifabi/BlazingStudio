@@ -16,7 +16,14 @@ public sealed record CSharpCompletionItem(
     string SortText,
     string FilterText,
     string? ImportNamespace,
-    bool Preselect = false);
+    bool Preselect = false,
+    CSharpCompletionEdit? Edit = null);
+
+/// <summary>
+/// Vollständige Änderung eines Vorschlags (z. B. <c>override</c> → ganze Methode): ersetzt [Start, End) durch
+/// <see cref="NewText"/>, danach steht der Cursor bei <see cref="CursorOffset"/> (relativ zu NewText).
+/// </summary>
+public sealed record CSharpCompletionEdit(int Start, int End, string NewText, int CursorOffset);
 
 public sealed record CSharpCompletionList(IReadOnlyList<CSharpCompletionItem> Items, int ReplaceStart, int ReplaceEnd);
 
@@ -27,6 +34,9 @@ public sealed record CSharpCompletionList(IReadOnlyList<CSharpCompletionItem> It
 /// </summary>
 public sealed partial class SemanticHighlighter
 {
+    /// <summary>So viele komplexe Vorschläge (override, partial …) werden vorab vollständig berechnet.</summary>
+    private const int MaxComplexEdits = 80;
+
     private readonly Dictionary<string, CompletionItem> _lastRoslynItems = new();
     private Document? _lastCompletionDoc;
 
@@ -42,6 +52,9 @@ public sealed partial class SemanticHighlighter
         var trigger = explicitInvoke || position == 0
             ? CompletionTrigger.Invoke
             : CompletionTrigger.CreateInsertionTrigger(text[position - 1]);
+        // Leerzeichen löst nur dort aus, wo Roslyn es vorsieht (z. B. nach „override“, „new“, „partial“)
+        if (!explicitInvoke && position > 0 && text[position - 1] == ' ' && !service.ShouldTriggerCompletion(SourceText.From(text), position, trigger))
+            return new CSharpCompletionList(Array.Empty<CSharpCompletionItem>(), position, position);
         var list = await service.GetCompletionsAsync(doc, position, trigger, cancellationToken: ct);
 
         // Bereich des aktuellen Bezeichners
@@ -55,6 +68,7 @@ public sealed partial class SemanticHighlighter
         _lastRoslynItems.Clear();
         _lastCompletionDoc = doc;
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        var complexLeft = MaxComplexEdits;
         if (list is not null)
         {
             if (!list.ItemsList.Any() && !explicitInvoke && trigger.Kind == CompletionTriggerKind.Insertion && !char.IsLetterOrDigit(text[position - 1]) && text[position - 1] != '.')
@@ -70,8 +84,26 @@ public sealed partial class SemanticHighlighter
                 _lastRoslynItems[id] = it;
                 // Vorschläge aus nicht importierten Namespaces (Roslyn: ImportCompletionProvider) → using mitliefern
                 var import = IsImportItem(it) ? it.InlineDescription : null;
+                // override/partial-Vorschläge erzeugen ganze Member – die Änderung liefert nur Roslyn selbst
+                CSharpCompletionEdit? edit = null;
+                if (it.IsComplexTextEdit && import is null && complexLeft-- > 0)
+                {
+                    try
+                    {
+                        var change = await service.GetChangeAsync(doc, it, cancellationToken: ct);
+                        var span = change.TextChange.Span;
+                        var newText = change.TextChange.NewText ?? "";
+                        var cursor = change.NewPosition is { } np ? Math.Clamp(np - span.Start, 0, newText.Length) : newText.Length;
+                        edit = new CSharpCompletionEdit(span.Start, span.End, newText, cursor);
+                        if (kind == "text") kind = "method";
+                    }
+                    catch (Exception e) when (e is InvalidOperationException or ArgumentException or NullReferenceException)
+                    {
+                        // ohne Änderung bleibt der einfache Text
+                    }
+                }
                 items.Add(new CSharpCompletionItem(label, kind, insert, import is null && it.InlineDescription.Length > 0 ? it.InlineDescription : null,
-                    Rank(it, prefix) + (import is null ? "" : "~"), it.FilterText, import, it.Rules.MatchPriority > 0 && it.Rules.SelectionBehavior == CompletionItemSelectionBehavior.HardSelection));
+                    Rank(it, prefix) + (import is null ? "" : "~"), it.FilterText, import, it.Rules.MatchPriority > 0 && it.Rules.SelectionBehavior == CompletionItemSelectionBehavior.HardSelection, edit));
             }
         }
 

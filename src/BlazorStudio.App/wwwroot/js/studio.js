@@ -481,7 +481,8 @@
         '<div class="bs-sel"><div class="bs-chip"><span class="bs-chip-label"></span>' +
         '<button data-act="parent" title="↑">&#8593;</button><button data-act="duplicate" title="⧉">&#10697;</button><button data-act="delete" title="✕">&#10005;</button></div>' +
         '<i class="h tl"></i><i class="h tr"></i><i class="h bl"></i><i class="h br"></i></div>' +
-        '<div class="bs-drop-ind"><span></span></div>';
+        '<div class="bs-drop-ind"><span></span></div>' +
+        '<div class="bs-slots"></div>';
       stage.appendChild(overlay);
       const hoverBox = overlay.querySelector('.bs-hover');
       const hoverLabel = overlay.querySelector('.bs-hover-label');
@@ -578,16 +579,73 @@
         e.stopPropagation();
       });
 
+      // ---- Slot-Leiste: Komponenten mit mehreren RenderFragments (TitleContent, ChildContent …) ----
+      const slotBar = overlay.querySelector('.bs-slots');
+      let bar = null; // { host, chips:[{slot, el, rect}], zone }
+      const slotsOf = (el) => {
+        const list = (el && el.dataset ? el.dataset.bsSlots || '' : '').split(',').filter(Boolean);
+        return list.length > 1 || (list.length === 1 && list[0] !== 'ChildContent') ? list : null;
+      };
+      const slotHostOf = (el) => {
+        for (let cur = el, i = 0; cur && i < 12; i++, cur = cur.parentElement ? cur.parentElement.closest('[data-bs-id]') : null) {
+          if (!page() || !page().contains(cur)) return null;
+          if (slotsOf(cur)) return cur;
+        }
+        return null;
+      };
+      const within = (x, y, r) => r && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+      const showBar = (host) => {
+        if (!bar || bar.host !== host) {
+          const present = (host.dataset.bsPresent || '').split(',');
+          slotBar.innerHTML = '<b>' + (host.dataset.bsName || '') + '</b>' + slotsOf(host)
+            .map(x => `<i data-slot="${x}" class="${present.includes(x) || x === 'ChildContent' ? '' : 'missing'}">${x}</i>`).join('');
+          bar = { host };
+        }
+        const sr = overlay.getBoundingClientRect();
+        const r = host.getBoundingClientRect();
+        slotBar.style.display = 'flex';
+        const h = slotBar.offsetHeight || 28;
+        const top = r.top - sr.top - h - 6 >= 0 ? r.top - sr.top - h - 6 : r.top - sr.top + 4;
+        Object.assign(slotBar.style, { left: Math.max(4, r.left - sr.left) + 'px', top: top + 'px' });
+        const br = slotBar.getBoundingClientRect();
+        bar.chips = [...slotBar.querySelectorAll('i')].map(i => ({ slot: i.dataset.slot, el: i, rect: i.getBoundingClientRect() }));
+        bar.zone = { left: Math.min(r.left, br.left) - 8, top: Math.min(r.top, br.top) - 8, right: Math.max(r.right, br.right) + 8, bottom: Math.max(r.bottom, br.bottom) + 8 };
+        host.classList.add('bs-slot-host');
+      };
+      const hideBar = () => {
+        if (bar) bar.host.classList.remove('bs-slot-host');
+        bar = null;
+        slotBar.style.display = 'none';
+      };
+      const draggedEl = () => drag.kind === 'node' && page() ? page().querySelector(`[data-bs-id="${drag.payload}"]`) : null;
+
       let dropInfo = null;
       state.over = (target, x, y) => {
-        dropInfo = computeDrop(page(), nodeAt(target), x, y, drag);
+        // Über einem Slot-Chip: genau in diesen RenderFragment-Parameter
+        if (bar) {
+          const chip = bar.chips.find(c => within(x, y, c.rect));
+          for (const c of bar.chips) c.el.classList.toggle('on', c === chip);
+          if (chip) {
+            dropInfo = { targetId: bar.host.dataset.bsId, pos: 'inside:' + chip.slot, el: bar.host, box: bar.host.getBoundingClientRect(), axis: 'y' };
+            drawIndicator(overlay, ind, { ...dropInfo, pos: 'inside' });
+            ind.querySelector('span').textContent = (bar.host.dataset.bsName || '') + ' › ' + chip.slot;
+            return true;
+          }
+        }
+        const n = nodeAt(target);
+        const host = n ? slotHostOf(n) : null;
+        const dragged = draggedEl();
+        if (host && !(dragged && (dragged === host || dragged.contains(host)))) showBar(host);
+        else if (!(bar && within(x, y, bar.zone))) hideBar();
+        dropInfo = computeDrop(page(), n, x, y, drag);
         if (!dropInfo) { ind.style.display = 'none'; return false; }
         drawIndicator(overlay, ind, dropInfo);
         return true;
       };
-      state.clear = () => { ind.style.display = 'none'; dropInfo = null; };
+      state.clear = () => { ind.style.display = 'none'; dropInfo = null; hideBar(); };
       state.drop = (target, x, y) => {
         ind.style.display = 'none';
+        hideBar();
         const info = dropInfo || computeDrop(page(), nodeAt(target), x, y, drag);
         dropInfo = null;
         if (!info) return;
@@ -600,7 +658,7 @@
         if (!state.over(e.target, e.clientX, e.clientY)) { e.dataTransfer.dropEffect = 'none'; return; }
         e.dataTransfer.dropEffect = drag.kind === 'node' ? 'move' : 'copy';
       });
-      stage.addEventListener('dragleave', (e) => { if (!stage.contains(e.relatedTarget)) ind.style.display = 'none'; });
+      stage.addEventListener('dragleave', (e) => { if (!stage.contains(e.relatedTarget)) state.clear(); });
       stage.addEventListener('drop', (e) => {
         if (!drag.kind) return;
         e.preventDefault();
@@ -892,7 +950,9 @@
               label: i.importNs ? { label: i.label, description: i.importNs } : i.label,
               kind: csKinds[i.kind] ?? km[i.kind] ?? K.Text,
               insertText: i.insertText,
-              insertTextRules: i.isSnippet ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
+              // KeepWhitespace: Roslyn liefert ganze Member schon richtig eingerückt (override …)
+              insertTextRules: (i.isSnippet ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : 0)
+                | (i.keepWhitespace ? monaco.languages.CompletionItemInsertTextRule.KeepWhitespace : 0) || undefined,
               detail: i.detail || undefined,
               documentation: i.documentation || undefined,
               sortText: i.sortText || undefined,
@@ -921,7 +981,51 @@
       },
     });
     provider('razor', ['<', ' ', '"', '@', ':', '-', ';', '/', '.', '(']);
-    provider('csharp', ['.', '(', '<', '[']);
+    provider('csharp', ['.', '(', '<', '[', ' ']);
+
+    // Schnellaktionen (Strg+. / Alt+Enter wie in Rider): Roslyn-Fixes und -Refactorings.
+    // Die Liste kommt sofort, die eigentliche Änderung erst beim Auswählen (resolveCodeAction).
+    const codeActions = {
+      provideCodeActions: async (model, range, context) => {
+        const h = holderForModel(model);
+        if (!h) return { actions: [], dispose() { } };
+        const invoked = context.trigger === monaco.languages.CodeActionTriggerType.Invoke;
+        // Die Glühbirne (automatisch) nur bei Fehlern/Warnungen in der Zeile – spart Rechenzeit beim Bewegen
+        if (!invoked && !(context.markers || []).length) return { actions: [], dispose() { } };
+        let list = [];
+        try {
+          list = await h.dotnet.invokeMethodAsync('GetCodeActions', model.getValue(),
+            model.getOffsetAt(range.getStartPosition()), model.getOffsetAt(range.getEndPosition()), invoked);
+        } catch { }
+        return {
+          actions: (list || []).map(a => ({
+            title: a.title,
+            kind: a.kind === 'quickfix' ? 'quickfix' : 'refactor',
+            isPreferred: !!a.preferred,
+            diagnostics: a.kind === 'quickfix' ? context.markers : undefined,
+            _id: a.id,
+            _versionId: model.getVersionId(),
+          })),
+          dispose() { },
+        };
+      },
+      resolveCodeAction: async (action) => {
+        const h = [...editors.values()].find(x => x.editor.hasTextFocus()) ?? [...editors.values()][0];
+        if (!h || action._id == null) return action;
+        const model = h.editor.getModel();
+        const res = await h.dotnet.invokeMethodAsync('ApplyCodeAction', action._id, model.getValue());
+        if (!res || res.error || !res.edits) return action;
+        action.edit = {
+          edits: res.edits.map(e => {
+            const a = model.getPositionAt(e.offset), b = model.getPositionAt(e.offset + e.length);
+            return { resource: model.uri, versionId: model.getVersionId(), textEdit: { range: new monaco.Range(a.lineNumber, a.column, b.lineNumber, b.column), text: e.text } };
+          }),
+        };
+        return action;
+      },
+    };
+    monaco.languages.registerCodeActionProvider('csharp', codeActions, { providedCodeActionKinds: ['quickfix', 'refactor'] });
+    monaco.languages.registerCodeActionProvider('razor', codeActions, { providedCodeActionKinds: ['quickfix', 'refactor'] });
 
     const hover = {
       provideHover: async (model, position) => {
@@ -1094,6 +1198,15 @@
         ['bs.implementation', 'Gehe zu Implementierung', [monaco.KeyMod.CtrlCmd | monaco.KeyCode.F12], 'implementation', 3],
         ['bs.rename', 'Umbenennen …', [monaco.KeyCode.F2, monaco.KeyMod.Shift | monaco.KeyCode.F6], 'rename', 4],
       ];
+      // Alt+Enter wie in Rider (Strg+. ist Monacos eigene Taste für Schnellaktionen)
+      editor.addAction({
+        id: 'bs.quickFix',
+        label: (opts && opts.navLabels && opts.navLabels.quickFix) || 'Schnellaktionen …',
+        keybindings: [monaco.KeyMod.Alt | monaco.KeyCode.Enter],
+        contextMenuGroupId: '1_modification',
+        contextMenuOrder: 0,
+        run: () => editor.trigger('bs', 'editor.action.quickFix', null),
+      });
       const labels = (opts && opts.navLabels) || {};
       for (const [aid, label, keys, kind, order] of navActions) {
         editor.addAction({

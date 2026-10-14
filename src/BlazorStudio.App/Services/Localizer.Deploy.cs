@@ -1,6 +1,6 @@
 namespace BlazorStudio.App.Services;
 
-/// <summary>Texte für IIS-Server, Pipeline-Builder und automatische @using-Einträge.</summary>
+/// <summary>Texte für IIS-Server, Pipeline-Builder, automatische @using-Einträge und Schnellaktionen.</summary>
 public sealed partial class Localizer
 {
     static Localizer()
@@ -13,6 +13,7 @@ public sealed partial class Localizer
     {
         ["cmd.iis"] = "IIS-Server …", ["cmd.iisDeploy"] = "Auf IIS bereitstellen …", ["cmd.pipelines"] = "Pipeline-Builder …",
         ["designer.usingAdded"] = "@using {0} ergänzt",
+        ["editor.quickFix"] = "Schnellaktionen und Refactorings …",
 
         // ---------------- IIS ----------------
         ["iis.title"] = "IIS-Server", ["iis.subtitle"] = "{0} von {1} online", ["iis.subtitleEmpty"] = "Noch keine Server eingetragen",
@@ -115,6 +116,7 @@ public sealed partial class Localizer
     {
         ["cmd.iis"] = "IIS servers …", ["cmd.iisDeploy"] = "Deploy to IIS …", ["cmd.pipelines"] = "Pipeline builder …",
         ["designer.usingAdded"] = "Added @using {0}",
+        ["editor.quickFix"] = "Quick actions and refactorings …",
 
         ["iis.title"] = "IIS servers", ["iis.subtitle"] = "{0} of {1} online", ["iis.subtitleEmpty"] = "No servers yet",
         ["iis.agentPackage"] = "Agent package", ["iis.agentPackageHint"] = "Open the Blazor Studio Agent for your servers (ZIP with install-service.ps1)",

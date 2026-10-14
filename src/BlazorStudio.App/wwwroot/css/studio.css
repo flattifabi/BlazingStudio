@@ -266,6 +266,13 @@ kbd { font: 11px var(--mono); color: var(--muted); border: 1px solid var(--line-
 .bs-drop-ind.inside { background: var(--ac-soft); outline: 2px solid var(--ac); box-shadow: none; border-radius: 4px; }
 .bs-drop-ind span { position: absolute; left: 0; top: -20px; font: 600 10.5px var(--mono); color: #fff; background: var(--ac); border-radius: 4px; padding: 1px 6px; white-space: nowrap; }
 .bs-drop-ind:not(.inside) span { display: none; }
+/* Slot-Leiste beim Ziehen über Komponenten mit mehreren RenderFragments */
+.bs-slots { position: absolute; display: none; z-index: 3; align-items: center; gap: 4px; padding: 4px; border-radius: 9px; background: var(--pop); border: 1.5px solid var(--ac); box-shadow: 0 6px 18px rgba(0,0,0,.35); font: 600 11.5px var(--mono); }
+.bs-slots b { color: var(--ac); padding: 0 6px 0 4px; }
+.bs-slots i { font-style: normal; color: var(--text); padding: 4px 10px; border-radius: 6px; border: 1.5px dashed var(--ac); background: var(--ac-soft); white-space: nowrap; }
+.bs-slots i.on { background: var(--ac); color: #fff; border-style: solid; }
+.bs-slots i.missing { opacity: .7; }
+.bs-page .bs-slot-host { outline: 2px dashed var(--ac) !important; outline-offset: 2px; }
 
 /* Code-Editor */
 .codepane { display: flex; flex-direction: column; min-height: 0; background: var(--island); position: relative; margin: 0 6px 6px; border: 1px solid var(--line); border-radius: 0 0 10px 10px; overflow: hidden; }
