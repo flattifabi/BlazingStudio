@@ -38,6 +38,7 @@ public partial class MainWindow : Window
         sc.AddSingleton<ProjectActions>();
         sc.AddSingleton<LiveDesignService>();
         sc.AddSingleton<IisService>();
+        sc.AddSingleton<DockerService>();
         _services = sc.BuildServiceProvider();
         Resources.Add("services", _services);
 
@@ -108,6 +109,7 @@ public partial class MainWindow : Window
         _services.GetRequiredService<ProfilerService>().Dispose();
         _services.GetRequiredService<LiveDesignService>().Dispose();
         _services.GetRequiredService<IisService>().Dispose();
+        _services.GetRequiredService<DockerService>().Dispose();
         _services.GetRequiredService<RunService>().StopAll();
         _ = _services.GetRequiredService<DebugService>().StopAsync();
     }

@@ -126,4 +126,31 @@ public class DockerTests
             Directory.Delete(root, true);
         }
     }
+
+    [Theory]
+    [InlineData("8080:80", 8080)]
+    [InlineData("127.0.0.1:5000:8080", 5000)]
+    [InlineData("8000-8001:80-81", 8000)]
+    [InlineData("9000:9000/udp", 9000)]
+    public void First_host_port(string port, int expected) =>
+        Assert.Equal(expected, DockerCli.FirstHostPort(new DockerRunSpec { Ports = { port } }));
+
+    [Fact]
+    public void Health_url_uses_endpoint_host_and_published_port()
+    {
+        var spec = new DockerRunSpec { Ports = { "8081:8080" } };
+        Assert.Equal("http://localhost:8081/health", DockerCli.HealthUrl(null, spec, "/health"));
+        Assert.Equal("http://web01:8081/", DockerCli.HealthUrl("ssh://deploy@web01", spec, "/"));
+        Assert.Equal("https://shop.local/ping", DockerCli.HealthUrl("tcp://10.0.0.5:2376", spec, "https://shop.local/ping"));
+        Assert.Null(DockerCli.HealthUrl(null, spec, ""));
+        Assert.Null(DockerCli.HealthUrl(null, new DockerRunSpec(), "/"));
+    }
+
+    [Fact]
+    public void Host_and_extra_arguments()
+    {
+        Assert.Empty(DockerCli.HostArguments(" "));
+        Assert.Equal(new[] { "-H", "ssh://u@h" }, DockerCli.HostArguments("ssh://u@h "));
+        Assert.Equal(new[] { "--memory", "512m", "--cpus=1" }, DockerCli.SplitArguments("--memory 512m\n# Kommentar\n--cpus=1"));
+    }
 }

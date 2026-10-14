@@ -180,6 +180,36 @@ public static partial class DockerCli
     public static string HostNameOf(string? endpoint) =>
         Uri.TryCreate(endpoint ?? "", UriKind.Absolute, out var uri) && uri.Host.Length > 0 && uri.Scheme is "ssh" or "tcp" ? uri.Host : "localhost";
 
+    /// <summary>Globale Argumente für einen entfernten Docker-Host (leer = lokaler Docker).</summary>
+    public static List<string> HostArguments(string? endpoint) =>
+        string.IsNullOrWhiteSpace(endpoint) ? new List<string>() : new List<string> { "-H", endpoint.Trim() };
+
+    /// <summary>Erster veröffentlichter Host-Port („8080:80“ → 8080, „127.0.0.1:5000:8080“ → 5000, „8000-8001:80-81“ → 8000).</summary>
+    public static int? FirstHostPort(DockerRunSpec spec)
+    {
+        foreach (var p in spec.Ports)
+        {
+            if (!IsValidPort(p)) continue;
+            var parts = p.Trim().Split('/')[0].Split(':');
+            var host = parts.Length == 3 ? parts[1] : parts[0];
+            if (int.TryParse(host.Split('-')[0], NumberStyles.None, CultureInfo.InvariantCulture, out var port) && port is > 0 and < 65536) return port;
+        }
+        return null;
+    }
+
+    /// <summary>URL für die Prüfung nach dem Start (null, wenn kein Port veröffentlicht oder kein Pfad gesetzt ist).</summary>
+    public static string? HealthUrl(string? endpoint, DockerRunSpec spec, string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || FirstHostPort(spec) is not { } port) return null;
+        var p = path.Trim();
+        if (p.StartsWith("http://", StringComparison.OrdinalIgnoreCase) || p.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) return p;
+        return $"http://{HostNameOf(endpoint)}:{port}{(p.StartsWith('/') ? p : "/" + p)}";
+    }
+
+    /// <summary>Zusätzliche run-Argumente: eine Zeile darf mehrere, durch Leerzeichen getrennte Argumente enthalten.</summary>
+    public static List<string> SplitArguments(string? text) =>
+        Lines(text).SelectMany(l => l.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)).ToList();
+
     /// <summary>Zeilen „KEY=VALUE“, „8080:8080“ … aus einem Textfeld (leere und #-Zeilen ignoriert).</summary>
     public static List<string> Lines(string? text) =>
         (text ?? "").Replace("\r", "").Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0 && !l.StartsWith('#')).ToList();
