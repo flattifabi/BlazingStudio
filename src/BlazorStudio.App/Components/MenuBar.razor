@@ -52,6 +52,7 @@
         new("build", new[] { "build.solution", "build.rebuildSolution", "build.cleanSolution", "build.cleanBuildSolution", "build.restoreSolution", "-", "run.build", "build.rebuildProject", "build.cleanProject", "-", "run.publish", "tools.iisDeploy", "-", "run.start", "run.startNoHot", "run.restart", "run.stop", "-", "run.browser" }),
         new("debug", new[] { "run.debug", "run.stop", "run.restart", "-", "debug.over", "debug.into", "debug.out", "-", "tools.profiler" }),
         new("git", new[] { "git.commitView", "git.logView", "-", "git.pull", "git.push", "git.fetch", "-", "git.newBranch", "git.stash", "git.unstash", "-", "git.remote", "git.init" }),
+        new("deploy", new[] { "deploy.dockerDeploy", "tools.iisDeploy", "-", "deploy.docker", "tools.iis", "-", "tools.pipelines", "project.version" }),
         new("tools", new[] { "tools.nuget", "tools.ef", "tools.profiler", "-", "tools.iis", "tools.pipelines", "-", "settings" }),
         new("help", new[] { "help.shortcuts", "help.docs", "help.efdocs", "help.debugger", "-", "help.updates", "help.about" }),
     };

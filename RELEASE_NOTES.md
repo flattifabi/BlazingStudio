@@ -1,3 +1,15 @@
+## Neu: Docker-Deployment und Menü „Deployment“
+- Neues Hauptmenü **Deployment** mit **In Docker bereitstellen …**, **Auf IIS bereitstellen …**, **Docker …**, **IIS-Server …**, Pipeline-Builder und Version ändern. Unter **Tools** bleibt IIS wie bisher.
+- **Docker-Hosts:** lokales Docker (Docker Desktop) oder Server per `ssh://benutzer@server` bzw. `tcp://server:2376`, mit Umgebung (Test/Produktion) und Status (Docker-Version, laufende Container).
+- **Container:** Liste mit Zustand, Image/Version, Ports, CPU und RAM (alle 5 s aktualisiert); Starten, Stoppen, Neu starten, Löschen, **Logs im Editor**.
+- **Bereitstellen:** Projekt wählen, Hosts ankreuzen, Container- und Image-Name, Tag aus der Projektversion (+ Patch/Minor/Major direkt daneben), Ports, Umgebungsvariablen, Volumes, Restart-Policy, Netzwerk, weitere `docker run`-Argumente.
+  - Gebaut wird mit dem **Dockerfile** neben der .csproj oder ohne Dockerfile über das **.NET SDK** (`dotnet publish /t:PublishContainer`) – „Auto“ wählt selbst.
+  - Ohne Registry wird direkt auf dem Ziel-Host gebaut; mit Registry einmal gebaut, gepusht und auf jedem Host gezogen.
+  - Der laufende Container wird gestoppt und als `name-previous` aufgehoben, der neue gestartet und geprüft (läuft er? antwortet `http://host:port/pfad`?). Schlägt die Prüfung fehl, läuft automatisch wieder der vorherige – mit den letzten Log-Zeilen in der Ausgabe.
+  - Alte Images werden aufgeräumt (die neuesten 5 bleiben, einstellbar).
+- **Zurückschalten mit einem Klick** (↶ am Container) und **Version wechseln**: jedes Image desselben Repositorys auf dem Host auswählen – der Container wird mit denselben Einstellungen neu erstellt (sie stehen als Label am Container).
+- **Images:** Liste mit Größe, Alter und welcher Container sie verwendet; nicht verwendete löschen.
+
 ## Neu: IIS – Authentifizierung, Konfiguration und Logs pro Site
 In **IIS-Server → Sites** eine Anwendung aufklappen:
 - **Authentifizierung:** Anonym, Windows, Standard (Basic) und Digest per Häkchen ein-/ausschalten (wird in der applicationHost.config für genau diese Site/Anwendung gesetzt). Ist ein IIS-Modul nicht installiert, steht „nicht installiert“ daneben.

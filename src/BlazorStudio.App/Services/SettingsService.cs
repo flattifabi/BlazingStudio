@@ -76,6 +76,11 @@ public sealed class AppSettings
 
     /// <summary>Letzte IIS-Deployment-Einstellungen je Projektdatei.</summary>
     public Dictionary<string, IisDeployProfile> IisDeployProfiles { get; set; } = new();
+
+    public List<DockerHostEntry> DockerHosts { get; set; } = new();
+
+    /// <summary>Docker-Deploy-Einstellungen je Projektdatei.</summary>
+    public Dictionary<string, DockerDeployProfile> DockerDeployProfiles { get; set; } = new();
 }
 
 public sealed class IisServerEntry
@@ -133,6 +138,63 @@ public sealed class IisDeployProfile
     public string? Pool { get; set; }
 
     public string? Notes { get; set; }
+}
+
+/// <summary>Ein Docker-Host: lokal (leere Adresse) oder entfernt per ssh://benutzer@host bzw. tcp://host:2376.</summary>
+public sealed class DockerHostEntry
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+
+    public string Name { get; set; } = "";
+
+    /// <summary>Leer = lokaler Docker (Docker Desktop), sonst DOCKER_HOST-Adresse.</summary>
+    public string Endpoint { get; set; } = "";
+
+    public string? Environment { get; set; }
+
+    public bool IsLocal => string.IsNullOrWhiteSpace(Endpoint);
+
+    public string Display => !string.IsNullOrWhiteSpace(Name) ? Name : IsLocal ? "Docker (lokal)" : BlazorStudio.Deploy.Docker.DockerCli.HostNameOf(Endpoint);
+}
+
+public sealed class DockerDeployProfile
+{
+    public List<string> HostIds { get; set; } = new();
+
+    public string ContainerName { get; set; } = "";
+
+    /// <summary>Image-Name ohne Tag, z. B. „shop“ oder „team/shop“.</summary>
+    public string Repository { get; set; } = "";
+
+    /// <summary>Optional, z. B. „registry.firma.de:5000“ – dann wird einmal gebaut, gepusht und auf den Hosts gezogen.</summary>
+    public string? Registry { get; set; }
+
+    public BlazorStudio.Deploy.Docker.DockerBuildMode BuildMode { get; set; } = BlazorStudio.Deploy.Docker.DockerBuildMode.Auto;
+
+    public string Configuration { get; set; } = "Release";
+
+    public string VersionTemplate { get; set; } = "{version}-{date}.{time}";
+
+    /// <summary>Eine Zuordnung pro Zeile („8080:8080“).</summary>
+    public string Ports { get; set; } = "8080:8080";
+
+    public string Environment { get; set; } = "ASPNETCORE_ENVIRONMENT=Production";
+
+    public string Volumes { get; set; } = "";
+
+    public string RestartPolicy { get; set; } = "unless-stopped";
+
+    public string? Network { get; set; }
+
+    public string ExtraArgs { get; set; } = "";
+
+    /// <summary>Pfad (oder ganze URL) für die Prüfung nach dem Start; leer = nur „läuft der Container?“.</summary>
+    public string? HealthPath { get; set; } = "/";
+
+    public bool Rollback { get; set; } = true;
+
+    /// <summary>So viele Images des Repositorys bleiben je Host liegen (für schnelles Zurückschalten).</summary>
+    public int KeepImages { get; set; } = 5;
 }
 
 /// <summary>Speichert Einstellungen in %AppData%\BlazorStudio\settings.json.</summary>

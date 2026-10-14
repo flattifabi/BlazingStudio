@@ -1106,6 +1106,8 @@ body.bs-dragging, body.bs-dragging * { cursor: grabbing !important; user-select:
 .iis-link { color: var(--ac); cursor: pointer; display: inline-block; margin-right: 8px; font: 12px var(--mono); }
 .iis-link:hover { text-decoration: underline; }
 .iis-versions-row > td { padding: 0 0 8px !important; background: transparent !important; cursor: default; }
+.iic.dk { background: color-mix(in srgb, #1d63ed 18%, transparent); color: #3b82f6; }
+textarea.dk-area { width: 100%; min-height: 64px; resize: vertical; font-size: 12px; padding: 6px 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--island); color: inherit; box-sizing: border-box; }
 .iis-appextras { margin: 0 8px 8px; }
 .iis-appextras .hint { margin-bottom: 8px; }
 .iis-appextras-grid { display: grid; grid-template-columns: minmax(170px, 0.8fr) minmax(260px, 1.4fr) minmax(220px, 1fr); gap: 8px; }

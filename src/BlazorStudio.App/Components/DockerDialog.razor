@@ -1,0 +1,813 @@
+@inherits StudioComponent
+@inject DockerService Docker
+@inject ProjectActions Actions
+@using BlazorStudio.Core.Build
+@using BlazorStudio.Deploy.Docker
+
+<div class="backdrop" style="padding-top:3vh" @onclick="Close">
+    <div class="dialog nuget iis" @onclick:stopPropagation="true">
+        <div class="ng-head">
+            <div class="iic dk"><Icon Name="box" /></div>
+            <div class="t">
+                <h2>Docker</h2>
+                <small class="dim">@(Docker.Hosts.Count == 0 ? L["dk.subtitleEmpty"] : L.F("dk.subtitle", Docker.OnlineCount, Docker.Hosts.Count))</small>
+            </div>
+            <button class="ibtn" title="@L["nuget.refresh"]" @onclick="RefreshAll"><Icon Name="refresh" Class="@(_refreshing ? "spin" : null)" /></button>
+            <button class="ibtn" title="@L["action.close"]" @onclick="Close"><Icon Name="x" /></button>
+        </div>
+
+        <div class="iis-body">
+            @* ------------------------------ Hosts ------------------------------ *@
+            <div class="iis-servers scroll">
+                @foreach (var group in Docker.Hosts.GroupBy(h => string.IsNullOrWhiteSpace(h.Environment) ? string.Empty : h.Environment!.Trim()))
+                {
+                    @if (group.Key.Length > 0) { <div class="iis-group">@group.Key</div> }
+                    @foreach (var host in group)
+                    {
+                        var h = host;
+                        var st = Docker.Status(h);
+                        <div class="iis-srv @(h == _selected && _editing is null ? "on" : "")" @onclick="() => Select(h)" title="@(st.Error ?? (h.IsLocal ? L["dk.local"] : h.Endpoint))">
+                            <span class="iis-dot @HealthClass(st.Health)"></span>
+                            <div class="ng-main">
+                                <b>@h.Display</b>
+                                <small>@(st.Health == ServerHealth.Online && st.Info is { } i ? L.F("dk.hostLine", i.ServerVersion, i.ContainersRunning, i.Containers) : HealthText(st))</small>
+                            </div>
+                        </div>
+                    }
+                }
+                <button class="btn dashed wide" style="margin-top:8px" @onclick="() => NewHost(false)"><Icon Name="plus" />@L["dk.addHost"]</button>
+            </div>
+
+            @* ------------------------------ Inhalt ------------------------------ *@
+            <div class="iis-main">
+                @if (_editing is { } ed)
+                {
+                    @HostForm(ed)
+                }
+                else if (Docker.Hosts.Count == 0)
+                {
+                    <div class="iis-welcome scroll">
+                        <div class="iic dk" style="width:44px;height:44px"><Icon Name="box" /></div>
+                        <h3>@L["dk.welcomeTitle"]</h3>
+                        <p class="dim">@L["dk.welcomeText"]</p>
+                        <div class="btns" style="justify-content:flex-start">
+                            <button class="btn ac" @onclick="AddLocal"><Icon Name="monitor" />@L["dk.addLocal"]</button>
+                            <button class="btn" @onclick="() => NewHost(true)"><Icon Name="globe" />@L["dk.addRemote"]</button>
+                        </div>
+                    </div>
+                }
+                else if (_selected is { } sel)
+                {
+                    var st = Docker.Status(sel);
+                    <div class="iis-tabs">
+                        <div class="seg">
+                            @foreach (var t in Tabs)
+                            {
+                                var tab = t;
+                                <button class="@(_tab == tab.Id ? "on" : "")" @onclick="() => SetTab(tab.Id)"><Icon Name="@tab.Icon" />@L["dk.tab." + tab.Id]</button>
+                            }
+                        </div>
+                        <span class="grow"></span>
+                        @if (_tab == "containers")
+                        {
+                            <label class="check" style="font-size:12px"><input type="checkbox" checked="@_onlyManaged" @onchange="e => _onlyManaged = e.Value is true" />@L["dk.onlyManaged"]</label>
+                        }
+                        <span class="dim iis-addr">@(sel.IsLocal ? L["dk.local"] : sel.Endpoint)</span>
+                        <button class="ibtn sm" title="@L["dk.editHost"]" @onclick="() => EditHost(sel)"><Icon Name="gear" /></button>
+                    </div>
+                    @if (st.Health is ServerHealth.Offline or ServerHealth.Error && _tab != "deploy")
+                    {
+                        <div class="banner warn"><Icon Name="alert" /><span>@HealthText(st)@(st.Error is { } err ? ": " + err : string.Empty)</span><span class="grow"></span>
+                            <button class="btn sm" @onclick="() => EditHost(sel)">@L["dk.editHost"]</button>
+                            <button class="btn sm" @onclick="() => Docker.RefreshAsync(sel)"><Icon Name="refresh" />@L["iis.retry"]</button>
+                        </div>
+                    }
+                    @if (_error is { } e)
+                    {
+                        <div class="banner warn"><Icon Name="alert" /><span>@e</span><span class="grow"></span><button class="ibtn sm" @onclick="() => _error = null"><Icon Name="x" /></button></div>
+                    }
+                    <div class="iis-content scroll">
+                        @switch (_tab)
+                        {
+                            case "images": @ImagesTab(sel) break;
+                            case "deploy": @DeployTab() break;
+                            default: @ContainersTab(sel) break;
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+
+        @if (_switch is { } sw) { @SwitchSheet(sw) }
+    </div>
+</div>
+
+@code {
+    private static string? _requestedTab;
+
+    /// <summary>Beim nächsten Öffnen diesen Reiter zeigen (z. B. „deploy“ aus dem Menü).</summary>
+    public static void Request(string? tab) => _requestedTab = tab;
+
+    private sealed record TabDef(string Id, string Icon);
+
+    private static readonly TabDef[] Tabs = { new("containers", "box"), new("images", "layers"), new("deploy", "rocket") };
+
+    private DockerHostEntry? _selected;
+    private string _tab = "containers";
+    private string? _error;
+    private bool _refreshing;
+    private bool _busy;
+    private bool _onlyManaged;
+    private Timer? _timer;
+
+    private List<DockerContainer>? _containers;
+    private List<DockerImage>? _images;
+
+    protected override void OnStudioInitialized()
+    {
+        Docker.Changed += Refresh;
+        _selected = Docker.Hosts.FirstOrDefault(h => Docker.Status(h).Health == ServerHealth.Online) ?? Docker.Hosts.FirstOrDefault();
+        if (_requestedTab is { } t) _tab = t;
+        _requestedTab = null;
+        InitDeploy();
+        if (_selected is not null) _ = Docker.RefreshAsync(_selected);
+        _ = LoadTabAsync();
+        // Container-Liste mit CPU/RAM alle 5 s nachladen
+        _timer = new Timer(_ => InvokeAsync(async () =>
+        {
+            if (_tab == "containers" && !_busy && _switch is null && _editing is null) await LoadTabAsync(quiet: true);
+        }), null, 5000, 5000);
+    }
+
+    public override void Dispose()
+    {
+        Docker.Changed -= Refresh;
+        _timer?.Dispose();
+        base.Dispose();
+    }
+
+    private void Close()
+    {
+        if (_switch is not null) { _switch = null; return; }
+        Ui.CloseOverlay();
+    }
+
+    private async Task RefreshAll()
+    {
+        _refreshing = true;
+        await Docker.RefreshAllAsync();
+        await LoadTabAsync();
+        _refreshing = false;
+    }
+
+    private void Select(DockerHostEntry h)
+    {
+        _editing = null;
+        if (_selected == h) return;
+        _selected = h;
+        _containers = null;
+        _images = null;
+        _error = null;
+        _ = Docker.RefreshAsync(h);
+        _ = LoadTabAsync();
+    }
+
+    private void SetTab(string tab)
+    {
+        _tab = tab;
+        _error = null;
+        _ = LoadTabAsync();
+    }
+
+    private async Task LoadTabAsync(bool quiet = false)
+    {
+        if (_selected is not { } h) return;
+        try
+        {
+            switch (_tab)
+            {
+                case "containers":
+                    _containers = await Docker.GetContainersAsync(h, withStats: true);
+                    break;
+                case "images":
+                    _images = await Docker.GetImagesAsync(h);
+                    _containers ??= await Docker.GetContainersAsync(h, withStats: false);
+                    break;
+            }
+            if (!quiet) _error = null;
+        }
+        catch (InvalidOperationException e)
+        {
+            if (!quiet) _error = e.Message;
+        }
+        await InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>Aktion ausführen, Fehler anzeigen, danach neu laden.</summary>
+    private async Task Act(Func<DockerHostEntry, Task> action, string? success = null)
+    {
+        if (_selected is not { } h) return;
+        _busy = true;
+        _error = null;
+        StateHasChanged();
+        try
+        {
+            await action(h);
+            if (success is not null) Ui.ShowToast(success, ToastKind.Success, 2400);
+        }
+        catch (Exception e) when (e is InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            _error = e.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+        await LoadTabAsync(quiet: true);
+        _ = Docker.RefreshAsync(h);
+    }
+
+    private async Task<bool> Confirm(string title, string? text, string ok, bool danger = true) =>
+        await Ui.ShowDialogAsync(new DialogRequest { Title = title, Message = text, OkText = ok, CancelText = L["action.cancel"], Danger = danger }) == DialogResult.Ok;
+
+    private static string HealthClass(ServerHealth h) => h switch
+    {
+        ServerHealth.Online => "ok",
+        ServerHealth.Checking or ServerHealth.Unknown => "busy",
+        ServerHealth.Error => "warn",
+        _ => "err",
+    };
+
+    private string HealthText(DockerHostStatus st) => st.Health switch
+    {
+        ServerHealth.Online => L["iis.h.online"],
+        ServerHealth.Checking or ServerHealth.Unknown => L["iis.h.checking"],
+        ServerHealth.Offline => L["dk.h.offline"],
+        _ => L["dk.h.error"],
+    };
+
+    private static string ContainerStateClass(DockerContainer c) => c.State switch
+    {
+        "running" => "ok",
+        "restarting" or "created" => "busy",
+        "paused" => "warn",
+        _ => "err",
+    };
+
+    // ==================================================================
+    // Container
+    // ==================================================================
+
+    private RenderFragment ContainersTab(DockerHostEntry h) => __builder =>
+    {
+        if (_containers is null)
+        {
+            <div class="ins-empty"><Icon Name="refresh" Class="spin" /></div>
+            return;
+        }
+        var names = _containers.Select(c => c.Name).ToHashSet(StringComparer.Ordinal);
+        var shown = _containers.Where(c => !_onlyManaged || c.IsManaged).ToList();
+        if (shown.Count == 0)
+        {
+            <div class="ins-empty" style="padding-top:40px"><Icon Name="box" /><span>@L["dk.noContainers"]</span>
+                <button class="btn ac sm" style="margin-top:10px" @onclick='() => SetTab("deploy")'><Icon Name="rocket" />@L["dk.deployNow"]</button></div>
+            return;
+        }
+        <table class="ptable iis-table">
+            <thead><tr>
+                <th style="width:22%">@L["dk.container"]</th><th style="width:24%">Image</th><th style="width:12%">@L["iis.status"]</th>
+                <th style="width:14%">Ports</th><th class="num" style="width:7%">CPU</th><th class="num" style="width:9%">RAM</th><th style="width:16%"></th>
+            </tr></thead>
+            <tbody>
+                @foreach (var item in shown)
+                {
+                    var c = item;
+                    var isPrevious = c.Name.EndsWith(DockerCli.PreviousSuffix, StringComparison.Ordinal);
+                    var hasPrevious = names.Contains(c.Name + DockerCli.PreviousSuffix);
+                    <tr class="@(isPrevious ? "dim" : string.Empty)">
+                        <td><b>@c.Name</b>@if (c.IsManaged) { <span class="chip ac" title="@L["dk.managedHint"]">Studio</span> }
+                            <small class="iis-sub">@(isPrevious ? L["dk.previousHint"] : c.RunningFor)</small></td>
+                        <td class="mono"><span title="@c.Image">@ShortImage(c.Image)</span>@if (c.Version is { } v) { <small class="iis-sub">@L["dk.version"] @v</small> }</td>
+                        <td><span class="iis-state @ContainerStateClass(c)">@c.State</span><small class="iis-sub">@c.Status</small></td>
+                        <td class="mono"><small>@PortsText(c.Ports)</small></td>
+                        <td class="num mono">@(c.Stats is { } s1 ? s1.CpuPercent : "–")</td>
+                        <td class="num mono">@(c.Stats is { } s2 ? s2.MemoryUsage.Split('/')[0].Trim() : "–")</td>
+                        <td class="iis-actions">
+                            @if (c.IsRunning)
+                            {
+                                <button class="ibtn sm" title="@L["dk.restart"]" disabled="@_busy" @onclick='() => Act(x => Docker.ContainerActionAsync(x, c.Name, "restart"), L.F("dk.restarted", c.Name))'><Icon Name="restart" /></button>
+                                <button class="ibtn sm danger" title="@L["iis.stop"]" disabled="@_busy" @onclick="() => Stop(c)"><Icon Name="stop" /></button>
+                            }
+                            else
+                            {
+                                <button class="ibtn sm" title="@L["iis.start"]" disabled="@_busy" @onclick='() => Act(x => Docker.ContainerActionAsync(x, c.Name, "start"), L.F("dk.started", c.Name))'><Icon Name="play" /></button>
+                            }
+                            <button class="ibtn sm" title="@L["dk.logs"]" disabled="@_busy" @onclick="() => Logs(c)"><Icon Name="terminal" /></button>
+                            @if (c.IsManaged && !isPrevious)
+                            {
+                                <button class="ibtn sm" title="@L["dk.switch"]" disabled="@_busy" @onclick="() => OpenSwitch(c)"><Icon Name="history" /></button>
+                            }
+                            @if (hasPrevious)
+                            {
+                                <button class="ibtn sm" title="@L["dk.rollback"]" disabled="@_busy" @onclick="() => Rollback(c)"><Icon Name="undo" /></button>
+                            }
+                            <button class="ibtn sm danger" title="@L["action.delete"]" disabled="@_busy" @onclick="() => Remove(c)"><Icon Name="trash" /></button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    };
+
+    private static string ShortImage(string image) => image.Length <= 42 ? image : "…" + image[^41..];
+
+    /// <summary>„0.0.0.0:8080->8080/tcp, :::8080->8080/tcp“ → „8080→8080“.</summary>
+    private static string PortsText(string ports)
+    {
+        if (string.IsNullOrWhiteSpace(ports)) return "–";
+        var parts = ports.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(p => p.Replace("0.0.0.0:", string.Empty).Replace(":::", string.Empty).Replace("[::]:", string.Empty).Replace("/tcp", string.Empty).Replace("->", "→"))
+            .Distinct();
+        return string.Join(", ", parts);
+    }
+
+    private async Task Stop(DockerContainer c)
+    {
+        if (!await Confirm(L.F("dk.stopTitle", c.Name), null, L["iis.stop"])) return;
+        await Act(h => Docker.ContainerActionAsync(h, c.Name, "stop"), L.F("dk.stopped", c.Name));
+    }
+
+    private async Task Remove(DockerContainer c)
+    {
+        if (!await Confirm(L.F("dk.removeTitle", c.Name), L["dk.removeText"], L["action.delete"])) return;
+        await Act(h => Docker.ContainerActionAsync(h, c.Name, "remove"), L.F("dk.removed", c.Name));
+    }
+
+    private async Task Rollback(DockerContainer c)
+    {
+        var prev = _containers?.FirstOrDefault(x => x.Name == c.Name + DockerCli.PreviousSuffix);
+        if (!await Confirm(L.F("dk.rollbackTitle", c.Name), L.F("dk.rollbackText", c.Version ?? c.Image, prev?.Version ?? prev?.Image ?? "?"), L["dk.rollback"], danger: false)) return;
+        await Act(h => Docker.RollbackAsync(h, c.Name), L.F("dk.rolledBack", c.Name));
+    }
+
+    private async Task Logs(DockerContainer c)
+    {
+        if (_selected is not { } h) return;
+        _busy = true;
+        try
+        {
+            if (await Docker.OpenLogsAsync(h, c.Name)) Ui.CloseOverlay();
+        }
+        catch (Exception e) when (e is InvalidOperationException or IOException)
+        {
+            _error = e.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    // ---------------- Version umschalten ----------------
+
+    private sealed class SwitchState
+    {
+        public required DockerContainer Container { get; init; }
+
+        public List<DockerImage>? Images { get; set; }
+    }
+
+    private SwitchState? _switch;
+
+    private async Task OpenSwitch(DockerContainer c)
+    {
+        if (_selected is not { } h) return;
+        _switch = new SwitchState { Container = c };
+        try
+        {
+            _switch.Images = await Docker.GetImagesAsync(h, DockerCli.RepositoryOf(c.Image));
+        }
+        catch (InvalidOperationException e)
+        {
+            _error = e.Message;
+            _switch = null;
+        }
+    }
+
+    private async Task SwitchTo(SwitchState sw, DockerImage image)
+    {
+        if (!await Confirm(L.F("dk.switchTitle", sw.Container.Name, image.Tag), L.F("dk.switchText", sw.Container.Image, image.Reference), L["dk.switch"], danger: false)) return;
+        _switch = null;
+        await Act(async h =>
+        {
+            var (state, detail) = await Docker.SwitchAsync(h, sw.Container, image.Reference, HealthPathFor(sw.Container));
+            if (state != "ok") throw new InvalidOperationException(L.F(state == "rolledback" ? "dk.hostRolledBack" : "dk.hostFailed", h.Display, detail));
+        }, L.F("dk.switched", sw.Container.Name, image.Tag));
+    }
+
+    /// <summary>Health-Pfad aus dem Deploy-Profil des Projekts, zu dem der Container gehört.</summary>
+    private string? HealthPathFor(DockerContainer c) =>
+        Settings.Current.DockerDeployProfiles.Values.FirstOrDefault(p => p.ContainerName == c.Name)?.HealthPath;
+
+    private RenderFragment SwitchSheet(SwitchState sw) => __builder =>
+    {
+        <div class="iis-sheet-back" @onclick="() => _switch = null">
+            <div class="iis-sheet" @onclick:stopPropagation="true">
+                <h3><Icon Name="history" />@L.F("dk.switchHead", sw.Container.Name)</h3>
+                <p class="dim" style="margin:0 0 10px">@L["dk.switchHint"]</p>
+                @if (sw.Images is null)
+                {
+                    <div class="dim" style="padding:8px"><Icon Name="refresh" Class="spin" /></div>
+                }
+                else if (sw.Images.Count == 0)
+                {
+                    <div class="dim" style="padding:8px">@L["dk.noImages"]</div>
+                }
+                else
+                {
+                    <div class="iis-versions">
+                        @foreach (var img in sw.Images)
+                        {
+                            var image = img;
+                            var active = image.Reference == sw.Container.Image;
+                            <div class="iis-ver @(active ? "active" : string.Empty)">
+                                <span class="mono"><b>@image.Tag</b></span>
+                                @if (active) { <span class="iis-state ok">@L["iis.active"]</span> }
+                                <span class="dim">@image.CreatedSince</span>
+                                <span class="dim">@image.Size</span>
+                                <span class="grow"></span>
+                                @if (!active)
+                                {
+                                    <button class="btn sm" disabled="@_busy" @onclick="() => SwitchTo(sw, image)"><Icon Name="play" />@L["dk.switch"]</button>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+                <div class="btns"><button class="btn ghost" @onclick="() => _switch = null">@L["action.close"]</button></div>
+            </div>
+        </div>
+    };
+
+    // ==================================================================
+    // Images
+    // ==================================================================
+
+    private RenderFragment ImagesTab(DockerHostEntry h) => __builder =>
+    {
+        if (_images is null)
+        {
+            <div class="ins-empty"><Icon Name="refresh" Class="spin" /></div>
+            return;
+        }
+        if (_images.Count == 0)
+        {
+            <div class="ins-empty" style="padding-top:40px"><Icon Name="layers" /><span>@L["dk.noImages"]</span></div>
+            return;
+        }
+        var used = (_containers ?? new()).GroupBy(c => c.Image).ToDictionary(g => g.Key, g => string.Join(", ", g.Select(c => c.Name)));
+        <table class="ptable iis-table">
+            <thead><tr>
+                <th style="width:34%">Repository</th><th style="width:16%">Tag</th><th style="width:14%">@L["dk.created"]</th>
+                <th class="num" style="width:10%">@L["dk.size"]</th><th style="width:18%">@L["dk.usedBy"]</th><th style="width:8%"></th>
+            </tr></thead>
+            <tbody>
+                @foreach (var item in _images)
+                {
+                    var img = item;
+                    var by = used.GetValueOrDefault(img.Reference) ?? used.GetValueOrDefault(img.Id);
+                    <tr>
+                        <td class="mono"><b>@img.Repository</b></td>
+                        <td class="mono">@img.Tag</td>
+                        <td>@img.CreatedSince</td>
+                        <td class="num mono">@img.Size</td>
+                        <td><small>@(by ?? "–")</small></td>
+                        <td class="iis-actions">
+                            <button class="ibtn sm danger" title="@L["action.delete"]" disabled="@(_busy || by is not null)" @onclick="() => RemoveImage(img)"><Icon Name="trash" /></button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    };
+
+    private async Task RemoveImage(DockerImage img)
+    {
+        var reference = img.Tag == "<none>" ? img.Id : img.Reference;
+        if (!await Confirm(L.F("dk.removeImageTitle", reference), null, L["action.delete"])) return;
+        await Act(h => Docker.RemoveImageAsync(h, reference), L.F("dk.removed", reference));
+    }
+
+    // ==================================================================
+    // Deployment
+    // ==================================================================
+
+    private string? _deployProject;
+    private DockerDeployProfile _profile = new();
+    private HashSet<string> _targets = new();
+    private string _versionPreview = string.Empty;
+
+    private IEnumerable<string> WebProjects =>
+        Ws.Solution?.AllProjects.Where(p => p.Project is not null).Select(p => p.Path) ?? (Ws.Project?.ProjectFile is { } f ? new[] { f } : Array.Empty<string>());
+
+    private void InitDeploy()
+    {
+        _deployProject ??= Ws.StartupItem?.Path ?? Ws.Project?.ProjectFile;
+        LoadProfile();
+    }
+
+    private void LoadProfile()
+    {
+        if (_deployProject is null) return;
+        var name = Path.GetFileNameWithoutExtension(_deployProject);
+        _profile = Settings.Current.DockerDeployProfiles.TryGetValue(_deployProject, out var p)
+            ? p
+            : new DockerDeployProfile { ContainerName = DockerCli.SuggestRepository(name), Repository = DockerCli.SuggestRepository(name) };
+        _targets = _profile.HostIds.Where(id => Docker.Hosts.Any(h => h.Id == id)).ToHashSet();
+        if (_targets.Count == 0 && _selected is not null) _targets.Add(_selected.Id);
+        UpdatePreview();
+    }
+
+    private void UpdatePreview() => _versionPreview = _deployProject is null ? string.Empty : DockerCli.ToTag(IisService.ExpandVersion(_profile.VersionTemplate, _deployProject));
+
+    private void Bump(VersionPart part)
+    {
+        if (_deployProject is null) return;
+        if (Actions.SetVersion(_deployProject, ProjectVersion.Bump(Actions.VersionOf(_deployProject), part))) UpdatePreview();
+    }
+
+    private async Task ChangeVersion()
+    {
+        await Actions.ChangeVersionAsync(_deployProject);
+        UpdatePreview();
+    }
+
+    private void ToggleTarget(string id, bool on)
+    {
+        if (on) _targets.Add(id);
+        else _targets.Remove(id);
+    }
+
+    private async Task StartDeploy()
+    {
+        if (_deployProject is null) return;
+        var hosts = Docker.Hosts.Where(h => _targets.Contains(h.Id)).ToList();
+        if (hosts.Count == 0) { _error = L["dk.noTargets"]; return; }
+        if (Docker.Validate(_profile, _deployProject) is { } problem) { _error = problem; return; }
+        var version = IisService.ExpandVersion(_profile.VersionTemplate, _deployProject);
+        var image = DockerCli.ImageReference(_profile.Registry, _profile.Repository.Trim(), DockerCli.ToTag(version));
+        var names = string.Join(", ", hosts.Select(h => h.Display));
+        if (!await Confirm(L.F("dk.deployTitle", _profile.ContainerName, DockerCli.ToTag(version)), L.F("dk.deployText", image, names), L["iis.deploy"],
+                danger: hosts.Any(h => (h.Environment ?? string.Empty).Contains("prod", StringComparison.OrdinalIgnoreCase))))
+            return;
+        _profile.HostIds = _targets.ToList();
+        Settings.Current.DockerDeployProfiles[_deployProject] = _profile;
+        Settings.Save();
+        _error = null;
+        BottomPanel.Show?.Invoke(BottomTab.Output);
+        Ws.SaveAll();
+        var d = await Docker.DeployAsync(_deployProject, _profile, hosts, version);
+        if (d.Ok) Ui.ShowToast(L.F("dk.deployDone", d.Container, DockerCli.ToTag(version), names), ToastKind.Success, 6000);
+        else Ui.ShowToast(d.Error ?? L["iis.deployFailed"], ToastKind.Error, 8000);
+        _containers = null;
+        _images = null;
+    }
+
+    private static readonly string[] Steps = { "build", "pull", "run", "check" };
+
+    private RenderFragment DeployTab() => __builder =>
+    {
+        var d = Docker.CurrentDeployment;
+        var running = d is { Finished: false };
+        var mode = _deployProject is null ? DockerBuildMode.Auto : DockerService.EffectiveMode(_profile, _deployProject);
+        var hasDockerfile = _deployProject is not null && DockerCli.FindDockerfile(_deployProject) is not null;
+        <div class="iis-deploy">
+            <div class="iis-deploy-form">
+                <div class="row2"><label>@L["iis.project"]</label>
+                    <Dropdown Value="@_deployProject" Options='WebProjects.Select(p => new Dropdown.Option(p, Path.GetFileNameWithoutExtension(p), null, "cube"))' ValueChanged="v => { _deployProject = v; LoadProfile(); }" /></div>
+
+                <div class="row2"><label>@L["dk.targets"]</label>
+                    <div class="iis-targets">
+                        @foreach (var host in Docker.Hosts)
+                        {
+                            var h = host;
+                            var st = Docker.Status(h);
+                            <label class="check"><input type="checkbox" checked="@_targets.Contains(h.Id)" @onchange="e => ToggleTarget(h.Id, e.Value is true)" />
+                                <span class="iis-dot @HealthClass(st.Health)"></span>@h.Display @if (!string.IsNullOrWhiteSpace(h.Environment)) { <span class="chip">@h.Environment</span> }</label>
+                        }
+                    </div>
+                </div>
+
+                <div class="g2">
+                    <div class="row2"><label>@L["dk.container"]</label><div class="f"><input class="mono" value="@_profile.ContainerName" spellcheck="false" @oninput="e => _profile.ContainerName = e.Value?.ToString() ?? string.Empty" /></div></div>
+                    <div class="row2"><label>@L["dk.repository"]</label><div class="f"><input class="mono" value="@_profile.Repository" spellcheck="false" @oninput="e => _profile.Repository = (e.Value?.ToString() ?? string.Empty).ToLowerInvariant()" /></div></div>
+                    <div class="row2"><label>Registry</label><div class="f"><input class="mono" value="@_profile.Registry" spellcheck="false" placeholder="@L["dk.registryNone"]" @onchange="e => _profile.Registry = e.Value?.ToString()" /></div>
+                        <small class="dim">@(string.IsNullOrWhiteSpace(_profile.Registry) ? L["dk.registryHintNone"] : L["dk.registryHint"])</small></div>
+                    <div class="row2"><label>@L["dk.build"]</label>
+                        <div class="seg fill">
+                            <button class="@(_profile.BuildMode == DockerBuildMode.Auto ? "on" : string.Empty)" @onclick="() => _profile.BuildMode = DockerBuildMode.Auto">Auto</button>
+                            <button class="@(_profile.BuildMode == DockerBuildMode.Dockerfile ? "on" : string.Empty)" disabled="@(!hasDockerfile)" @onclick="() => _profile.BuildMode = DockerBuildMode.Dockerfile">Dockerfile</button>
+                            <button class="@(_profile.BuildMode == DockerBuildMode.DotnetSdk ? "on" : string.Empty)" @onclick="() => _profile.BuildMode = DockerBuildMode.DotnetSdk">.NET SDK</button>
+                        </div>
+                        <small class="dim">@(mode == DockerBuildMode.Dockerfile ? L["dk.modeDockerfile"] : L["dk.modeSdk"])</small></div>
+                    <div class="row2 iis-projver"><label>@L["ver.project"]</label>
+                        <div class="iis-ver-row">
+                            <span class="chip mono">@(_deployProject is { } dp ? Actions.VersionOf(dp) ?? "1.0.0" : "–")</span>
+                            <button class="btn sm" disabled="@(_deployProject is null)" title="@L["ver.bumpPatch"]" @onclick="() => Bump(VersionPart.Patch)">+ Patch</button>
+                            <button class="btn sm" disabled="@(_deployProject is null)" title="@L["ver.bumpMinor"]" @onclick="() => Bump(VersionPart.Minor)">+ Minor</button>
+                            <button class="btn sm" disabled="@(_deployProject is null)" title="@L["ver.bumpMajor"]" @onclick="() => Bump(VersionPart.Major)">+ Major</button>
+                            <button class="btn ghost sm" disabled="@(_deployProject is null)" @onclick="ChangeVersion"><Icon Name="type" />@L["ver.edit"]</button>
+                        </div></div>
+                    <div class="row2"><label>@L["dk.tag"]</label><div class="f"><input class="mono" value="@_profile.VersionTemplate" spellcheck="false" @oninput="e => { _profile.VersionTemplate = e.Value?.ToString() ?? string.Empty; UpdatePreview(); }" /></div>
+                        <small class="dim">→ <span class="mono">@DockerCli.ImageReference(_profile.Registry, _profile.Repository, _versionPreview)</span></small></div>
+                    <div class="row2"><label>@L["pub.configuration"]</label>
+                        <div class="seg fill"><button class="@(_profile.Configuration == "Release" ? "on" : string.Empty)" @onclick='() => _profile.Configuration = "Release"'>Release</button><button class="@(_profile.Configuration == "Debug" ? "on" : string.Empty)" @onclick='() => _profile.Configuration = "Debug"'>Debug</button></div></div>
+                    <div class="row2"><label>Restart</label>
+                        <Dropdown Value="@_profile.RestartPolicy" Mono="true" Options='DockerCli.RestartPolicies.Select(r => new Dropdown.Option(r, r))' ValueChanged='v => _profile.RestartPolicy = v ?? "unless-stopped"' /></div>
+                </div>
+                <div class="g2">
+                    <div class="row2"><label>Ports</label><textarea class="mono dk-area" spellcheck="false" placeholder="8080:8080" @onchange="e => _profile.Ports = e.Value?.ToString() ?? string.Empty">@_profile.Ports</textarea>
+                        <small class="dim">@L["dk.portsHint"]</small></div>
+                    <div class="row2"><label>@L["dk.env"]</label><textarea class="mono dk-area" spellcheck="false" placeholder="ConnectionStrings__Default=…" @onchange="e => _profile.Environment = e.Value?.ToString() ?? string.Empty">@_profile.Environment</textarea>
+                        <small class="dim">@L["dk.envHint"]</small></div>
+                    <div class="row2"><label>@L["dk.volumes"]</label><textarea class="mono dk-area" spellcheck="false" placeholder="shop-data:/app/data" @onchange="e => _profile.Volumes = e.Value?.ToString() ?? string.Empty">@_profile.Volumes</textarea>
+                        <small class="dim">@L["dk.volumesHint"]</small></div>
+                    <div class="row2"><label>@L["dk.extra"]</label><textarea class="mono dk-area" spellcheck="false" placeholder="--memory 512m" @onchange="e => _profile.ExtraArgs = e.Value?.ToString() ?? string.Empty">@_profile.ExtraArgs</textarea>
+                        <small class="dim">@L["dk.extraHint"]</small></div>
+                    <div class="row2"><label>@L["dk.network"]</label><div class="f"><input class="mono" value="@_profile.Network" spellcheck="false" placeholder="bridge" @onchange="e => _profile.Network = e.Value?.ToString()" /></div></div>
+                    <div class="row2"><label>@L["dk.health"]</label><div class="f"><input class="mono" value="@_profile.HealthPath" spellcheck="false" placeholder="/health" @onchange="e => _profile.HealthPath = e.Value?.ToString()" /></div>
+                        <small class="dim">@L["dk.healthHint"]</small></div>
+                </div>
+                <div class="pub-opts">
+                    <label class="check"><input type="checkbox" checked="@_profile.Rollback" @onchange="e => _profile.Rollback = e.Value is true" />@L["iis.autoRollback"]</label>
+                    <label class="check">@L["dk.keepImages"] <input type="number" min="0" max="50" style="width:56px" value="@_profile.KeepImages" @onchange="e => _profile.KeepImages = int.TryParse(e.Value?.ToString(), out var k) ? Math.Clamp(k, 0, 50) : 5" /></label>
+                </div>
+                <div class="btns" style="justify-content:flex-start">
+                    <button class="btn ac" disabled="@(running || _deployProject is null || _targets.Count == 0)" @onclick="StartDeploy"><Icon Name="rocket" />@L["iis.deploy"]</button>
+                </div>
+            </div>
+
+            <div class="iis-deploy-status">
+                @if (d is null)
+                {
+                    <div class="ins-empty" style="padding-top:40px"><Icon Name="rocket" /><span>@L["dk.deployEmpty"]</span></div>
+                }
+                else
+                {
+                    <h4>@d.Container · <span class="mono">@DockerCli.TagOf(d.Image)</span></h4>
+                    <div class="iis-steps">
+                        @foreach (var step in Steps)
+                        {
+                            var idx = Array.IndexOf(Steps, d.Step);
+                            var my = Array.IndexOf(Steps, step);
+                            var cls = d.Finished ? (d.Ok || (idx >= 0 && my < idx) ? "done" : string.Empty) : my < idx ? "done" : my == idx ? "now" : string.Empty;
+                            <div class="iis-step @cls">@if (cls == "now") { <Icon Name="refresh" Class="spin" /> } else if (cls == "done") { <Icon Name="check" /> } else { <Icon Name="dot" /> }@L["dk.step." + step]</div>
+                        }
+                    </div>
+                    @if (!d.Finished && d.Host is { } hostName) { <small class="dim">@hostName</small> }
+                    @foreach (var (host, state, detail) in d.Results)
+                    {
+                        <div class="iis-result">
+                            <div class="iis-result-h"><span class="iis-state @(state == "ok" ? "ok" : state == "rolledback" ? "warn" : "err")">@L["dk.result." + state]</span><b>@host</b></div>
+                            <div class="iis-log mono"><div>@detail</div></div>
+                        </div>
+                    }
+                    @if (d.Finished)
+                    {
+                        <div class="hint @(d.Ok ? string.Empty : "warn")" style="margin-top:10px"><Icon Name="@(d.Ok ? "checkc" : "alert")" /><span>@(d.Ok ? L.F("dk.deployDone", d.Container, DockerCli.TagOf(d.Image), string.Join(", ", d.Results.Select(r => r.Host))) : d.Error)</span></div>
+                    }
+                    else
+                    {
+                        <button class="btn sm" style="margin-top:10px" @onclick="() => d.Cancel.Cancel()"><Icon Name="x" />@L["action.cancel"]</button>
+                    }
+                    <small class="dim" style="display:block;margin-top:8px">@L["dk.outputHint"]</small>
+                }
+            </div>
+        </div>
+    };
+
+    // ==================================================================
+    // Host anlegen / bearbeiten
+    // ==================================================================
+
+    private sealed class HostDraft
+    {
+        public DockerHostEntry? Original { get; init; }
+
+        public string Name { get; set; } = string.Empty;
+
+        public string Endpoint { get; set; } = string.Empty;
+
+        public string? Environment { get; set; }
+
+        public bool Remote { get; set; }
+
+        public bool Testing { get; set; }
+
+        public string? TestResult { get; set; }
+
+        public bool TestOk { get; set; }
+    }
+
+    private HostDraft? _editing;
+
+    private void NewHost(bool remote) => _editing = new HostDraft { Remote = remote || Docker.Hosts.Any(h => h.IsLocal) };
+
+    private void AddLocal()
+    {
+        var entry = new DockerHostEntry { Name = string.Empty, Endpoint = string.Empty };
+        Docker.SaveHost(entry);
+        _selected = entry;
+        _ = LoadTabAsync();
+    }
+
+    private void EditHost(DockerHostEntry h) =>
+        _editing = new HostDraft { Original = h, Name = h.Name, Endpoint = h.Endpoint, Environment = h.Environment, Remote = !h.IsLocal };
+
+    private DockerHostEntry ToEntry(HostDraft d) => new()
+    {
+        Id = d.Original?.Id ?? Guid.NewGuid().ToString("N"),
+        Name = d.Name.Trim(),
+        Endpoint = d.Remote ? d.Endpoint.Trim() : string.Empty,
+        Environment = string.IsNullOrWhiteSpace(d.Environment) ? null : d.Environment.Trim(),
+    };
+
+    private string? CheckDraft(HostDraft d)
+    {
+        if (!d.Remote) return null;
+        if (string.IsNullOrWhiteSpace(d.Endpoint)) return L["dk.endpointMissing"];
+        return DockerCli.IsValidEndpoint(d.Endpoint) ? null : L["dk.endpointInvalid"];
+    }
+
+    private async Task TestHost(HostDraft d)
+    {
+        if (CheckDraft(d) is { } problem) { d.TestOk = false; d.TestResult = problem; return; }
+        d.Testing = true;
+        d.TestResult = null;
+        StateHasChanged();
+        var r = await Docker.RunAsync(ToEntry(d), new[] { "version", "--format", "{{.Server.Version}} ({{.Server.Os}}/{{.Server.Arch}})" }, timeout: TimeSpan.FromSeconds(30));
+        d.Testing = false;
+        d.TestOk = r.Ok && r.Output.Trim().Length > 0;
+        d.TestResult = d.TestOk ? L.F("dk.testOk", r.Output.Trim()) : r.Message;
+    }
+
+    private void SaveHost(HostDraft d)
+    {
+        if (CheckDraft(d) is { } problem) { d.TestOk = false; d.TestResult = problem; return; }
+        var entry = ToEntry(d);
+        Docker.SaveHost(entry);
+        _editing = null;
+        _selected = entry;
+        _containers = null;
+        _images = null;
+        _ = LoadTabAsync();
+    }
+
+    private async Task RemoveHost(HostDraft d)
+    {
+        if (d.Original is not { } h) return;
+        if (!await Confirm(L.F("dk.removeHostTitle", h.Display), L["dk.removeHostText"], L["action.remove"])) return;
+        Docker.RemoveHost(h);
+        _editing = null;
+        _selected = Docker.Hosts.FirstOrDefault();
+        _containers = null;
+        _images = null;
+        _ = LoadTabAsync();
+    }
+
+    private RenderFragment HostForm(HostDraft d) => __builder =>
+    {
+        <div class="iis-form scroll">
+            <h3>@(d.Original is null ? L["dk.addHost"] : L.F("dk.editHostTitle", d.Original.Display))</h3>
+            <div class="seg" style="margin-bottom:12px">
+                <button class="@(!d.Remote ? "on" : string.Empty)" @onclick="() => d.Remote = false"><Icon Name="monitor" />@L["dk.local"]</button>
+                <button class="@(d.Remote ? "on" : string.Empty)" @onclick="() => d.Remote = true"><Icon Name="globe" />@L["dk.remote"]</button>
+            </div>
+            @if (d.Remote)
+            {
+                <div class="row2"><label>@L["dk.endpoint"]</label><div class="f"><input class="mono" value="@d.Endpoint" placeholder="ssh://deploy@web01.firma.local" spellcheck="false" @oninput="e => d.Endpoint = e.Value?.ToString() ?? string.Empty" /></div>
+                    <small class="dim">@L["dk.endpointHint"]</small></div>
+            }
+            else
+            {
+                <div class="hint" style="margin-bottom:8px"><Icon Name="info" />@L["dk.localHint"]</div>
+            }
+            <div class="g2">
+                <div class="row2"><label>@L["iis.displayName"]</label><div class="f"><input value="@d.Name" placeholder="@L["iis.displayNameHint"]" @oninput="e => d.Name = e.Value?.ToString() ?? string.Empty" /></div></div>
+                <div class="row2"><label>@L["iis.environment"]</label><div class="f"><input value="@d.Environment" list="dk-envs" placeholder="Test, Staging, Produktion …" @oninput="e => d.Environment = e.Value?.ToString()" /></div>
+                    <datalist id="dk-envs">@foreach (var env in Docker.Hosts.Select(h => h.Environment).Where(x => !string.IsNullOrWhiteSpace(x)).Distinct()) { <option value="@env"></option> }</datalist></div>
+            </div>
+            @if (d.TestResult is { } tr)
+            {
+                <div class="hint @(d.TestOk ? string.Empty : "warn")" style="margin:8px 0"><Icon Name="@(d.TestOk ? "checkc" : "alert")" />@tr</div>
+            }
+            <div class="btns">
+                @if (d.Original is not null) { <button class="btn ghost left danger-text" @onclick="() => RemoveHost(d)"><Icon Name="trash" />@L["action.remove"]</button> }
+                <button class="btn ghost" @onclick="() => _editing = null">@L["action.cancel"]</button>
+                <button class="btn" disabled="@d.Testing" @onclick="() => TestHost(d)">@if (d.Testing) { <Icon Name="refresh" Class="spin" /> } else { <Icon Name="zap" /> }@L["iis.test"]</button>
+                <button class="btn ac" @onclick="() => SaveHost(d)"><Icon Name="save" />@L["action.save"]</button>
+            </div>
+            <div class="iis-install hint"><Icon Name="info" /><span>@L["dk.sshHint"]</span></div>
+        </div>
+    };
+}
