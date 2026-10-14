@@ -561,7 +561,9 @@ public static partial class RazorCSharpProjection
 
         var sb = new StringBuilder();
         foreach (var u in allUsings.Where(u => u.Length > 0).Distinct()) sb.Append("using ").Append(u.TrimEnd(';')).Append(";\n");
-        sb.Append("namespace ").Append(fileNs ?? ns).Append("\n{\npublic partial class ").Append(className);
+        // Dateiweiter Namespace: Member stehen wie in @code mit 4 Leerzeichen – Roslyns Formatierer (Quick-Fixes)
+        // rückt den Code der .razor-Datei dann nicht um
+        sb.Append("namespace ").Append(fileNs ?? ns).Append(";\npublic partial class ").Append(className);
         if (typeParams.Count > 0) sb.Append('<').Append(string.Join(", ", typeParams)).Append('>');
         if (withBase)
         {
@@ -606,7 +608,7 @@ public static partial class RazorCSharpProjection
             }
             sb.Append("}\n#pragma warning restore\n");
         }
-        sb.Append("}\n}\n");
+        sb.Append("}\n");
         return new RazorProjection(sb.ToString(), 0, RazorCSharpContext.CodeBlock, map);
     }
 

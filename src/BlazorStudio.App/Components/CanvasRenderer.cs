@@ -197,6 +197,13 @@ public sealed partial class CanvasRenderer(Workspace ws, Localizer l)
         b.AddAttribute(3, "draggable", "true");
         if (container ?? n.CanHaveChildren) b.AddAttribute(4, "data-bs-container", "1");
         if (text) b.AddAttribute(5, "data-bs-text", "1");
+        // RenderFragment-Parameter (Slots) für die Slot-Leiste beim Ziehen – wie in der echten Darstellung
+        if (n.Kind == NodeKind.Component && ws.FragmentsOf(n.Name) is { Count: > 0 } frags)
+        {
+            b.AddAttribute(6, "data-bs-slots", string.Join(",", frags));
+            b.AddAttribute(7, "data-bs-present", string.Join(",", n.Children.Where(c => c.Kind == NodeKind.Component && frags.Contains(c.Name)).Select(c => c.Name)));
+            b.AddAttribute(8, "data-bs-name", n.Name);
+        }
     }
 
     // ------------------------------------------------------------------
