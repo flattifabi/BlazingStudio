@@ -29,6 +29,7 @@ builder.Services.AddSingleton(new DeploymentJournal(Path.Combine(options.DataDir
 builder.Services.AddSingleton<SystemSampler>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SystemSampler>());
 builder.Services.AddSingleton<IisManager>();
+builder.Services.AddSingleton<SiteConfigService>();
 builder.Services.AddSingleton<DeploymentService>();
 builder.Services.AddHttpClient("health").ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
 {

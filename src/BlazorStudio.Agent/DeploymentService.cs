@@ -7,7 +7,7 @@ namespace BlazorStudio.Agent;
 /// Führt Deployments im Hintergrund aus: Version ablegen → IIS-Anwendung umschalten → Pool recyceln →
 /// Health-Check → bei Fehler Rollback → alte Versionen aufräumen. Pro Site/Anwendung läuft immer nur eins.
 /// </summary>
-public sealed class DeploymentService(IisManager iis, VersionStore store, DeploymentJournal journal, AgentOptions options, IHttpClientFactory http, ILogger<DeploymentService> log)
+public sealed class DeploymentService(IisManager iis, VersionStore store, SiteConfigService config, DeploymentJournal journal, AgentOptions options, IHttpClientFactory http, ILogger<DeploymentService> log)
 {
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new(StringComparer.OrdinalIgnoreCase);
 
@@ -108,6 +108,8 @@ public sealed class DeploymentService(IisManager iis, VersionStore store, Deploy
         journal.Log(record, $"{installed.Files} Dateien, {installed.SizeBytes / 1024.0 / 1024.0:0.0} MB");
         if (!File.Exists(Path.Combine(installed.Path, "web.config")) && !File.Exists(Path.Combine(installed.Path, "index.html")))
             journal.Log(record, "Keine web.config im Paket – ist das wirklich ein Publish-Ordner?", "warn");
+        // Remote bearbeitete web.config/appsettings drüberlegen, stdout einschalten
+        config.PrepareVersion(site, appPath, installed.Path, (text, level) => journal.Log(record, text, level));
 
         if (!req.Activate)
         {
@@ -238,6 +240,8 @@ public sealed class DeploymentService(IisManager iis, VersionStore store, Deploy
         await gate.WaitAsync();
         try
         {
+            // Auch ältere Versionen laufen mit der aktuellen eigenen Konfiguration
+            config.PrepareVersion(site, appPath, store.VersionDirectory(site, appPath, req.Version), (text, level) => journal.Log(record, text, level));
             var (_, pool) = await iis.SetPhysicalPathAsync(site, appPath, store.VersionDirectory(site, appPath, req.Version));
             store.MarkActivated(site, appPath, req.Version, DateTime.UtcNow);
             journal.Log(record, $"Umgeschaltet von {app.ActiveVersion ?? app.PhysicalPath} auf {req.Version}");

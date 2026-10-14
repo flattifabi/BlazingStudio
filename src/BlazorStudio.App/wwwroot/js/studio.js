@@ -919,6 +919,14 @@
     return null;
   }
 
+  // Beim Auflösen (Code-Aktion/Vorschlag) hat das Menü den Fokus, nicht der Editor –
+  // daher das Dokument über die Modell-URI wiederfinden, nie „den ersten Editor“ nehmen.
+  function holderForUri(uri) {
+    if (!uri) return null;
+    for (const h of editors.values()) if (h.editor.getModel()?.uri.toString() === uri) return h;
+    return null;
+  }
+
   function registerProviders() {
     const K = monaco.languages.CompletionItemKind;
     const csKinds = {
@@ -964,14 +972,14 @@
               const p = model.getPositionAt(i.edit.offset);
               s.additionalTextEdits = [{ range: new monaco.Range(p.lineNumber, p.column, p.lineNumber, p.column), text: i.edit.text }];
             }
-            if (i.id != null) s._id = i.id;
+            if (i.id != null) { s._id = i.id; s._uri = model.uri.toString(); }
             return s;
           }),
         };
       },
       resolveCompletionItem: async (item) => {
         if (item._id == null || item.documentation) return item;
-        const h = [...editors.values()].find(x => x.editor.hasTextFocus()) ?? [...editors.values()][0];
+        const h = holderForUri(item._uri) ?? [...editors.values()].find(x => x.editor.hasTextFocus());
         if (!h) return item;
         try {
           const d = await h.dotnet.invokeMethodAsync('DescribeCompletion', item._id);
@@ -1005,12 +1013,13 @@
             diagnostics: a.kind === 'quickfix' ? context.markers : undefined,
             _id: a.id,
             _versionId: model.getVersionId(),
+            _uri: model.uri.toString(),
           })),
           dispose() { },
         };
       },
       resolveCodeAction: async (action) => {
-        const h = [...editors.values()].find(x => x.editor.hasTextFocus()) ?? [...editors.values()][0];
+        const h = holderForUri(action._uri);
         if (!h || action._id == null) return action;
         const model = h.editor.getModel();
         const res = await h.dotnet.invokeMethodAsync('ApplyCodeAction', action._id, model.getValue());

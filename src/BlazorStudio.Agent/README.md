@@ -79,6 +79,10 @@ Fertige Vorlagen für GitHub Actions, Azure DevOps und GitLab erzeugt der Pipeli
 | GET | `/api/sites/{name}/versions?app=/` | abgelegte Versionen |
 | POST | `/api/sites/{name}/activate` | `{ version, appPath, recycle }` – umschalten/Rollback |
 | DELETE | `/api/sites/{name}/versions/{version}?app=/` | Version löschen (nicht die aktive) |
+| GET/PUT | `/api/sites/{name}/auth?app=/` | Authentifizierung `{ anonymous, windows, basic, digest }` |
+| GET | `/api/sites/{name}/config?app=/` | bearbeitbare Dateien (web.config, appsettings*.json) |
+| GET/PUT/DELETE | `/api/sites/{name}/config/{file}?app=/` | lesen / speichern `{ content, apply }` (bleibt für künftige Deployments) / eigene Version entfernen |
+| GET | `/api/sites/{name}/logs?app=/`, `/api/sites/{name}/logs/{file}?app=/` | stdout-Logs (Ende der Datei, max. 512 KB) |
 | POST | `/api/deployments` | multipart: `package` (ZIP) + `site`, `version`, `appPath`, `healthUrl`, `rollback`, `createSite`, `binding`, `pool`, `runtime`, `overwrite`, `activate`, `source`, `commit`, `notes` → 202 |
 | GET | `/api/deployments?site=&take=` | Verlauf |
 | GET | `/api/deployments/{id}` | Stand mit Log (zum Abfragen bis `state` ≠ Queued/Running) |

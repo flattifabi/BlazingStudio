@@ -118,6 +118,38 @@ public sealed class AgentClient : IDisposable
         SendAsync(HttpMethod.Delete, $"api/sites/{Esc(site)}/versions/{Esc(version)}?app={Uri.EscapeDataString(appPath)}", null, ct);
 
     // ------------------------------------------------------------------
+    // Authentifizierung, Konfigurationsdateien, Logs
+    // ------------------------------------------------------------------
+
+    private static string App(string appPath) => "app=" + Uri.EscapeDataString(DeployRequest.NormalizeAppPath(appPath));
+
+    public Task<SiteAuthentication> GetAuthenticationAsync(string site, string appPath, CancellationToken ct = default) =>
+        GetAsync<SiteAuthentication>($"api/sites/{Esc(site)}/auth?{App(appPath)}", ct);
+
+    public Task SetAuthenticationAsync(string site, string appPath, SiteAuthentication auth, CancellationToken ct = default) =>
+        SendAsync(HttpMethod.Put, $"api/sites/{Esc(site)}/auth?{App(appPath)}", auth, ct);
+
+    public Task<List<SiteConfigFile>> GetConfigFilesAsync(string site, string appPath, CancellationToken ct = default) =>
+        GetAsync<List<SiteConfigFile>>($"api/sites/{Esc(site)}/config?{App(appPath)}", ct);
+
+    public Task<SiteConfigContent> GetConfigFileAsync(string site, string appPath, string file, CancellationToken ct = default) =>
+        GetAsync<SiteConfigContent>($"api/sites/{Esc(site)}/config/{Esc(file)}?{App(appPath)}", ct);
+
+    public Task<SiteConfigWriteResult> SaveConfigFileAsync(string site, string appPath, string file, SiteConfigWrite write, CancellationToken ct = default) =>
+        SendAsync<SiteConfigWriteResult>(HttpMethod.Put, $"api/sites/{Esc(site)}/config/{Esc(file)}?{App(appPath)}", write, ct);
+
+    /// <summary>Überschreibung entfernen – ab dem nächsten Deployment gilt wieder die Datei aus dem Paket.</summary>
+    public Task DeleteConfigOverrideAsync(string site, string appPath, string file, CancellationToken ct = default) =>
+        SendAsync(HttpMethod.Delete, $"api/sites/{Esc(site)}/config/{Esc(file)}?{App(appPath)}", null, ct);
+
+    public Task<List<SiteLogFile>> GetLogFilesAsync(string site, string appPath, CancellationToken ct = default) =>
+        GetAsync<List<SiteLogFile>>($"api/sites/{Esc(site)}/logs?{App(appPath)}", ct);
+
+    /// <summary>Ende eines stdout-Logs (höchstens <see cref="SiteConfig.MaxLogBytes"/>).</summary>
+    public Task<SiteConfigContent> GetLogAsync(string site, string appPath, string file, CancellationToken ct = default) =>
+        GetAsync<SiteConfigContent>($"api/sites/{Esc(site)}/logs/{Esc(file)}?{App(appPath)}", ct);
+
+    // ------------------------------------------------------------------
     // Deployments
     // ------------------------------------------------------------------
 
@@ -205,6 +237,32 @@ public sealed class AgentClient : IDisposable
         catch (OperationCanceledException e) when (!ct.IsCancellationRequested)
         {
             throw new AgentException("Zeitüberschreitung – der Agent antwortet nicht.", null, e);
+        }
+    }
+
+    private async Task<T> SendAsync<T>(HttpMethod method, string url, object? body, CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(90));
+        using var req = new HttpRequestMessage(method, url);
+        if (body is not null) req.Content = JsonContent.Create(body, body.GetType(), options: Json);
+        try
+        {
+            using var resp = await _http.SendAsync(req, cts.Token);
+            await EnsureAsync(resp, cts.Token);
+            return (await resp.Content.ReadFromJsonAsync<T>(Json, cts.Token))!;
+        }
+        catch (HttpRequestException e)
+        {
+            throw Unreachable(e);
+        }
+        catch (OperationCanceledException e) when (!ct.IsCancellationRequested)
+        {
+            throw new AgentException("Zeitüberschreitung – der Agent antwortet nicht.", null, e);
+        }
+        catch (JsonException e)
+        {
+            throw new AgentException("Unerwartete Antwort vom Agent – ist er aktuell?", HttpStatusCode.OK, e);
         }
     }
 

@@ -411,6 +411,122 @@ public sealed class IisManager(SystemSampler sampler, VersionStore store, ILogge
         }
     }
 
+    // ------------------------------------------------------------------
+    // Authentifizierung (applicationHost.config, <location path="Site/App">)
+    // ------------------------------------------------------------------
+
+    private static readonly (string Key, string Section, string Module)[] AuthMethods =
+    {
+        ("anonymous", "system.webServer/security/authentication/anonymousAuthentication", "AnonymousAuthenticationModule"),
+        ("windows", "system.webServer/security/authentication/windowsAuthentication", "WindowsAuthenticationModule"),
+        ("basic", "system.webServer/security/authentication/basicAuthentication", "BasicAuthenticationModule"),
+        ("digest", "system.webServer/security/authentication/digestAuthentication", "DigestAuthenticationModule"),
+    };
+
+    private static string LocationOf(Site s, string appPath) => appPath == "/" ? s.Name : s.Name + appPath;
+
+    private static Site RequireApp(ServerManager sm, string site, string appPath)
+    {
+        var s = sm.Sites[site] ?? throw new NotFoundException($"Site „{site}“ gibt es nicht.");
+        if (!s.Applications.Any(a => a.Path.Equals(appPath, StringComparison.OrdinalIgnoreCase)))
+            throw new NotFoundException($"Anwendung „{appPath}“ gibt es in „{site}“ nicht.");
+        return s;
+    }
+
+    /// <summary>Installierte Authentifizierungsmodule (fehlende Windows-Features → nicht wählbar).</summary>
+    private static HashSet<string> InstalledModules(ServerManager sm)
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var m in sm.GetApplicationHostConfiguration().GetSection("system.webServer/globalModules").GetCollection())
+                if (m["name"] is string n) set.Add(n);
+        }
+        catch (COMException)
+        {
+        }
+        // Anonym ist ins Kernmodul eingebaut, falls die Liste nicht lesbar war
+        set.Add("AnonymousAuthenticationModule");
+        return set;
+    }
+
+    public SiteAuthentication GetAuthentication(string site, string appPath)
+    {
+        using var sm = Open();
+        var s = RequireApp(sm, site, appPath);
+        var config = sm.GetApplicationHostConfiguration();
+        var modules = InstalledModules(sm);
+        var result = new SiteAuthentication();
+        foreach (var (key, section, module) in AuthMethods)
+        {
+            bool enabled;
+            try
+            {
+                enabled = config.GetSection(section, LocationOf(s, appPath))["enabled"] is true;
+            }
+            catch (COMException)
+            {
+                result.Unavailable.Add(key);
+                continue;
+            }
+            if (!modules.Contains(module)) result.Unavailable.Add(key);
+            switch (key)
+            {
+                case "anonymous": result.Anonymous = enabled; break;
+                case "windows": result.Windows = enabled; break;
+                case "basic": result.Basic = enabled; break;
+                case "digest": result.Digest = enabled; break;
+            }
+        }
+        return result;
+    }
+
+    public async Task SetAuthenticationAsync(string site, string appPath, SiteAuthentication auth)
+    {
+        if (!auth.Anonymous && !auth.Windows && !auth.Basic && !auth.Digest)
+            throw new ArgumentException("Mindestens ein Verfahren muss aktiv sein – sonst ist die Site für niemanden erreichbar.");
+        await _write.WaitAsync();
+        try
+        {
+            using var sm = Open();
+            var s = RequireApp(sm, site, appPath);
+            var config = sm.GetApplicationHostConfiguration();
+            var modules = InstalledModules(sm);
+            foreach (var (key, section, module) in AuthMethods)
+            {
+                var want = key switch { "anonymous" => auth.Anonymous, "windows" => auth.Windows, "basic" => auth.Basic, _ => auth.Digest };
+                if (want && !modules.Contains(module))
+                    throw new InvalidOperationException($"Das IIS-Modul {module} ist nicht installiert (Windows-Feature „{FeatureOf(key)}“ aktivieren).");
+                Microsoft.Web.Administration.ConfigurationSection sec;
+                try
+                {
+                    sec = config.GetSection(section, LocationOf(s, appPath));
+                }
+                catch (COMException)
+                {
+                    if (want) throw new InvalidOperationException($"Die Einstellung {section} gibt es auf diesem Server nicht.");
+                    continue;
+                }
+                if (sec["enabled"] is bool current && current == want) continue;
+                sec["enabled"] = want;
+            }
+            sm.CommitChanges();
+            log.LogInformation("Authentifizierung {Site}{App}: anonym={A} windows={W} basic={B} digest={D}", site, appPath, auth.Anonymous, auth.Windows, auth.Basic, auth.Digest);
+        }
+        finally
+        {
+            _write.Release();
+        }
+    }
+
+    private static string FeatureOf(string key) => key switch
+    {
+        "windows" => "IIS-WindowsAuthentication",
+        "basic" => "IIS-BasicAuthentication",
+        "digest" => "IIS-DigestAuthentication",
+        _ => "IIS-Security",
+    };
+
     /// <summary>Pool neu starten (nach dem Umschalten) – gestoppte Pools werden gestartet.</summary>
     public Task RecycleAsync(string pool) => PoolActionAsync(pool, "recycle");
 

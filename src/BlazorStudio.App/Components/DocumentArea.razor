@@ -7,9 +7,10 @@
             @foreach (var d in Ws.Documents)
             {
                 var doc = d;
-                <div class="tab @(doc == Ws.Active ? "on" : "")" title="@doc.Path"
+                <div class="tab @(doc == Ws.Active ? "on" : "")" title="@doc.Title"
                      @onclick="() => Ws.Activate(doc)" @onmouseup="e => OnMouseUp(e, doc)">
                     <FileIcon Path="@doc.Path" />
+                    @if (doc.Remote is not null) { <Icon Name="server" Class="remote-ico" /> }
                     <span>@doc.Name</span>
                     @if (doc.IsDirty) { <span class="mod"></span> }
                     <span class="x" title="@L["cmd.closeTab"]" @onclick="() => Ws.CloseAsync(doc)" @onclick:stopPropagation="true"><Icon Name="x" /></span>

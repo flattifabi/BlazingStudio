@@ -112,6 +112,30 @@ public static class AgentEndpoints
             return Results.NoContent();
         });
 
+        // ---------------- Authentifizierung, Konfiguration, Logs ----------------
+        api.MapGet("/sites/{name}/auth", (IisManager iis, string name, string? app) =>
+            iis.GetAuthentication(name, DeployRequest.NormalizeAppPath(app)));
+        api.MapPut("/sites/{name}/auth", async (IisManager iis, string name, string? app, SiteAuthentication auth) =>
+        {
+            await iis.SetAuthenticationAsync(name, DeployRequest.NormalizeAppPath(app), auth);
+            return Results.NoContent();
+        });
+        api.MapGet("/sites/{name}/config", (SiteConfigService config, string name, string? app) =>
+            config.List(name, DeployRequest.NormalizeAppPath(app)));
+        api.MapGet("/sites/{name}/config/{file}", (SiteConfigService config, string name, string file, string? app) =>
+            config.Read(name, DeployRequest.NormalizeAppPath(app), file));
+        api.MapPut("/sites/{name}/config/{file}", async (SiteConfigService config, string name, string file, string? app, SiteConfigWrite write) =>
+            await config.WriteAsync(name, DeployRequest.NormalizeAppPath(app), file, write));
+        api.MapDelete("/sites/{name}/config/{file}", (SiteConfigService config, string name, string file, string? app) =>
+        {
+            config.DeleteOverride(name, DeployRequest.NormalizeAppPath(app), file);
+            return Results.NoContent();
+        });
+        api.MapGet("/sites/{name}/logs", (SiteConfigService config, string name, string? app) =>
+            config.Logs(name, DeployRequest.NormalizeAppPath(app)));
+        api.MapGet("/sites/{name}/logs/{file}", (SiteConfigService config, string name, string file, string? app) =>
+            config.ReadLog(name, DeployRequest.NormalizeAppPath(app), file));
+
         // ---------------- Deployments ----------------
         api.MapGet("/deployments", (DeploymentJournal journal, string? site, int? take) => journal.List(site, take ?? 50));
         api.MapGet("/deployments/{id}", (DeploymentJournal journal, string id) =>

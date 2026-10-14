@@ -11,6 +11,9 @@ public enum ViewMode { Design, Split, Code }
 public enum ChangeOrigin { Load, Design, Code, Undo, External }
 
 /// <summary>Eine geöffnete Datei. Für .razor zusätzlich der Designer-Zustand.</summary>
+/// <summary>Herkunft eines Remote-Dokuments (IIS-Agent).</summary>
+public sealed record RemoteFile(string ServerId, string Server, string Site, string AppPath, string File, bool IsLog = false);
+
 public sealed class DocumentSession
 {
     private const int MaxUndo = 200;
@@ -33,7 +36,13 @@ public sealed class DocumentSession
 
     public string Path { get; private set; }
 
-    public string Name => System.IO.Path.GetFileName(Path);
+    public string Name => Remote is { } r ? $"{r.File} · {r.Server}" : System.IO.Path.GetFileName(Path);
+
+    /// <summary>Datei auf einem IIS-Server (lokal nur zwischengespeichert) – Speichern lädt sie hoch.</summary>
+    public RemoteFile? Remote { get; set; }
+
+    /// <summary>Tooltip im Reiter.</summary>
+    public string Title => Remote is { } r ? $"{r.Server}: {r.Site}{(r.AppPath == "/" ? "" : r.AppPath)}/{r.File}" : Path;
 
     public DocumentKind Kind { get; }
 
@@ -243,6 +252,13 @@ public sealed class DocumentSession
     public void MarkSaved()
     {
         SavedText = Text;
+        Changed?.Invoke(ChangeOrigin.Load);
+    }
+
+    /// <summary>Gespeicherten Stand zurücksetzen (z. B. Hochladen fehlgeschlagen → wieder „ungespeichert“).</summary>
+    public void MarkSavedAs(string savedText)
+    {
+        SavedText = savedText;
         Changed?.Invoke(ChangeOrigin.Load);
     }
 
