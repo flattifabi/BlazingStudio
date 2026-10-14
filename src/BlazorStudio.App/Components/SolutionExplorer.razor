@@ -411,6 +411,7 @@
             refEntries.Length > 0 ? MenuEntry.Sub(L["sol.projectReference"], "link", refEntries) : new MenuEntry(L["sol.projectReference"], "link", Disabled: true),
             MenuEntry.Do(L["cmd.nuget"] + " …", "package", () => OpenNuGet(it))));
         items.Add(MenuEntry.Do(L["cmd.publish"] + " …", "upload", async () => { if (!IsStartup(it)) await Ws.SetStartupProjectAsync(it); Ui.OpenOverlay("publish"); }));
+        items.Add(MenuEntry.Do(L["ver.change"] + (Actions.VersionOf(it.Path) is { } ver ? " (" + ver + ")" : "") + " …", "type", () => Actions.ChangeVersionAsync(it.Path)));
         items.Add(MenuEntry.Separator);
         items.Add(MenuEntry.Do(L["sol.editProject"], "code", () => { Ws.Open(it.Path); }));
         items.Add(MenuEntry.Do(L["sol.unloadProject"], "x", () => Actions.UnloadAsync(it)));

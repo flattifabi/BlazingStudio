@@ -2,6 +2,8 @@
 @inject IisService Iis
 @inject IHostBridge Host
 @inject IJSRuntime JS
+@inject ProjectActions Actions
+@using BlazorStudio.Core.Build
 
 <div class="backdrop" style="padding-top:3vh" @onclick="Close">
     <div class="dialog nuget iis" @onclick:stopPropagation="true">
@@ -721,6 +723,19 @@
         _versionPreview = IisService.ExpandVersion(_profile.VersionTemplate, _deployProject);
     }
 
+    private void Bump(VersionPart part)
+    {
+        if (_deployProject is null) return;
+        if (Actions.SetVersion(_deployProject, ProjectVersion.Bump(Actions.VersionOf(_deployProject), part)))
+            _versionPreview = IisService.ExpandVersion(_profile.VersionTemplate, _deployProject);
+    }
+
+    private async Task ChangeVersion()
+    {
+        await Actions.ChangeVersionAsync(_deployProject);
+        if (_deployProject is not null) _versionPreview = IisService.ExpandVersion(_profile.VersionTemplate, _deployProject);
+    }
+
     private void DeployTo(string site, string appPath)
     {
         _profile.Site = site;
@@ -786,6 +801,14 @@
                         <div class="f"><input value="@_profile.Site" list="iis-sites" spellcheck="false" @oninput="e => _profile.Site = e.Value?.ToString() ?? string.Empty" /></div>
                         <datalist id="iis-sites">@foreach (var x in _sites ?? new()) { <option value="@x.Name"></option> }</datalist></div>
                     <div class="row2"><label>@L["iis.appPath"]</label><div class="f"><input class="mono" value="@_profile.AppPath" spellcheck="false" @onchange="e => _profile.AppPath = DeployRequest.NormalizeAppPath(e.Value?.ToString())" /></div></div>
+                    <div class="row2 iis-projver"><label>@L["ver.project"]</label>
+                        <div class="iis-ver-row">
+                            <span class="chip mono">@(_deployProject is { } dp ? Actions.VersionOf(dp) ?? "1.0.0" : "–")</span>
+                            <button class="btn sm" disabled="@(_deployProject is null)" title="@L["ver.bumpPatch"]" @onclick="() => Bump(VersionPart.Patch)">+ Patch</button>
+                            <button class="btn sm" disabled="@(_deployProject is null)" title="@L["ver.bumpMinor"]" @onclick="() => Bump(VersionPart.Minor)">+ Minor</button>
+                            <button class="btn sm" disabled="@(_deployProject is null)" title="@L["ver.bumpMajor"]" @onclick="() => Bump(VersionPart.Major)">+ Major</button>
+                            <button class="btn ghost sm" disabled="@(_deployProject is null)" @onclick="ChangeVersion"><Icon Name="type" />@L["ver.edit"]</button>
+                        </div></div>
                     <div class="row2"><label>@L["iis.version"]</label><div class="f"><input class="mono" value="@_profile.VersionTemplate" spellcheck="false" @oninput="e => { _profile.VersionTemplate = e.Value?.ToString() ?? string.Empty; _versionPreview = IisService.ExpandVersion(_profile.VersionTemplate, _deployProject); }" /></div>
                         <small class="dim">→ <span class="mono">@_versionPreview</span> · {version} {date} {time} {user}</small></div>
                     <div class="row2"><label>@L["pub.configuration"]</label>
