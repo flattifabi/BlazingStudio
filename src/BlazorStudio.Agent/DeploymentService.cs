@@ -76,14 +76,11 @@ public sealed class DeploymentService(IisManager iis, VersionStore store, Deploy
         var site = req.Site;
         var appPath = req.AppPath;
 
-        // 1. Site/Anwendung vorhanden?
-        if (!iis.SiteExists(site))
-        {
-            if (!req.CreateSite) throw new NotFoundException($"Site „{site}“ gibt es auf diesem Server nicht (Option „Site anlegen“ verwenden).");
-            journal.Log(record, $"Site „{site}“ wird angelegt ({req.Binding})");
-            await iis.CreateSiteAsync(new CreateSiteRequest { Name = site, Binding = req.Binding!, Pool = req.Pool, ManagedRuntimeVersion = req.ManagedRuntimeVersion });
-        }
-        var app = iis.FindApplication(site, appPath);
+        // 1. Site/Anwendung vorhanden? (Neue Sites werden erst nach dem Entpacken angelegt – direkt auf dem Versionsordner)
+        var siteExists = iis.SiteExists(site);
+        if (!siteExists && !req.CreateSite)
+            throw new NotFoundException($"Site „{site}“ gibt es auf diesem Server nicht (Option „Site anlegen“ verwenden).");
+        var app = siteExists ? iis.FindApplication(site, appPath) : null;
         var previous = app?.ActiveVersion;
         var previousPath = app?.PhysicalPath;
         journal.Update(record, r => r.PreviousVersion = previous);
@@ -95,8 +92,8 @@ public sealed class DeploymentService(IisManager iis, VersionStore store, Deploy
         {
             if (string.Equals(previous, req.Version, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException($"Version {req.Version} ist bereits aktiv. Bitte eine neue Versionsbezeichnung verwenden.");
-            if (!req.Overwrite) throw new InvalidOperationException($"Version {req.Version} liegt schon auf dem Server (Option „Überschreiben“ oder neue Version).");
-            journal.Log(record, $"Vorhandene Version {req.Version} wird ersetzt", "warn");
+            // Nicht aktiv = Rest eines abgebrochenen Versuchs oder bewusst erneut ausgerollt → ersetzen
+            journal.Log(record, $"Vorhandene (nicht aktive) Version {req.Version} wird ersetzt", "warn");
         }
         journal.Log(record, $"Entpacken nach {store.VersionDirectory(site, appPath, req.Version)}");
         var installed = await Task.Run(() => store.Install(site, appPath, packageFile, new VersionMetadata
@@ -107,7 +104,7 @@ public sealed class DeploymentService(IisManager iis, VersionStore store, Deploy
             Commit = req.Commit,
             Notes = req.Notes,
             DeploymentId = record.Id,
-        }, req.Overwrite));
+        }, overwrite: true));
         journal.Log(record, $"{installed.Files} Dateien, {installed.SizeBytes / 1024.0 / 1024.0:0.0} MB");
         if (!File.Exists(Path.Combine(installed.Path, "web.config")) && !File.Exists(Path.Combine(installed.Path, "index.html")))
             journal.Log(record, "Keine web.config im Paket – ist das wirklich ein Publish-Ordner?", "warn");
@@ -121,18 +118,29 @@ public sealed class DeploymentService(IisManager iis, VersionStore store, Deploy
 
         // 3. Umschalten
         string pool;
-        if (app is null)
+        if (!siteExists)
+        {
+            journal.Log(record, $"Site „{site}“ wird angelegt ({req.Binding}) auf {installed.Path}");
+            await iis.CreateSiteAsync(new CreateSiteRequest { Name = site, Binding = req.Binding!, Pool = req.Pool, ManagedRuntimeVersion = req.ManagedRuntimeVersion, PhysicalPath = installed.Path });
+            if (appPath != "/") await iis.CreateApplicationAsync(site, appPath, installed.Path, req.Pool);
+        }
+        else if (app is null)
         {
             journal.Log(record, $"Anwendung {appPath} wird in „{site}“ angelegt");
             await iis.CreateApplicationAsync(site, appPath, installed.Path, req.Pool);
-            pool = iis.FindApplication(site, appPath)?.Pool ?? "";
         }
         else
         {
-            (_, pool) = await iis.SetPhysicalPathAsync(site, appPath, installed.Path);
+            await iis.SetPhysicalPathAsync(site, appPath, installed.Path);
         }
+
+        // Nachlesen: hat IIS den Pfad wirklich übernommen?
+        var now = iis.FindApplication(site, appPath);
+        if (now is null || !SamePath(now.PhysicalPath, installed.Path))
+            throw new InvalidOperationException($"IIS hat den physischen Pfad nicht übernommen (aktuell: {now?.PhysicalPath ?? "–"}, erwartet: {installed.Path}).");
+        pool = now.Pool;
         store.MarkActivated(site, appPath, req.Version, DateTime.UtcNow);
-        journal.Log(record, $"Umgeschaltet auf {req.Version}");
+        journal.Log(record, $"Umgeschaltet auf {req.Version} – physischer Pfad: {now.PhysicalPath}");
         if (pool.Length > 0)
         {
             await iis.RecycleAsync(pool);
@@ -195,6 +203,13 @@ public sealed class DeploymentService(IisManager iis, VersionStore store, Deploy
             if (attempt == 1 || attempt % 5 == 0) journal.Log(record, $"  noch nicht bereit: {last}");
             await Task.Delay(2000);
         }
+    }
+
+    private static bool SamePath(string? a, string? b)
+    {
+        static string N(string? p) => Path.GetFullPath(Environment.ExpandEnvironmentVariables(p ?? "")).TrimEnd('\\', '/');
+        try { return string.Equals(N(a), N(b), StringComparison.OrdinalIgnoreCase); }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { return false; }
     }
 
     /// <summary>Manuelles Umschalten auf eine abgelegte Version (auch Rollback). Wird im Verlauf festgehalten.</summary>

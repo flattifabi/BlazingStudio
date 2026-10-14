@@ -14,6 +14,11 @@ public sealed partial class Localizer
         ["cmd.iis"] = "IIS-Server …", ["cmd.iisDeploy"] = "Auf IIS bereitstellen …", ["cmd.pipelines"] = "Pipeline-Builder …",
         ["designer.usingAdded"] = "@using {0} ergänzt",
         ["editor.quickFix"] = "Schnellaktionen und Refactorings …",
+        ["ver.change"] = "Version ändern", ["ver.project"] = "Projektversion", ["ver.edit"] = "Ändern …",
+        ["ver.title"] = "Version von {0}", ["ver.notSet"] = "nicht gesetzt (1.0.0)",
+        ["ver.text"] = "Aktuell: {0}. Vorschläge: {1} (Patch), {2} (Minor), {3} (Major). Steht als <Version> in der Projektdatei.",
+        ["ver.changed"] = "{0}: Version {1}", ["ver.invalidXml"] = "Die Projektdatei wäre danach kein gültiges XML – nichts geändert.",
+        ["ver.bumpPatch"] = "Fehlerbehebung: letzte Stelle erhöhen", ["ver.bumpMinor"] = "Neue Funktionen: mittlere Stelle erhöhen", ["ver.bumpMajor"] = "Größere Änderung: erste Stelle erhöhen",
 
         // ---------------- IIS ----------------
         ["iis.title"] = "IIS-Server", ["iis.subtitle"] = "{0} von {1} online", ["iis.subtitleEmpty"] = "Noch keine Server eingetragen",
@@ -117,6 +122,11 @@ public sealed partial class Localizer
         ["cmd.iis"] = "IIS servers …", ["cmd.iisDeploy"] = "Deploy to IIS …", ["cmd.pipelines"] = "Pipeline builder …",
         ["designer.usingAdded"] = "Added @using {0}",
         ["editor.quickFix"] = "Quick actions and refactorings …",
+        ["ver.change"] = "Change version", ["ver.project"] = "Project version", ["ver.edit"] = "Change …",
+        ["ver.title"] = "Version of {0}", ["ver.notSet"] = "not set (1.0.0)",
+        ["ver.text"] = "Current: {0}. Suggestions: {1} (patch), {2} (minor), {3} (major). Stored as <Version> in the project file.",
+        ["ver.changed"] = "{0}: version {1}", ["ver.invalidXml"] = "The project file would no longer be valid XML – nothing changed.",
+        ["ver.bumpPatch"] = "Bug fix: increase the last number", ["ver.bumpMinor"] = "New features: increase the middle number", ["ver.bumpMajor"] = "Major change: increase the first number",
 
         ["iis.title"] = "IIS servers", ["iis.subtitle"] = "{0} of {1} online", ["iis.subtitleEmpty"] = "No servers yet",
         ["iis.agentPackage"] = "Agent package", ["iis.agentPackageHint"] = "Open the Blazor Studio Agent for your servers (ZIP with install-service.ps1)",

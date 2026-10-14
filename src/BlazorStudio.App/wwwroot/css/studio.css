@@ -1175,3 +1175,5 @@ body.bs-dragging, body.bs-dragging * { cursor: grabbing !important; user-select:
 .pl-card { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; text-align: left; padding: 14px; border: 1px solid var(--line); border-radius: 11px; background: var(--island-2); cursor: pointer; }
 .pl-card:hover { border-color: var(--ac); }
 .pl-card .dim { font-size: 12px; line-height: 1.4; }
+.iis-ver-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.iis-ver-row .chip { font-size: 12.5px; height: 26px; }

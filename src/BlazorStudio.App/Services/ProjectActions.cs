@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using BlazorStudio.App.Components;
+using BlazorStudio.Core.Build;
 using BlazorStudio.Core.Solution;
 using BlazorStudio.Core.Templates;
 
@@ -186,6 +187,69 @@ public sealed class ProjectActions
         if (ok != DialogResult.Ok) return;
         BottomPanel.Show?.Invoke(BottomTab.Output);
         if (await _run.ExecAsync(Path.GetDirectoryName(project.Path)!, "remove", project.Path, "package", packageId) == 0) RefreshProject(project);
+    }
+
+    // ------------------------------------------------------------------
+    // Projektversion (<Version> in der .csproj)
+    // ------------------------------------------------------------------
+
+    private string? ProjectText(string csproj) =>
+        _ws.Documents.FirstOrDefault(d => d.Path.Equals(csproj, StringComparison.OrdinalIgnoreCase))?.Text
+        ?? (File.Exists(csproj) ? File.ReadAllText(csproj) : null);
+
+    /// <summary>Version laut Projektdatei; null = nicht gesetzt (MSBuild nimmt dann 1.0.0).</summary>
+    public string? VersionOf(string csproj) => ProjectText(csproj) is { } t ? ProjectVersion.Read(t) : null;
+
+    /// <summary>Setzt &lt;Version&gt; – in der geöffneten Datei (mit Rückgängig) oder direkt auf der Platte.</summary>
+    public bool SetVersion(string csproj, string version)
+    {
+        var text = ProjectText(csproj);
+        if (text is null) return false;
+        string updated;
+        try
+        {
+            updated = ProjectVersion.Write(text, version);
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidDataException)
+        {
+            _ui.ShowToast(e.Message, ToastKind.Error, 5000);
+            return false;
+        }
+        if (!ProjectVersion.IsWellFormed(updated))
+        {
+            _ui.ShowToast(_l["ver.invalidXml"], ToastKind.Error, 5000);
+            return false;
+        }
+        if (_ws.Documents.FirstOrDefault(d => d.Path.Equals(csproj, StringComparison.OrdinalIgnoreCase)) is { } doc)
+        {
+            doc.SetText(updated, ChangeOrigin.Code);
+            _ws.Save(doc);
+        }
+        else
+        {
+            File.WriteAllText(csproj, updated);
+        }
+        if (_ws.Solution?.AllProjects.FirstOrDefault(p => p.Path.Equals(csproj, StringComparison.OrdinalIgnoreCase)) is { } item) RefreshProject(item);
+        _ui.ShowToast(_l.F("ver.changed", Path.GetFileNameWithoutExtension(csproj), version.Trim()), ToastKind.Success, 2400);
+        return true;
+    }
+
+    /// <summary>Dialog „Version ändern“ (mit Vorschlag: nächste Patch-Version).</summary>
+    public async Task ChangeVersionAsync(string? csproj)
+    {
+        if (csproj is null || !File.Exists(csproj)) return;
+        var current = VersionOf(csproj);
+        var request = new DialogRequest
+        {
+            Title = _l.F("ver.title", Path.GetFileNameWithoutExtension(csproj)),
+            Message = _l.F("ver.text", current ?? _l["ver.notSet"], ProjectVersion.Bump(current, VersionPart.Patch), ProjectVersion.Bump(current, VersionPart.Minor), ProjectVersion.Bump(current, VersionPart.Major)),
+            InputValue = ProjectVersion.Bump(current, VersionPart.Patch),
+            InputPlaceholder = "1.2.3",
+            OkText = _l["action.save"],
+            CancelText = _l["action.cancel"],
+        };
+        if (await _ui.ShowDialogAsync(request) != DialogResult.Ok || string.IsNullOrWhiteSpace(request.InputValue)) return;
+        SetVersion(csproj, request.InputValue);
     }
 
     private void RefreshProject(SolutionItem project)
