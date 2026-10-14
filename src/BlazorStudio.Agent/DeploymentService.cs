@@ -141,6 +141,8 @@ public sealed class DeploymentService(IisManager iis, VersionStore store, Deploy
         pool = now.Pool;
         store.MarkActivated(site, appPath, req.Version, DateTime.UtcNow);
         journal.Log(record, $"Umgeschaltet auf {req.Version} – physischer Pfad: {now.PhysicalPath}");
+        if (appPath != "/" && iis.FindApplication(site, "/") is { } root && Path.GetFileName(root.PhysicalPath.TrimEnd('\\', '/')).Equals("_initial", StringComparison.OrdinalIgnoreCase))
+            journal.Log(record, $"Hinweis: Deployt wurde in die Anwendung {appPath}. Die Site selbst („/“) zeigt weiterhin auf {root.PhysicalPath} – für die Site-Wurzel als Anwendungspfad „/“ verwenden.", "warn");
         if (pool.Length > 0)
         {
             await iis.RecycleAsync(pool);

@@ -365,7 +365,7 @@
     };
 
     private static bool IsOutdated(string agentVersion) =>
-        Version.TryParse(agentVersion, out var a) && Version.TryParse(UpdateService.CurrentVersion, out var s) && a < new Version(s.Major, s.Minor);
+        !string.IsNullOrWhiteSpace(agentVersion) && AgentDefaults.IsOlderThan(agentVersion, UpdateService.CurrentVersion);
 
     // ==================================================================
     // App-Pools
@@ -558,11 +558,13 @@
                                     {
                                         <button class="ibtn sm" title="@L["iis.start"]" disabled="@_busy" @onclick='() => Act(c => c.SiteActionAsync(site.Name, "start"), L.F("iis.startedToast", site.Name))'><Icon Name="play" /></button>
                                     }
+                                    @if (app.ActiveVersion is not null) { <button class="ibtn sm" title="@L["iis.rollbackOne"]" disabled="@_busy" @onclick="() => RollbackOne(site.Name, app)"><Icon Name="undo" /></button> }
                                     <button class="ibtn sm" title="@L["iis.deployHere"]" @onclick="() => DeployTo(site.Name, app.Path)"><Icon Name="rocket" /></button>
                                     <button class="ibtn sm danger" title="@L["action.delete"]" disabled="@_busy" @onclick="() => DeleteSite(site)"><Icon Name="trash" /></button>
                                 }
                                 else
                                 {
+                                    @if (app.ActiveVersion is not null) { <button class="ibtn sm" title="@L["iis.rollbackOne"]" disabled="@_busy" @onclick="() => RollbackOne(site.Name, app)"><Icon Name="undo" /></button> }
                                     <button class="ibtn sm" title="@L["iis.deployHere"]" @onclick="() => DeployTo(site.Name, app.Path)"><Icon Name="rocket" /></button>
                                 }
                             </td>
@@ -634,6 +636,32 @@
     {
         if (!await Confirm(L.F("iis.activateTitle", v.Version, site + (app.Path == "/" ? "" : app.Path)), L.F("iis.activateText", app.ActiveVersion ?? app.PhysicalPath, app.Pool), L["iis.activate"], danger: false)) return;
         await Act(c => c.ActivateAsync(site, new ActivateRequest { Version = v.Version, AppPath = app.Path }), L.F("iis.activated", v.Version));
+    }
+
+    /// <summary>Ein Klick zurück: auf die vorherige Version (sonst die neueste ältere) umschalten.</summary>
+    private async Task RollbackOne(string site, SiteApplicationInfo app)
+    {
+        if (_selected is not { } s) return;
+        List<SiteVersion> versions;
+        try
+        {
+            versions = await Iis.Client(s).GetVersionsAsync(site, app.Path);
+        }
+        catch (AgentException e)
+        {
+            _error = e.Message;
+            return;
+        }
+        var active = versions.FirstOrDefault(v => v.IsActive);
+        var target = versions.FirstOrDefault(v => v.IsPrevious && !v.IsActive)
+                     ?? versions.Where(v => !v.IsActive && (active is null || v.DeployedAt < active.DeployedAt)).OrderByDescending(v => v.DeployedAt).FirstOrDefault();
+        if (target is null)
+        {
+            Ui.ShowToast(L["iis.noRollbackTarget"], ToastKind.Warning, 4000);
+            return;
+        }
+        if (!await Confirm(L.F("iis.rollbackTitle", target.Version, site + (app.Path == "/" ? "" : app.Path)), L.F("iis.activateText", app.ActiveVersion ?? app.PhysicalPath, app.Pool), L["iis.rollback"], danger: false)) return;
+        await Act(c => c.ActivateAsync(site, new ActivateRequest { Version = target.Version, AppPath = app.Path }), L.F("iis.activated", target.Version));
     }
 
     private async Task DeleteVersion(string site, string appPath, SiteVersion v)

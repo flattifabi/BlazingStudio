@@ -11,6 +11,22 @@ public static class AgentDefaults
 
     /// <summary>Formularfeld der hochgeladenen ZIP-Datei bei POST /api/deployments.</summary>
     public const string PackageField = "package";
+
+    /// <summary>
+    /// Ältester Agent, auf den Studio deployen darf. Ältere Agents legten neue Sites auf „_initial“ an
+    /// und schalteten den physischen Pfad unter Umständen nicht um.
+    /// </summary>
+    public const string MinimumDeployVersion = "1.6.2";
+
+    /// <summary>True, wenn die Agent-Version (z. B. „1.6.1“) älter als <paramref name="minimum"/> ist. Unlesbare Versionen gelten als veraltet.</summary>
+    public static bool IsOlderThan(string? agentVersion, string minimum)
+    {
+        if (!System.Version.TryParse(minimum, out var min)) return false;
+        var text = (agentVersion ?? "").Split('+', '-')[0].Trim();
+        return !System.Version.TryParse(text, out var v) || Normalize(v) < Normalize(min);
+    }
+
+    private static System.Version Normalize(System.Version v) => new(v.Major, v.Minor, Math.Max(v.Build, 0));
 }
 
 /// <summary>Antwort von GET /api/ping (ohne Anmeldung) – unterscheidet „offline“ von „falscher Schlüssel“.</summary>

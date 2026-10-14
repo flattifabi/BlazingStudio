@@ -531,6 +531,8 @@ kbd { font: 11px var(--mono); color: var(--muted); border: 1px solid var(--line-
 
 /* ============================ Overlays ============================ */
 .backdrop { position: fixed; inset: 0; background: var(--backdrop); z-index: 80; display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; animation: fade .12s ease; }
+/* Rückfragen liegen immer über den großen Fenstern (IIS, Pipeline, NuGet …), aber unter Auswahllisten */
+.backdrop.dialog-layer { z-index: 120; }
 @keyframes fade { from { opacity: 0; } }
 .dialog { width: min(480px, 92vw); background: var(--pop); border: 1px solid var(--line-2); border-radius: 14px; box-shadow: var(--shadow); padding: 18px; animation: rise .16s cubic-bezier(.2,.8,.2,1); }
 .dialog.wide { width: min(640px, 94vw); }

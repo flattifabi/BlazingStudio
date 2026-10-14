@@ -322,9 +322,10 @@
         {
             case null: return;
             case "close":
-                Ui.CloseCommandPalette();
+                // Nur die oberste Ebene schließen: erst die Rückfrage, dann Palette, dann das Fenster darunter
+                if (Ui.Dialog is not null) { Ui.CloseDialog(DialogResult.Cancel); return; }
+                if (Ui.CommandPaletteOpen) { Ui.CloseCommandPalette(); return; }
                 Ui.CloseOverlay();
-                Ui.CloseDialog(DialogResult.Cancel);
                 Design.CloseContextMenu();
                 return;
             case "child":
