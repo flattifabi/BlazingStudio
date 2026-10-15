@@ -1,3 +1,8 @@
+## Neu: Fehler im Projektmappen-Explorer rot markiert (wie in Rider)
+- Dateien mit Fehlern werden im Projektmappen-Explorer **rot und gewellt unterstrichen** – ebenso alle Ordner darüber, das Projekt und die Projektmappe. Der Tooltip zeigt die Anzahl.
+- Grundlage ist eine **lösungsweite Analyse** im Hintergrund (alle .cs-Dateien und die @code-Blöcke der .razor-Dateien, mit dem aktuellen Editor-Text): Benennst du z. B. in einer Datei eine Eigenschaft um, wird jede Datei rot, die sie noch verwendet – auch wenn sie nicht geöffnet ist.
+- Die geöffnete Datei wird beim Tippen sofort aktualisiert, die übrigen nach dem Speichern bzw. wenn sich Dateien auf der Platte ändern. Fehler aus dem letzten Build kommen dazu, bis die Datei wieder geändert wird.
+
 ## Neu: Persistente Dateien wandern von Version zu Version mit (IIS)
 - In **IIS-Server → Sites** eine Anwendung aufklappen → **Persistente Dateien**: z. B. `app.db`, `App_Data` oder `wwwroot/uploads` eintragen.
 - Bei jedem Deployment, Zurückschalten und Versionswechsel nimmt der Agent die App kurz offline (`app_offline.htm`), **verschiebt** diese Dateien/Ordner aus der laufenden in die neue Version und schaltet erst dann um. Gleiches Laufwerk → auch große Datenbanken in Millisekunden, keine Kopie.
