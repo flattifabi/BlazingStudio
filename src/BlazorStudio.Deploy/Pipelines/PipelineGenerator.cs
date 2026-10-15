@@ -40,6 +40,8 @@ public static class PipelineGenerator
                         break;
                     case StepKind.DeployIis:
                         if (s.Get("site").Trim().Length == 0) warnings.Add($"„{stage.Name}“: IIS-Deployment ohne Site-Namen.");
+                        PersistentPaths.Parse(s.Get("persist"), out var badPersist);
+                        if (badPersist.Count > 0) warnings.Add($"„{stage.Name}“: ungültige persistente Pfade: {string.Join(", ", badPersist)}");
                         if (Servers(s).Count == 0) warnings.Add($"„{stage.Name}“: IIS-Deployment ohne Server.");
                         if (!published.Contains(s.Get("package")) && !steps.Any(x => x.Kind == StepKind.Publish))
                             warnings.Add($"„{stage.Name}“: Paket „{s.Get("package")}“ wird vorher nirgends veröffentlicht (Schritt „Publish“ mit diesem Artefaktnamen).");
@@ -671,10 +673,14 @@ public static class PipelineGenerator
             if (s.Get("binding").Trim().Length > 0) sb.Append("  -Binding ").Append(PsQ(s.Get("binding").Trim())).Append(" `\n");
         }
         if (s.Get("pool").Trim().Length > 0) sb.Append("  -Pool ").Append(PsQ(s.Get("pool").Trim())).Append(" `\n");
+        if (PersistArg(s) is { Count: > 0 } persist) sb.Append("  -Persist ").Append(string.Join(",", persist.Select(x => PsQ(x)))).Append(" `\n");
         if (s.Get("thumbprint").Trim().Length > 0) sb.Append("  -CertThumbprint ").Append(PsQ(s.Get("thumbprint").Trim())).Append(" `\n");
         sb.Append("  -Version $version");
         return sb.ToString();
     }
+
+    /// <summary>Persistente Pfade des Schritts (leer = Liste auf dem Server verwenden).</summary>
+    private static List<string> PersistArg(PipelineStep s) => PersistentPaths.Parse(s.Get("persist"), out _);
 
     /// <summary>Deploy-Aufruf für GitLab-Linux-Runner (bash ruft pwsh auf).</summary>
     private static string DeployCommandBash(PipelineDefinition p, PipelineStage stage, PipelineStep s)
@@ -695,6 +701,7 @@ public static class PipelineGenerator
             if (s.Get("binding").Trim().Length > 0) args.Add("-Binding " + ShQ(s.Get("binding").Trim()));
         }
         if (s.Get("pool").Trim().Length > 0) args.Add("-Pool " + ShQ(s.Get("pool").Trim()));
+        if (PersistArg(s) is { Count: > 0 } persist) args.Add("-Persist " + ShQ(string.Join(",", persist)));
         if (s.Get("thumbprint").Trim().Length > 0) args.Add("-CertThumbprint " + ShQ(s.Get("thumbprint").Trim()));
         var secret = Secret(s);
         var sb = new StringBuilder();

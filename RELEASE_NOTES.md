@@ -1,3 +1,11 @@
+## Neu: Persistente Dateien wandern von Version zu Version mit (IIS)
+- In **IIS-Server → Sites** eine Anwendung aufklappen → **Persistente Dateien**: z. B. `app.db`, `App_Data` oder `wwwroot/uploads` eintragen.
+- Bei jedem Deployment, Zurückschalten und Versionswechsel nimmt der Agent die App kurz offline (`app_offline.htm`), **verschiebt** diese Dateien/Ordner aus der laufenden in die neue Version und schaltet erst dann um. Gleiches Laufwerk → auch große Datenbanken in Millisekunden, keine Kopie.
+- SQLite: `-wal`, `-shm` und `-journal` wandern mit; eine Start-Datenbank aus dem Paket wird durch die laufende ersetzt. Fehlt ein Eintrag in der laufenden Version (erstes Deployment), bleibt der Stand aus dem Paket.
+- Schlägt etwas fehl (Datei gesperrt, Umschalten, Health-Check mit Rollback), wandern die Dateien zurück und die alte Version läuft mit ihren Daten weiter.
+- Aus der Pipeline: `Deploy-BlazorStudio.ps1 -Persist 'app.db','App_Data'` (setzt die Liste auf dem Server), im Pipeline-Builder als Feld „Persistente Dateien“. Ohne `-Persist` gilt die in Studio gepflegte Liste.
+- **Agent 1.9.0 nötig.**
+
 ## Neu: Docker-Deployment und Menü „Deployment“
 - Neues Hauptmenü **Deployment** mit **In Docker bereitstellen …**, **Auf IIS bereitstellen …**, **Docker …**, **IIS-Server …**, Pipeline-Builder und Version ändern. Unter **Tools** bleibt IIS wie bisher.
 - **Docker-Hosts:** lokales Docker (Docker Desktop) oder Server per `ssh://benutzer@server` bzw. `tcp://server:2376`, mit Umgebung (Test/Produktion) und Status (Docker-Version, laufende Container).

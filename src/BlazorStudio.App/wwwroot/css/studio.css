@@ -1110,8 +1110,7 @@ body.bs-dragging, body.bs-dragging * { cursor: grabbing !important; user-select:
 textarea.dk-area { width: 100%; min-height: 64px; resize: vertical; font-size: 12px; padding: 6px 8px; border-radius: 7px; border: 1px solid var(--line); background: var(--island); color: inherit; box-sizing: border-box; }
 .iis-appextras { margin: 0 8px 8px; }
 .iis-appextras .hint { margin-bottom: 8px; }
-.iis-appextras-grid { display: grid; grid-template-columns: minmax(170px, 0.8fr) minmax(260px, 1.4fr) minmax(220px, 1fr); gap: 8px; }
-@media (max-width: 1100px) { .iis-appextras-grid { grid-template-columns: 1fr; } }
+.iis-appextras-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; }
 .iis-box { border: 1px solid var(--line); border-radius: 9px; background: var(--island-2); padding: 6px; min-width: 0; }
 .iis-box > .check { display: flex; gap: 8px; align-items: center; padding: 4px 8px; font-size: 12px; }
 .iis-box > small { display: block; padding: 4px 8px; font-size: 11px; }

@@ -82,6 +82,7 @@ Fertige Vorlagen für GitHub Actions, Azure DevOps und GitLab erzeugt der Pipeli
 | GET/PUT | `/api/sites/{name}/auth?app=/` | Authentifizierung `{ anonymous, windows, basic, digest }` |
 | GET | `/api/sites/{name}/config?app=/` | bearbeitbare Dateien (web.config, appsettings*.json) |
 | GET/PUT/DELETE | `/api/sites/{name}/config/{file}?app=/` | lesen / speichern `{ content, apply }` (bleibt für künftige Deployments) / eigene Version entfernen |
+| GET/PUT | `/api/sites/{name}/persist?app=/` | persistente Dateien/Ordner `{ paths: ["app.db", "App_Data"] }` – wandern bei jedem Umschalten mit |
 | GET | `/api/sites/{name}/logs?app=/`, `/api/sites/{name}/logs/{file}?app=/` | stdout-Logs (Ende der Datei, max. 512 KB) |
 | POST | `/api/deployments` | multipart: `package` (ZIP) + `site`, `version`, `appPath`, `healthUrl`, `rollback`, `createSite`, `binding`, `pool`, `runtime`, `overwrite`, `activate`, `source`, `commit`, `notes` → 202 |
 | GET | `/api/deployments?site=&take=` | Verlauf |

@@ -180,6 +180,7 @@ public static class StepCatalog
             new StepField("createSite", "false", StepFieldType.Bool),
             new StepField("binding", ""),
             new StepField("pool", ""),
+            new StepField("persist", ""),
             new StepField("secret", "BLAZORSTUDIO_AGENT_KEY", StepFieldType.Secret),
             new StepField("thumbprint", ""),
         },

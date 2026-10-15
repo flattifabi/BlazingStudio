@@ -145,6 +145,80 @@ public sealed class SiteConfigService(IisManager iis, VersionStore store, ILogge
         }
     }
 
+    // ---------------- Persistente Dateien ----------------
+
+    private const string PersistFile = "_persistent.json";
+
+    private const string OfflineHtml = "<!doctype html><html lang=\"de\"><meta charset=\"utf-8\"><title>Update</title>" +
+        "<body style=\"font-family:Segoe UI,sans-serif;padding:40px\"><h1>Einen Moment bitte …</h1><p>Die Anwendung wird gerade aktualisiert.</p></body></html>";
+
+    public List<string> GetPersistent(string site, string appPath)
+    {
+        var path = Path.Combine(OverrideDir(site, appPath), PersistFile);
+        if (!File.Exists(path)) return new();
+        try
+        {
+            var settings = System.Text.Json.JsonSerializer.Deserialize<PersistentSettings>(File.ReadAllText(path), new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+            return PersistentPaths.Parse(string.Join('\n', settings?.Paths ?? new()), out _);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return new();
+        }
+    }
+
+    public List<string> SetPersistent(string site, string appPath, IEnumerable<string> paths)
+    {
+        var list = PersistentPaths.Validate(paths);
+        var dir = OverrideDir(site, appPath);
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, PersistFile),
+            System.Text.Json.JsonSerializer.Serialize(new PersistentSettings { Paths = list }, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web) { WriteIndented = true }), Utf8);
+        log.LogInformation("Persistente Pfade {Site}{App}: {Paths}", site, appPath, string.Join(", ", list));
+        return list;
+    }
+
+    /// <summary>
+    /// Umschalten von <paramref name="fromDir"/> nach <paramref name="toDir"/>: Gibt es persistente Einträge, wird die App
+    /// mit app_offline.htm kurz angehalten, die Einträge werden verschoben und erst dann umgeschaltet.
+    /// Scheitert etwas, liegt alles wieder am alten Ort und die alte Version läuft weiter.
+    /// </summary>
+    public async Task SwitchAsync(string site, string appPath, string? fromDir, string toDir, Func<Task> switchPath, Action<string, string> logLine)
+    {
+        var paths = GetPersistent(site, appPath);
+        if (paths.Count == 0 || fromDir is null || !Directory.Exists(fromDir) || SameDir(fromDir, toDir))
+        {
+            await switchPath();
+            return;
+        }
+        logLine($"Persistente Dateien werden übernommen ({string.Join(", ", paths)}) – App ist dafür kurz offline", "info");
+        var offline = Path.Combine(fromDir, "app_offline.htm");
+        var created = !File.Exists(offline);
+        if (created) await File.WriteAllTextAsync(offline, OfflineHtml, Utf8);
+        PersistentMove? move = null;
+        try
+        {
+            move = await PersistentMove.RunAsync(fromDir, toDir, paths, logLine, TimeSpan.FromSeconds(45));
+            await switchPath();
+        }
+        catch
+        {
+            move?.Undo(logLine);
+            throw;
+        }
+        finally
+        {
+            if (created)
+            {
+                try { File.Delete(offline); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { log.LogWarning("app_offline.htm in {Dir} konnte nicht gelöscht werden: {Error}", fromDir, e.Message); }
+            }
+        }
+    }
+
+    private static bool SameDir(string a, string b) =>
+        string.Equals(Path.GetFullPath(a).TrimEnd('\\', '/'), Path.GetFullPath(b).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
+
     // ---------------- Logs ----------------
 
     public List<SiteLogFile> Logs(string site, string appPath)

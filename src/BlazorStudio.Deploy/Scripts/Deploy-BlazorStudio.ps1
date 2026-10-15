@@ -45,6 +45,9 @@ param(
     [switch]$Overwrite,
     # Nur hochladen, nicht umschalten
     [switch]$NoActivate,
+    # Dateien/Ordner, die von der laufenden in die neue Version wandern (z. B. 'app.db','App_Data').
+    # Ersetzt die auf dem Server gespeicherte Liste; weglassen = gespeicherte Liste verwenden.
+    [string[]]$Persist,
     [string]$Commit,
     [string]$Notes,
     [string]$Source = 'Pipeline',
@@ -147,6 +150,7 @@ try {
         if ($HealthUrl) { $fields.healthUrl = $HealthUrl }
         if ($Commit) { $fields.commit = $Commit }
         if ($Notes) { $fields.notes = $Notes }
+        if ($PSBoundParameters.ContainsKey('Persist')) { $fields.persist = ($Persist -join ',') }
         foreach ($k in $fields.Keys) { $form.Add((New-Object System.Net.Http.StringContent ([string]$fields[$k])), $k) }
         $stream = [IO.File]::OpenRead($packagePath)
         try {

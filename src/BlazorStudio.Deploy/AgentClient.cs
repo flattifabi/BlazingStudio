@@ -142,6 +142,12 @@ public sealed class AgentClient : IDisposable
     public Task DeleteConfigOverrideAsync(string site, string appPath, string file, CancellationToken ct = default) =>
         SendAsync(HttpMethod.Delete, $"api/sites/{Esc(site)}/config/{Esc(file)}?{App(appPath)}", null, ct);
 
+    public Task<PersistentSettings> GetPersistentAsync(string site, string appPath, CancellationToken ct = default) =>
+        GetAsync<PersistentSettings>($"api/sites/{Esc(site)}/persist?{App(appPath)}", ct);
+
+    public Task<PersistentSettings> SetPersistentAsync(string site, string appPath, IEnumerable<string> paths, CancellationToken ct = default) =>
+        SendAsync<PersistentSettings>(HttpMethod.Put, $"api/sites/{Esc(site)}/persist?{App(appPath)}", new PersistentSettings { Paths = paths.ToList() }, ct);
+
     public Task<List<SiteLogFile>> GetLogFilesAsync(string site, string appPath, CancellationToken ct = default) =>
         GetAsync<List<SiteLogFile>>($"api/sites/{Esc(site)}/logs?{App(appPath)}", ct);
 

@@ -14,7 +14,7 @@
     <Product>Blazor Studio Agent</Product>
     <Company>Blazor Studio</Company>
     <Copyright>© 2026 Blazor Studio</Copyright>
-    <Version>1.7.0</Version>
+    <Version>1.9.0</Version>
     <ApplicationIcon>..\..\branding\logo.ico</ApplicationIcon>
     <InvariantGlobalization>true</InvariantGlobalization>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
