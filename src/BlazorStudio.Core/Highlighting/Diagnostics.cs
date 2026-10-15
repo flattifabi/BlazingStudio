@@ -77,6 +77,41 @@ public sealed partial class SemanticHighlighter
     }
 
     /// <summary>
+    /// Lösungsweite Analyse (wie Rider „Solution-wide analysis“): Fehleranzahl je .cs-Datei im aktuellen Stand des
+    /// Workspace (geöffnete Dateien mit Editor-Text). Generierte Dateien und obj/ werden übersprungen.
+    /// .razor-Dateien prüft der Aufrufer mit <see cref="DiagnoseRazorAsync"/>.
+    /// </summary>
+    public async Task<Dictionary<string, int>> DiagnoseAllCSharpAsync(CancellationToken ct = default)
+    {
+        var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        if (_workspace is null) return result;
+        List<KeyValuePair<string, DocumentId>> docs;
+        await _lock.WaitAsync(ct);
+        try
+        {
+            docs = _docs.ToList();
+        }
+        finally
+        {
+            _lock.Release();
+        }
+        var solution = _workspace.CurrentSolution;
+        var sep = Path.DirectorySeparatorChar;
+        foreach (var (path, id) in docs)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".__razor.cs", StringComparison.OrdinalIgnoreCase) || _generated.ContainsKey(path)
+                || path.Contains($"{sep}obj{sep}", StringComparison.OrdinalIgnoreCase) || path.Contains($"{sep}bin{sep}", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (solution.GetDocument(id) is not { } doc || await doc.GetSemanticModelAsync(ct) is not { } model) continue;
+            var count = Filter(await RelevantAsync(model, ct)).Count();
+            if (count > 0) result[path] = count;
+        }
+        return result;
+    }
+
+    /// <summary>
     /// Alle Fehler – oder nur Syntaxfehler, wenn der Datei Referenzen fehlen: Dann sind geerbte Member, Extension-Methoden
     /// usw. nicht auflösbar und jede Namens-Prüfung wäre ein Fehlalarm (z. B. Typen aus einer RCL, die der Workspace nicht kennt).
     /// </summary>

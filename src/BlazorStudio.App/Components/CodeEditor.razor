@@ -7,6 +7,7 @@
 @inject Localizer L
 @inject NavigationService Nav
 @inject UiService Ui
+@inject ProblemMarkers Problems
 
 <div class="monaco-host" @ref="_host">
     @if (!_created) { <div class="placeholder">@L["editor.loading"]</div> }
@@ -133,6 +134,7 @@
                     found = await Ws.Highlighter.DiagnoseRazorAsync(Session.Path, text, proj, cts.Token);
                 }
                 if (cts.IsCancellationRequested) return;
+                Problems.ReportLive(Session.Path, found.Count + (Session.Kind == DocumentKind.Razor ? Session.Diagnostics.Count(d => d.IsError) : 0));
                 var markers = found.Select(d => new { start = d.Start, end = d.End, error = true, message = $"{d.Code}: {d.Message}" }).ToList();
                 await InvokeAsync(async () =>
                 {

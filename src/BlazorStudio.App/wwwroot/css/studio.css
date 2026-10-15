@@ -1192,3 +1192,7 @@ textarea.dk-area { width: 100%; min-height: 64px; resize: vertical; font-size: 1
 .pl-card .dim { font-size: 12px; line-height: 1.4; }
 .iis-ver-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .iis-ver-row .chip { font-size: 12.5px; height: 26px; }
+
+/* Fehler im Projektmappen-Explorer (lösungsweite Analyse + Build) */
+.tree .row .err-name { color: var(--err); text-decoration: underline wavy var(--err); text-decoration-skip-ink: none; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+.tree .row.on .err-name { color: var(--err); }

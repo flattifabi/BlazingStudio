@@ -64,4 +64,27 @@ public class DiagnosticsTests
         var proj = RazorCSharpProjection.ClassFor(razor, "Grid", "Shop", Usings);
         Assert.Empty(await h.DiagnoseRazorAsync(Path.Combine(dir, "Grid.razor"), razor, proj));
     }
+
+    [Fact]
+    public async Task Solution_wide_analysis_counts_errors_per_file_including_changes_elsewhere()
+    {
+        var dir = Directory.CreateTempSubdirectory("bs-diag").FullName;
+        var cart = Path.Combine(dir, "Cart.cs");
+        var shop = Path.Combine(dir, "Shop.cs");
+        var obj = Path.Combine(dir, "obj", "Gen.g.cs");
+        File.WriteAllText(cart, "namespace Shop;\npublic class Cart { public int Total { get; set; } }\n");
+        File.WriteAllText(shop, "namespace Shop;\npublic class Use { int M(Cart c) => c.Total; }\n");
+        Directory.CreateDirectory(Path.GetDirectoryName(obj)!);
+        File.WriteAllText(obj, "namespace Shop; public class Gen { int x = \"kaputt\"; }\n");
+        using var h = new SemanticHighlighter();
+        h.Load(dir, new[] { cart, shop, obj }, Array.Empty<string>(), "net10.0");
+
+        Assert.Empty(await h.DiagnoseAllCSharpAsync());
+
+        // Umbenennen in Cart.cs (ungespeichert im Editor) → Fehler in Shop.cs
+        await h.DiagnoseCSharpAsync(cart, "namespace Shop;\npublic class Cart { public int Sum { get; set; } }\n");
+        var all = await h.DiagnoseAllCSharpAsync();
+        Assert.Equal(1, Assert.Single(all).Value);
+        Assert.Equal(shop, all.Keys.Single(), ignoreCase: true);
+    }
 }

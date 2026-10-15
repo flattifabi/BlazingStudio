@@ -3,6 +3,7 @@
 @inject NuGetService NuGet
 @inject IHostBridge Host
 @inject ProjectActions Actions
+@inject ProblemMarkers Problems
 
 <div class="f side-search"><Icon Name="search" Class="sm dim" /><input placeholder="@L["sol.filter"]" @bind="_filter" @bind:event="oninput" /></div>
 <div class="scroll" style="flex:1">
@@ -12,7 +13,7 @@
             <div class="row" style="padding-left:4px" title="@sln.Path" @onclick='() => Toggle("sln")' @oncontextmenu="e => SolutionMenu(e)" @oncontextmenu:preventDefault="true">
                 <span class="ch @(IsOpen("sln", true) ? "open" : "")"><Icon Name="chev" /></span>
                 <Icon Name="sln" Class="k sln" />
-                <span class="ellipsis"><b>@sln.Name</b></span>
+                <span class="ellipsis @Err(Problems.ErrorsUnder(sln.Directory))" title="@ErrTitle(Problems.ErrorsUnder(sln.Directory))"><b>@sln.Name</b></span>
                 <em>@L.F("sol.projectCount", sln.AllProjects.Count())</em>
             </div>
             @if (IsOpen("sln", true))
@@ -24,6 +25,23 @@
 </div>
 
 @code {
+    protected override void OnStudioInitialized() => Problems.Changed += Refresh;
+
+    public override void Dispose()
+    {
+        Problems.Changed -= Refresh;
+        base.Dispose();
+    }
+
+    /// <summary>Rot unterstrichen, wenn darin Fehler stecken (wie in Rider).</summary>
+    private static string Err(int errors) => errors > 0 ? "err-name" : string.Empty;
+
+    private string? ErrTitle(int errors) => errors > 0 ? L.F("sol.errors", errors) : null;
+
+    /// <summary>Fehler in einem Projekt (alle Dateien im Projektordner) bzw. in allen Projekten eines Projektmappenordners.</summary>
+    private int ItemErrors(SolutionItem it) =>
+        it.IsFolder ? it.Children.Sum(ItemErrors) + it.Files.Sum(Problems.ErrorsIn) : it.Path.Length == 0 ? 0 : Problems.ErrorsUnder(Path.GetDirectoryName(it.Path)!);
+
     private string _filter = "";
     private readonly HashSet<string> _open = new();
     private readonly HashSet<string> _closed = new();
@@ -59,7 +77,7 @@
                 <div class="row" style="padding-left:@(4 + depth * 14)px" @onclick="() => Toggle(key, true)">
                     <span class="ch @(IsOpen(key, true) ? "open" : "")"><Icon Name="chev" /></span>
                     <Icon Name="@(IsOpen(key, true) ? "folderopen" : "folder")" Class="k fld" />
-                    <span class="ellipsis">@it.Name</span>
+                    <span class="ellipsis @Err(ItemErrors(it))" title="@ErrTitle(ItemErrors(it))">@it.Name</span>
                 </div>
                 if (IsOpen(key, true))
                 {
@@ -68,7 +86,7 @@
                     {
                         var file = f;
                         <div class="row" style="padding-left:@(18 + (depth + 1) * 14)px" title="@file" @onclick="() => Ws.Open(file)">
-                            <FileIcon Path="@file" /><span class="ellipsis">@Path.GetFileName(file)</span>
+                            <FileIcon Path="@file" /><span class="ellipsis @Err(Problems.ErrorsIn(file))" title="@ErrTitle(Problems.ErrorsIn(file))">@Path.GetFileName(file)</span>
                         </div>
                     }
                 }
@@ -91,7 +109,7 @@
              @onclick="() => { if (!unloaded) ToggleProject(it); }" @oncontextmenu="e => ProjectMenu(e, it)" @oncontextmenu:preventDefault="true">
             <span class="ch @(open ? "open" : "")"><Icon Name="chev" /></span>
             <Icon Name="@KindIcon(p)" Class="@("k " + (p?.Kind ?? "missing"))" />
-            <span class="ellipsis">@if (startup) { <b>@it.Name</b> } else { @it.Name }</span>
+            <span class="ellipsis @Err(ItemErrors(it))" title="@ErrTitle(ItemErrors(it))">@if (startup) { <b>@it.Name</b> } else { @it.Name }</span>
             @if (unloaded)
             {
                 <em class="dim">@L["sol.unloadedTag"]</em>
@@ -299,7 +317,7 @@
                 <div class="row" style="padding-left:@(4 + depth * 14)px" @onclick="() => Toggle(key)" @oncontextmenu="e => FolderMenu(e, node.FullPath, key)" @oncontextmenu:preventDefault="true">
                     <span class="ch @(open ? "open" : "")"><Icon Name="chev" /></span>
                     <Icon Name="@(node.Name.Equals("Properties", StringComparison.OrdinalIgnoreCase) ? "gear" : open ? "folderopen" : "folder")" Class="k fld" />
-                    <span class="ellipsis">@node.Name</span>
+                    <span class="ellipsis @Err(Problems.ErrorsUnder(node.FullPath))" title="@ErrTitle(Problems.ErrorsUnder(node.FullPath))">@node.Name</span>
                 </div>
                 if (open)
                 {
@@ -315,7 +333,7 @@
                 var hasNested = node.Nested.Count > 0;
                 <div class="row @(isActive ? "on" : "")" style="padding-left:@(4 + depth * 14)px" title="@node.FullPath" @onclick="() => Ws.Open(node.FullPath)" @oncontextmenu="e => FileMenu(e, node.FullPath)" @oncontextmenu:preventDefault="true">
                     <span class="ch @(IsOpen(nestedKey) ? "open" : "")" @onclick="() => Toggle(nestedKey)" @onclick:stopPropagation="true">@if (hasNested) { <Icon Name="chev" /> }</span>
-                    <FileIcon Path="@node.Name" /><span class="ellipsis">@node.Name</span>
+                    <FileIcon Path="@node.Name" /><span class="ellipsis @Err(Problems.ErrorsIn(node.FullPath))" title="@ErrTitle(Problems.ErrorsIn(node.FullPath))">@node.Name</span>
                     @if (Ws.Documents.FirstOrDefault(d => d.Path.Equals(node.FullPath, StringComparison.OrdinalIgnoreCase)) is { IsDirty: true }) { <span class="badge">●</span> }
                 </div>
                 if (hasNested && IsOpen(nestedKey))
@@ -324,7 +342,7 @@
                     {
                         var nested = n;
                         <div class="row nested" style="padding-left:@(18 + depth * 14)px" @onclick="() => Ws.Open(nested.FullPath)" @oncontextmenu="e => FileMenu(e, nested.FullPath)" @oncontextmenu:preventDefault="true">
-                            <span class="ch"></span><FileIcon Path="@nested.Name" /><span class="ellipsis">@nested.Name</span>
+                            <span class="ch"></span><FileIcon Path="@nested.Name" /><span class="ellipsis @Err(Problems.ErrorsIn(nested.FullPath))" title="@ErrTitle(Problems.ErrorsIn(nested.FullPath))">@nested.Name</span>
                         </div>
                     }
                 }
