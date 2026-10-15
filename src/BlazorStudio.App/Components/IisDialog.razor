@@ -599,6 +599,7 @@
         _auth = null;
         _cfgFiles = null;
         _logs = null;
+        _persist = null;
         _extrasHint = null;
         await LoadTabAsync(quiet: true);
     }
@@ -612,6 +613,10 @@
     private string _newEnv = string.Empty;
 
     private const string ExtrasMinAgent = "1.7.0";
+    private const string PersistMinAgent = "1.9.0";
+    private List<string>? _persist;
+    private bool _persistOld;
+    private string _newPersist = string.Empty;
 
     private async Task LoadAppExtrasAsync(IisServerEntry s, AgentClient client, string site, string appPath)
     {
@@ -630,6 +635,13 @@
         catch (AgentException e) { _cfgFiles = null; _extrasHint = e.Message; }
         try { _logs = await client.GetLogFilesAsync(site, appPath); }
         catch (AgentException) { _logs = null; }
+        _persistOld = Iis.Status(s).Info?.AgentVersion is { Length: > 0 } av && AgentDefaults.IsOlderThan(av, PersistMinAgent);
+        if (_persistOld) _persist = null;
+        else
+        {
+            try { _persist = (await client.GetPersistentAsync(site, appPath)).Paths; }
+            catch (AgentException) { _persist = null; }
+        }
     }
 
     private RenderFragment AppPanel(string site, SiteApplicationInfo app) => __builder =>
@@ -685,6 +697,32 @@
                     }
                 </div>
                 <div class="iis-box">
+                    <div class="iis-versions-h"><Icon Name="database" /><b>@L["iis.persist"]</b><span class="dim">@L["iis.persist.hint"]</span></div>
+                    @if (_persistOld)
+                    {
+                        <div class="dim" style="padding:6px">@L.F("iis.persist.agentTooOld", PersistMinAgent)</div>
+                    }
+                    else if (_persist is { } persist)
+                    {
+                        @foreach (var p in persist)
+                        {
+                            var entry = p;
+                            <div class="iis-cfg">
+                                <Icon Name="@(entry.Contains('.') && !entry.EndsWith('/') ? "database" : "folder")" />
+                                <span class="mono">@entry</span>
+                                <span class="grow"></span>
+                                <button class="ibtn sm" title="@L["action.remove"]" disabled="@_busy" @onclick="() => RemovePersist(site, app.Path, entry)"><Icon Name="x" /></button>
+                            </div>
+                        }
+                        @if (persist.Count == 0) { <div class="dim" style="padding:4px 8px;font-size:12px">@L["iis.persist.none"]</div> }
+                        <div class="iis-cfg">
+                            <input class="mono" style="flex:1;min-width:0" placeholder="app.db / App_Data" value="@_newPersist" @oninput="e => _newPersist = e.Value?.ToString() ?? string.Empty"
+                                   @onkeydown='e => { if (e.Key == "Enter") _ = AddPersist(site, app.Path); }' />
+                            <button class="btn sm" disabled="@(_busy || PersistentPaths.Normalize(_newPersist) is null)" @onclick="() => AddPersist(site, app.Path)"><Icon Name="plus" />@L["action.add"]</button>
+                        </div>
+                    }
+                </div>
+                <div class="iis-box">
                     <div class="iis-versions-h"><Icon Name="terminal" /><b>@L["iis.logs"]</b><span class="dim">stdout</span></div>
                     @if (_logs is { Count: > 0 } logs)
                     {
@@ -717,6 +755,23 @@
             @label @if (unavailable) { <small class="dim">(@L["iis.auth.notInstalledShort"])</small> }
         </label>
     };
+
+    private async Task AddPersist(string site, string appPath)
+    {
+        if (_persist is null || PersistentPaths.Normalize(_newPersist) is not { } entry) return;
+        if (_persist.Contains(entry, StringComparer.OrdinalIgnoreCase)) { _newPersist = string.Empty; return; }
+        var next = _persist.Append(entry).ToList();
+        _newPersist = string.Empty;
+        await Act(c => c.SetPersistentAsync(site, appPath, next), L.F("iis.persist.added", entry));
+    }
+
+    private async Task RemovePersist(string site, string appPath, string entry)
+    {
+        if (_persist is null) return;
+        if (!await Confirm(L.F("iis.persist.removeTitle", entry), L["iis.persist.removeText"], L["action.remove"])) return;
+        var next = _persist.Where(x => !x.Equals(entry, StringComparison.OrdinalIgnoreCase)).ToList();
+        await Act(c => c.SetPersistentAsync(site, appPath, next), L.F("iis.persist.removed", entry));
+    }
 
     private async Task SetAuth(string site, string appPath, string key, bool on)
     {

@@ -131,6 +131,10 @@ public static class AgentEndpoints
             config.DeleteOverride(name, DeployRequest.NormalizeAppPath(app), file);
             return Results.NoContent();
         });
+        api.MapGet("/sites/{name}/persist", (SiteConfigService config, string name, string? app) =>
+            new PersistentSettings { Paths = config.GetPersistent(name, DeployRequest.NormalizeAppPath(app)) });
+        api.MapPut("/sites/{name}/persist", (SiteConfigService config, string name, string? app, PersistentSettings settings) =>
+            new PersistentSettings { Paths = config.SetPersistent(name, DeployRequest.NormalizeAppPath(app), settings.Paths) });
         api.MapGet("/sites/{name}/logs", (SiteConfigService config, string name, string? app) =>
             config.Logs(name, DeployRequest.NormalizeAppPath(app)));
         api.MapGet("/sites/{name}/logs/{file}", (SiteConfigService config, string name, string file, string? app) =>

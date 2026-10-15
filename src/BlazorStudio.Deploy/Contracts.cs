@@ -386,6 +386,12 @@ public sealed class DeployRequest
 
     public string? Notes { get; set; }
 
+    /// <summary>
+    /// Persistente Dateien/Ordner (Zeilen, Komma oder Semikolon getrennt), die von der laufenden in die neue Version
+    /// wandern. Null = gespeicherte Liste des Servers unverändert lassen, sonst ersetzen.
+    /// </summary>
+    public string? Persist { get; set; }
+
     public IEnumerable<KeyValuePair<string, string>> ToForm()
     {
         yield return new("site", Site);
@@ -402,6 +408,7 @@ public sealed class DeployRequest
         if (!string.IsNullOrWhiteSpace(Source)) yield return new("source", Source);
         if (!string.IsNullOrWhiteSpace(Commit)) yield return new("commit", Commit);
         if (!string.IsNullOrWhiteSpace(Notes)) yield return new("notes", Notes);
+        if (Persist is not null) yield return new("persist", Persist);
     }
 
     public static DeployRequest FromForm(Func<string, string?> get)
@@ -423,6 +430,7 @@ public sealed class DeployRequest
             Source = get("source"),
             Commit = get("commit"),
             Notes = get("notes"),
+            Persist = get("persist"),
         };
     }
 

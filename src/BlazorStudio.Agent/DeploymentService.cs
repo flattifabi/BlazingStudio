@@ -80,6 +80,13 @@ public sealed class DeploymentService(IisManager iis, VersionStore store, SiteCo
         var siteExists = iis.SiteExists(site);
         if (!siteExists && !req.CreateSite)
             throw new NotFoundException($"Site „{site}“ gibt es auf diesem Server nicht (Option „Site anlegen“ verwenden).");
+        if (req.Persist is not null)
+        {
+            var parsed = PersistentPaths.Parse(req.Persist, out var invalid);
+            if (invalid.Count > 0) throw new ArgumentException("Ungültige persistente Pfade: " + string.Join(", ", invalid));
+            var list = config.SetPersistent(site, appPath, parsed);
+            journal.Log(record, list.Count == 0 ? "Persistente Dateien: keine" : "Persistente Dateien: " + string.Join(", ", list));
+        }
         var app = siteExists ? iis.FindApplication(site, appPath) : null;
         var previous = app?.ActiveVersion;
         var previousPath = app?.PhysicalPath;
@@ -133,7 +140,8 @@ public sealed class DeploymentService(IisManager iis, VersionStore store, SiteCo
         }
         else
         {
-            await iis.SetPhysicalPathAsync(site, appPath, installed.Path);
+            await config.SwitchAsync(site, appPath, Expand(previousPath), installed.Path,
+                async () => await iis.SetPhysicalPathAsync(site, appPath, installed.Path), (text, level) => journal.Log(record, text, level));
         }
 
         // Nachlesen: hat IIS den Pfad wirklich übernommen?
@@ -161,7 +169,8 @@ public sealed class DeploymentService(IisManager iis, VersionStore store, SiteCo
                 if (req.Rollback && previousPath is not null)
                 {
                     journal.Log(record, $"Health-Check fehlgeschlagen ({detail}) – Rollback auf {previous ?? previousPath}", "error");
-                    await iis.SetPhysicalPathAsync(site, appPath, previousPath);
+                    await config.SwitchAsync(site, appPath, installed.Path, Expand(previousPath)!,
+                        async () => await iis.SetPhysicalPathAsync(site, appPath, previousPath), (text, level) => journal.Log(record, text, level));
                     if (previous is not null) store.MarkActivated(site, appPath, previous, DateTime.UtcNow);
                     if (pool.Length > 0) await iis.RecycleAsync(pool);
                     journal.Log(record, "Rollback abgeschlossen", "warn");
@@ -209,6 +218,8 @@ public sealed class DeploymentService(IisManager iis, VersionStore store, SiteCo
         }
     }
 
+    private static string? Expand(string? path) => string.IsNullOrWhiteSpace(path) ? null : Environment.ExpandEnvironmentVariables(path);
+
     private static bool SamePath(string? a, string? b)
     {
         static string N(string? p) => Path.GetFullPath(Environment.ExpandEnvironmentVariables(p ?? "")).TrimEnd('\\', '/');
@@ -242,7 +253,10 @@ public sealed class DeploymentService(IisManager iis, VersionStore store, SiteCo
         {
             // Auch ältere Versionen laufen mit der aktuellen eigenen Konfiguration
             config.PrepareVersion(site, appPath, store.VersionDirectory(site, appPath, req.Version), (text, level) => journal.Log(record, text, level));
-            var (_, pool) = await iis.SetPhysicalPathAsync(site, appPath, store.VersionDirectory(site, appPath, req.Version));
+            var target = store.VersionDirectory(site, appPath, req.Version);
+            var pool = app.Pool;
+            await config.SwitchAsync(site, appPath, Expand(app.PhysicalPath), target,
+                async () => pool = (await iis.SetPhysicalPathAsync(site, appPath, target)).Pool, (text, level) => journal.Log(record, text, level));
             store.MarkActivated(site, appPath, req.Version, DateTime.UtcNow);
             journal.Log(record, $"Umgeschaltet von {app.ActiveVersion ?? app.PhysicalPath} auf {req.Version}");
             if (req.Recycle && pool.Length > 0)
