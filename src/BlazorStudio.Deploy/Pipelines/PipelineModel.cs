@@ -171,6 +171,7 @@ public static class StepCatalog
         [StepKind.DeployIis] = new[]
         {
             new StepField("servers", "", StepFieldType.Servers),
+            new StepField("target", "iis", StepFieldType.Choice, new[] { "iis", "service" }),
             new StepField("site", ""),
             new StepField("appPath", "/"),
             new StepField("package", "app"),
@@ -181,6 +182,8 @@ public static class StepCatalog
             new StepField("binding", ""),
             new StepField("pool", ""),
             new StepField("persist", ""),
+            new StepField("exe", ""),
+            new StepField("account", ""),
             new StepField("secret", "BLAZORSTUDIO_AGENT_KEY", StepFieldType.Secret),
             new StepField("thumbprint", ""),
         },

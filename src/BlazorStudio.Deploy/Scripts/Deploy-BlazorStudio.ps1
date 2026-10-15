@@ -17,6 +17,11 @@
 .EXAMPLE
     ./Deploy-BlazorStudio.ps1 -Server http://10.0.0.11:8790,http://10.0.0.12:8790 -Package app.zip `
         -Site Shop -CreateSite -Binding 'http://*:8080' -HealthUrl 'http://localhost:8080/health'
+
+.EXAMPLE
+    # Worker als Windows-Dienst (Programm wird automatisch gefunden, Datenbank wandert mit)
+    ./Deploy-BlazorStudio.ps1 -Server https://app01:8790 -Package ./publish -Service -Site ShopWorker `
+        -Account NetworkService -Persist 'data.db' -Version 1.4.0
 #>
 [CmdletBinding()]
 param(
@@ -26,7 +31,7 @@ param(
     [string]$ApiKey = $env:BLAZORSTUDIO_AGENT_KEY,
     # Publish-Ordner oder ZIP-Datei
     [Parameter(Mandatory = $true)][string]$Package,
-    # Name der IIS-Site
+    # Name der IIS-Site (mit -Service: Name des Windows-Dienstes)
     [Parameter(Mandatory = $true)][string]$Site,
     # Versionsname (Standard: Build-Nummer der Pipeline bzw. Zeitstempel)
     [string]$Version,
@@ -48,6 +53,18 @@ param(
     # Dateien/Ordner, die von der laufenden in die neue Version wandern (z. B. 'app.db','App_Data').
     # Ersetzt die auf dem Server gespeicherte Liste; weglassen = gespeicherte Liste verwenden.
     [string[]]$Persist,
+    # Als Windows-Dienst statt IIS-Site ausrollen: -Site ist dann der Dienstname
+    [switch]$Service,
+    # Dienst: Programm relativ zum Paket (Standard: automatisch – die .exe der App bzw. dotnet + .dll)
+    [string]$Exe,
+    # Dienst: Argumente für das Programm
+    [string]$Arguments,
+    # Dienst: Konto (LocalSystem, LocalService, NetworkService oder DOMÄNE\Benutzer; Passwort über BLAZORSTUDIO_SERVICE_PASSWORD)
+    [string]$Account,
+    # Dienst: auto, delayed oder manual
+    [string]$StartType,
+    [string]$DisplayName,
+    [string]$Description,
     [string]$Commit,
     [string]$Notes,
     [string]$Source = 'Pipeline',
@@ -115,7 +132,7 @@ if (Test-Path $packagePath -PathType Container) {
     $packagePath = $tempZip
 }
 $size = (Get-Item $packagePath).Length
-Write-Host ("Paket: {0} ({1:N1} MB), Site: {2}{3}, Version: {4}" -f (Split-Path $packagePath -Leaf), ($size / 1MB), $Site, $(if ($AppPath -ne '/') { $AppPath } else { '' }), $Version)
+Write-Host ("Paket: {0} ({1:N1} MB), {5}: {2}{3}, Version: {4}" -f (Split-Path $packagePath -Leaf), ($size / 1MB), $Site, $(if ($AppPath -ne '/' -and -not $Service) { $AppPath } else { '' }), $Version, $(if ($Service) { 'Dienst' } else { 'Site' }))
 
 $client = [BlazorStudioAgentHttp]::Create($CertThumbprint)
 $client.DefaultRequestHeaders.Add('X-Api-Key', $ApiKey)
@@ -138,6 +155,11 @@ try {
     foreach ($s in $Server) {
         $base = $s.TrimEnd('/')
         Write-Step "Deployment auf $base"
+        if ($Service) {
+            # Ältere Agents kennen Dienste nicht und würden in eine IIS-Site gleichen Namens deployen
+            $ping = Invoke-Agent 'GET' "$base/api/ping" $null
+            if ([version]($ping.version -replace '[^0-9.].*$', '') -lt [version]'1.11.0') { throw "Agent $($ping.version) auf $base kann keine Windows-Dienste ausrollen – bitte auf 1.11.0 oder neuer aktualisieren." }
+        }
         $form = New-Object System.Net.Http.MultipartFormDataContent
         $fields = [ordered]@{
             site = $Site; appPath = $AppPath; version = $Version
@@ -151,6 +173,16 @@ try {
         if ($Commit) { $fields.commit = $Commit }
         if ($Notes) { $fields.notes = $Notes }
         if ($PSBoundParameters.ContainsKey('Persist')) { $fields.persist = ($Persist -join ',') }
+        if ($Service) {
+            $fields.target = 'service'
+            if ($Exe) { $fields.serviceExe = $Exe }
+            if ($Arguments) { $fields.serviceArgs = $Arguments }
+            if ($Account) { $fields.serviceAccount = $Account }
+            if ($env:BLAZORSTUDIO_SERVICE_PASSWORD) { $fields.servicePassword = $env:BLAZORSTUDIO_SERVICE_PASSWORD }
+            if ($StartType) { $fields.serviceStartType = $StartType }
+            if ($DisplayName) { $fields.serviceDisplayName = $DisplayName }
+            if ($Description) { $fields.serviceDescription = $Description }
+        }
         foreach ($k in $fields.Keys) { $form.Add((New-Object System.Net.Http.StringContent ([string]$fields[$k])), $k) }
         $stream = [IO.File]::OpenRead($packagePath)
         try {

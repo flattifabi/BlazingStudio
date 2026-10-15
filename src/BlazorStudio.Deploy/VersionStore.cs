@@ -24,6 +24,12 @@ public sealed class VersionMetadata
     public long SizeBytes { get; set; }
 
     public int Files { get; set; }
+
+    /// <summary>Windows-Dienst: Programm relativ zum Versionsordner bzw. „dotnet“ (dann steht die .dll in den Argumenten).</summary>
+    public string? ServiceProgram { get; set; }
+
+    /// <summary>Windows-Dienst: Argumente (ohne die .dll bei „dotnet“).</summary>
+    public string? ServiceArguments { get; set; }
 }
 
 /// <summary>

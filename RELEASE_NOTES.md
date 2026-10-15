@@ -1,3 +1,14 @@
+## Neu: Deployment als Windows-Dienst
+- Im Bereitstellen-Reiter der IIS-Server gibt es jetzt **Ziel: IIS-Site | Windows-Dienst**. Für Worker/Hintergrunddienste: Dienstname, Programm (leer = die .exe der App wird automatisch gefunden, framework-abhängig ohne .exe läuft sie über dotnet), Argumente, Konto (LocalSystem, LocalService, NetworkService oder Domänenkonto), Starttyp.
+- Gibt es den Dienst noch nicht, legt der Agent ihn an (mit automatischem Neustart bei Absturz). Sonst: Dienst stoppen → **persistente Dateien** mitnehmen → Programmpfad auf die neue Version → starten → prüfen (läuft er nach 8 s noch? optional Health-URL). Schlägt das fehl, läuft automatisch wieder die vorherige Version.
+- Neuer Reiter **Dienste**: Zustand, Version, Konto, CPU/RAM; Starten, Stoppen, Neu starten, Entfernen; aufgeklappt Versionen (Aktivieren/Zurückschalten), **appsettings*.json im Editor bearbeiten** (bleibt für künftige Deployments) und persistente Dateien.
+- Pipeline: `Deploy-BlazorStudio.ps1 -Service -Site ShopWorker [-Exe Worker.exe] [-Account NetworkService] [-Persist 'data.db']`; im Pipeline-Builder Feld „Ziel“ = service.
+- Die App muss als Dienst laufen können: `builder.Services.AddWindowsService()` (Paket Microsoft.Extensions.Hosting.WindowsServices). Fehlt das, meldet der Agent den Fehler 1053 mit diesem Hinweis.
+- **Agent 1.11.0 nötig**; Studio und das Skript prüfen das, damit ältere Agents nicht versehentlich in eine IIS-Site gleichen Namens deployen.
+
+## Behoben: Run ließ sich nach Stopp nicht erneut starten
+- Nach dem Stoppen blieb Studio manchmal im Zustand „läuft“, bis die IDE neu gestartet wurde: Ein Kindprozess von `dotnet watch` hielt die Ausgabe offen, das Prozessende kam nie an. Jetzt wird nur noch kurz gewartet, und Stopp setzt den Zustand spätestens nach wenigen Sekunden zurück.
+
 ## Neu: Fehler im Projektmappen-Explorer rot markiert (wie in Rider)
 - Dateien mit Fehlern werden im Projektmappen-Explorer **rot und gewellt unterstrichen** – ebenso alle Ordner darüber, das Projekt und die Projektmappe. Der Tooltip zeigt die Anzahl.
 - Grundlage ist eine **lösungsweite Analyse** im Hintergrund (alle .cs-Dateien und die @code-Blöcke der .razor-Dateien, mit dem aktuellen Editor-Text): Benennst du z. B. in einer Datei eine Eigenschaft um, wird jede Datei rot, die sie noch verwendet – auch wenn sie nicht geöffnet ist.

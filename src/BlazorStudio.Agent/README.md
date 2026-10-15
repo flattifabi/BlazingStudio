@@ -82,6 +82,12 @@ Fertige Vorlagen für GitHub Actions, Azure DevOps und GitLab erzeugt der Pipeli
 | GET/PUT | `/api/sites/{name}/auth?app=/` | Authentifizierung `{ anonymous, windows, basic, digest }` |
 | GET | `/api/sites/{name}/config?app=/` | bearbeitbare Dateien (web.config, appsettings*.json) |
 | GET/PUT/DELETE | `/api/sites/{name}/config/{file}?app=/` | lesen / speichern `{ content, apply }` (bleibt für künftige Deployments) / eigene Version entfernen |
+| GET | `/api/services?all=false` | Windows-Dienste des Agents (mit `all=true` alle) |
+| POST | `/api/services/{name}/start\|stop\|restart` | |
+| DELETE | `/api/services/{name}?removeFiles=true` | Dienst abmelden (nur vom Agent ausgerollte) |
+| GET | `/api/services/{name}/versions` | abgelegte Versionen |
+| POST | `/api/services/{name}/activate` | `{ version }` – umschalten/Rollback |
+| GET/PUT | `/api/services/{name}/persist`, `/api/services/{name}/config[/{file}]` | persistente Dateien, appsettings*.json |
 | GET/PUT | `/api/sites/{name}/persist?app=/` | persistente Dateien/Ordner `{ paths: ["app.db", "App_Data"] }` – wandern bei jedem Umschalten mit |
 | GET | `/api/sites/{name}/logs?app=/`, `/api/sites/{name}/logs/{file}?app=/` | stdout-Logs (Ende der Datei, max. 512 KB) |
 | POST | `/api/deployments` | multipart: `package` (ZIP) + `site`, `version`, `appPath`, `healthUrl`, `rollback`, `createSite`, `binding`, `pool`, `runtime`, `overwrite`, `activate`, `source`, `commit`, `notes` → 202 |

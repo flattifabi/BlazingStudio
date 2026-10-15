@@ -12,7 +12,7 @@ public enum ChangeOrigin { Load, Design, Code, Undo, External }
 
 /// <summary>Eine geöffnete Datei. Für .razor zusätzlich der Designer-Zustand.</summary>
 /// <summary>Herkunft eines Remote-Dokuments (IIS-Agent).</summary>
-public sealed record RemoteFile(string ServerId, string Server, string Site, string AppPath, string File, bool IsLog = false);
+public sealed record RemoteFile(string ServerId, string Server, string Site, string AppPath, string File, bool IsLog = false, bool IsService = false);
 
 public sealed class DocumentSession
 {

@@ -52,8 +52,9 @@ public sealed partial class ProcessRunner : IDisposable
         {
             int code;
             try { code = p.ExitCode; } catch { code = -1; }
-            // Ausgabe-Puffer leeren lassen
-            try { p.WaitForExit(); } catch { }
+            // Ausgabe-Puffer leeren lassen – mit Zeitlimit: Enkelprozesse (Build-Server, MSBuild-Knoten der App unter
+            // dotnet watch) können die geerbten Pipes offen halten, dann käme „beendet“ sonst nie an
+            try { p.WaitForExit(2000); } catch { }
             Exited?.Invoke(code);
             tcs.TrySetResult(code);
         };

@@ -140,6 +140,42 @@ public static class AgentEndpoints
         api.MapGet("/sites/{name}/logs/{file}", (SiteConfigService config, string name, string file, string? app) =>
             config.ReadLog(name, DeployRequest.NormalizeAppPath(app), file));
 
+        // ---------------- Windows-Dienste ----------------
+        api.MapGet("/services", (ServiceManager services, bool? all) => services.List(all == true));
+        api.MapGet("/services/{name}", (ServiceManager services, string name) =>
+            services.Get(name) is { } s ? Results.Ok(s) : Results.NotFound(new ApiError { Error = $"Dienst „{name}“ gibt es nicht." }));
+        api.MapPost("/services/{name}/{action:regex(^(start|stop|restart)$)}", async (ServiceManager services, string name, string action) =>
+        {
+            await services.ActionAsync(name, action);
+            return Results.NoContent();
+        });
+        api.MapDelete("/services/{name}", async (ServiceManager services, string name, bool? removeFiles) =>
+        {
+            await services.DeleteAsync(name, removeFiles == true);
+            return Results.NoContent();
+        });
+        api.MapGet("/services/{name}/versions", (ServiceManager services, string name) =>
+            services.Store.List(name, "/", services.Get(name)?.ActiveVersion));
+        api.MapPost("/services/{name}/activate", async (DeploymentService deployments, HttpContext ctx, string name, ServiceActivateRequest r) =>
+            await deployments.ActivateServiceAsync(name, r, ctx.Request.Headers.UserAgent.ToString().StartsWith("BlazorStudio", StringComparison.Ordinal) ? "Blazor Studio" : "API"));
+        api.MapDelete("/services/{name}/versions/{version}", (DeploymentService deployments, string name, string version) =>
+        {
+            deployments.DeleteServiceVersion(name, version);
+            return Results.NoContent();
+        });
+        api.MapGet("/services/{name}/persist", (ServiceConfigService config, string name) => new PersistentSettings { Paths = config.GetPersistent(name) });
+        api.MapPut("/services/{name}/persist", (ServiceConfigService config, string name, PersistentSettings settings) =>
+            new PersistentSettings { Paths = config.SetPersistent(name, settings.Paths) });
+        api.MapGet("/services/{name}/config", (ServiceConfigService config, string name) => config.List(name));
+        api.MapGet("/services/{name}/config/{file}", (ServiceConfigService config, string name, string file) => config.Read(name, file));
+        api.MapPut("/services/{name}/config/{file}", async (ServiceConfigService config, string name, string file, SiteConfigWrite write) =>
+            await config.WriteAsync(name, file, write));
+        api.MapDelete("/services/{name}/config/{file}", (ServiceConfigService config, string name, string file) =>
+        {
+            config.DeleteOverride(name, file);
+            return Results.NoContent();
+        });
+
         // ---------------- Deployments ----------------
         api.MapGet("/deployments", (DeploymentJournal journal, string? site, int? take) => journal.List(site, take ?? 50));
         api.MapGet("/deployments/{id}", (DeploymentJournal journal, string id) =>

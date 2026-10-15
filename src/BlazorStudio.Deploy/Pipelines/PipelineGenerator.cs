@@ -40,6 +40,7 @@ public static class PipelineGenerator
                         break;
                     case StepKind.DeployIis:
                         if (s.Get("site").Trim().Length == 0) warnings.Add($"„{stage.Name}“: IIS-Deployment ohne Site-Namen.");
+                        else if (IsService(s) && !ServiceCommandLine.IsValidName(s.Get("site").Trim())) warnings.Add($"„{stage.Name}“: ungültiger Dienstname „{s.Get("site").Trim()}“.");
                         PersistentPaths.Parse(s.Get("persist"), out var badPersist);
                         if (badPersist.Count > 0) warnings.Add($"„{stage.Name}“: ungültige persistente Pfade: {string.Join(", ", badPersist)}");
                         if (Servers(s).Count == 0) warnings.Add($"„{stage.Name}“: IIS-Deployment ohne Server.");
@@ -663,21 +664,30 @@ public static class PipelineGenerator
         sb.Append("  -Server ").Append(string.Join(",", Servers(s).Select(x => PsQ(x)))).Append(" `\n");
         sb.Append("  -Package ").Append(PsQ(PackagePath(p, stage, s, provider), allowMacro: provider == PipelineProvider.AzureDevOps)).Append(" `\n");
         sb.Append("  -Site ").Append(PsQ(s.Get("site").Trim())).Append(" `\n");
+        var service = IsService(s);
+        if (service)
+        {
+            sb.Append("  -Service `\n");
+            if (s.Get("exe").Trim().Length > 0) sb.Append("  -Exe ").Append(PsQ(s.Get("exe").Trim())).Append(" `\n");
+            if (s.Get("account").Trim().Length > 0) sb.Append("  -Account ").Append(PsQ(s.Get("account").Trim())).Append(" `\n");
+        }
         var app = DeployRequest.NormalizeAppPath(s.Get("appPath"));
-        if (app != "/") sb.Append("  -AppPath ").Append(PsQ(app)).Append(" `\n");
+        if (app != "/" && !service) sb.Append("  -AppPath ").Append(PsQ(app)).Append(" `\n");
         if (s.Get("healthUrl").Trim().Length > 0) sb.Append("  -HealthUrl ").Append(PsQ(s.Get("healthUrl").Trim())).Append(" `\n");
         if (!s.GetBool("rollback")) sb.Append("  -NoRollback `\n");
-        if (s.GetBool("createSite"))
+        if (s.GetBool("createSite") && !service)
         {
             sb.Append("  -CreateSite `\n");
             if (s.Get("binding").Trim().Length > 0) sb.Append("  -Binding ").Append(PsQ(s.Get("binding").Trim())).Append(" `\n");
         }
-        if (s.Get("pool").Trim().Length > 0) sb.Append("  -Pool ").Append(PsQ(s.Get("pool").Trim())).Append(" `\n");
+        if (s.Get("pool").Trim().Length > 0 && !service) sb.Append("  -Pool ").Append(PsQ(s.Get("pool").Trim())).Append(" `\n");
         if (PersistArg(s) is { Count: > 0 } persist) sb.Append("  -Persist ").Append(string.Join(",", persist.Select(x => PsQ(x)))).Append(" `\n");
         if (s.Get("thumbprint").Trim().Length > 0) sb.Append("  -CertThumbprint ").Append(PsQ(s.Get("thumbprint").Trim())).Append(" `\n");
         sb.Append("  -Version $version");
         return sb.ToString();
     }
+
+    private static bool IsService(PipelineStep s) => s.Get("target").Equals(DeployTargets.Service, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Persistente Pfade des Schritts (leer = Liste auf dem Server verwenden).</summary>
     private static List<string> PersistArg(PipelineStep s) => PersistentPaths.Parse(s.Get("persist"), out _);
@@ -691,16 +701,23 @@ public static class PipelineGenerator
             "-Package " + ShQ(PackagePath(p, stage, s, PipelineProvider.GitLab)),
             "-Site " + ShQ(s.Get("site").Trim()),
         };
+        var service = IsService(s);
+        if (service)
+        {
+            args.Add("-Service");
+            if (s.Get("exe").Trim().Length > 0) args.Add("-Exe " + ShQ(s.Get("exe").Trim()));
+            if (s.Get("account").Trim().Length > 0) args.Add("-Account " + ShQ(s.Get("account").Trim()));
+        }
         var app = DeployRequest.NormalizeAppPath(s.Get("appPath"));
-        if (app != "/") args.Add("-AppPath " + ShQ(app));
+        if (app != "/" && !service) args.Add("-AppPath " + ShQ(app));
         if (s.Get("healthUrl").Trim().Length > 0) args.Add("-HealthUrl " + ShQ(s.Get("healthUrl").Trim()));
         if (!s.GetBool("rollback")) args.Add("-NoRollback");
-        if (s.GetBool("createSite"))
+        if (s.GetBool("createSite") && !service)
         {
             args.Add("-CreateSite");
             if (s.Get("binding").Trim().Length > 0) args.Add("-Binding " + ShQ(s.Get("binding").Trim()));
         }
-        if (s.Get("pool").Trim().Length > 0) args.Add("-Pool " + ShQ(s.Get("pool").Trim()));
+        if (s.Get("pool").Trim().Length > 0 && !service) args.Add("-Pool " + ShQ(s.Get("pool").Trim()));
         if (PersistArg(s) is { Count: > 0 } persist) args.Add("-Persist " + ShQ(string.Join(",", persist)));
         if (s.Get("thumbprint").Trim().Length > 0) args.Add("-CertThumbprint " + ShQ(s.Get("thumbprint").Trim()));
         var secret = Secret(s);

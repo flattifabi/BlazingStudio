@@ -30,6 +30,8 @@ builder.Services.AddSingleton<SystemSampler>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<SystemSampler>());
 builder.Services.AddSingleton<IisManager>();
 builder.Services.AddSingleton<SiteConfigService>();
+builder.Services.AddSingleton<ServiceManager>();
+builder.Services.AddSingleton<ServiceConfigService>();
 builder.Services.AddSingleton<DeploymentService>();
 builder.Services.AddHttpClient("health").ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
 {

@@ -274,9 +274,9 @@ public sealed class IisService : IDisposable
     }
 
     /// <summary>Konfigurationsdatei vom Server holen und im Editor öffnen. Speichern (Strg+S) lädt sie wieder hoch.</summary>
-    public async Task<bool> OpenRemoteConfigAsync(IisServerEntry s, string site, string appPath, string file)
+    public async Task<bool> OpenRemoteConfigAsync(IisServerEntry s, string site, string appPath, string file, bool service = false)
     {
-        var dir = CacheDir(s, site, appPath);
+        var dir = service ? CacheDir(s, "svc_" + site, "/") : CacheDir(s, site, appPath);
         var path = Path.Combine(dir, file);
         var open = _ws.Documents.FirstOrDefault(d => string.Equals(d.Path, path, StringComparison.OrdinalIgnoreCase));
         if (open is { IsDirty: true })
@@ -284,7 +284,7 @@ public sealed class IisService : IDisposable
             _ws.Activate(open);
             return true;
         }
-        var content = await Client(s).GetConfigFileAsync(site, appPath, file);
+        var content = service ? await Client(s).GetServiceConfigFileAsync(site, file) : await Client(s).GetConfigFileAsync(site, appPath, file);
         Directory.CreateDirectory(dir);
         await File.WriteAllTextAsync(path, content.Content);
         if (open is not null)
@@ -295,7 +295,7 @@ public sealed class IisService : IDisposable
         }
         var doc = _ws.Open(path);
         if (doc is null) return false;
-        doc.Remote = new RemoteFile(s.Id, s.Display, site, appPath, file);
+        doc.Remote = new RemoteFile(s.Id, s.Display, site, appPath, file, IsService: service);
         _ws.NotifyChanged();
         if (content.Source == "new") _ui.ShowToast(_l.F("iis.cfg.newFile", file), ToastKind.Info, 5000);
         return true;
@@ -336,7 +336,10 @@ public sealed class IisService : IDisposable
         try
         {
             if (server is null) throw new AgentException(_l.F("iis.cfg.serverGone", r.Server), null);
-            var result = await Client(server).SaveConfigFileAsync(r.Site, r.AppPath, r.File, new SiteConfigWrite { Content = sent, Apply = true });
+            var write = new SiteConfigWrite { Content = sent, Apply = true };
+            var result = r.IsService
+                ? await Client(server).SaveServiceConfigFileAsync(r.Site, r.File, write)
+                : await Client(server).SaveConfigFileAsync(r.Site, r.AppPath, r.File, write);
             // Der Agent schaltet z. B. stdout ein – den gespeicherten Stand übernehmen
             if (result.Content != sent && doc.Text == sent)
             {
@@ -363,7 +366,7 @@ public sealed class IisService : IDisposable
     public async Task<StudioDeployment> DeployAsync(string projectFile, IisDeployProfile profile, IReadOnlyList<IisServerEntry> servers, string version)
     {
         if (CurrentDeployment is { Finished: false }) throw new InvalidOperationException(_l["iis.deployBusy"]);
-        var d = new StudioDeployment { Version = version, Site = profile.Site };
+        var d = new StudioDeployment { Version = version, Site = profile.IsService ? profile.ServiceName : profile.Site };
         CurrentDeployment = d;
         Notify();
         var work = Path.Combine(Path.GetTempPath(), "BlazorStudio", "deploy-" + Guid.NewGuid().ToString("N")[..8]);
@@ -379,6 +382,9 @@ public sealed class IisService : IDisposable
                 var ping = await Client(server).PingAsync(d.Cancel.Token);
                 if (AgentDefaults.IsOlderThan(ping.Version, AgentDefaults.MinimumDeployVersion))
                     throw new InvalidOperationException(_l.F("iis.agentTooOld", server.Display, ping.Version, AgentDefaults.MinimumDeployVersion));
+                // Ältere Agents kennen „target=service“ nicht und würden in eine IIS-Site gleichen Namens deployen
+                if (profile.IsService && AgentDefaults.IsOlderThan(ping.Version, AgentDefaults.MinimumServiceVersion))
+                    throw new InvalidOperationException(_l.F("iis.agentTooOld", server.Display, ping.Version, AgentDefaults.MinimumServiceVersion));
                 _run.Write(_l.F("iis.log.agent", server.Display, ping.Version), OutputKind.Muted);
             }
 
@@ -408,8 +414,14 @@ public sealed class IisService : IDisposable
                 var client = Client(server);
                 var request = new DeployRequest
                 {
-                    Site = profile.Site.Trim(),
-                    AppPath = DeployRequest.NormalizeAppPath(profile.AppPath),
+                    Site = profile.IsService ? profile.ServiceName.Trim() : profile.Site.Trim(),
+                    AppPath = profile.IsService ? "/" : DeployRequest.NormalizeAppPath(profile.AppPath),
+                    Target = profile.IsService ? DeployTargets.Service : DeployTargets.Iis,
+                    ServiceExe = profile.IsService ? profile.ServiceExe : null,
+                    ServiceArguments = profile.IsService ? profile.ServiceArguments : null,
+                    ServiceAccount = profile.IsService && !string.IsNullOrWhiteSpace(profile.ServiceAccount) ? profile.ServiceAccount : null,
+                    ServiceStartType = profile.IsService && !string.IsNullOrWhiteSpace(profile.ServiceStartType) ? profile.ServiceStartType : null,
+                    ServiceDisplayName = profile.IsService && !string.IsNullOrWhiteSpace(profile.ServiceDisplayName) ? profile.ServiceDisplayName : null,
                     Version = version,
                     CreateSite = profile.CreateSite,
                     Binding = profile.Binding,

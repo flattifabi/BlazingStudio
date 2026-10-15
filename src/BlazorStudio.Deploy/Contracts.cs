@@ -18,6 +18,9 @@ public static class AgentDefaults
     /// </summary>
     public const string MinimumDeployVersion = "1.6.2";
 
+    /// <summary>Ältester Agent, der Windows-Dienste ausrollen kann.</summary>
+    public const string MinimumServiceVersion = "1.11.0";
+
     /// <summary>True, wenn die Agent-Version (z. B. „1.6.1“) älter als <paramref name="minimum"/> ist. Unlesbare Versionen gelten als veraltet.</summary>
     public static bool IsOlderThan(string? agentVersion, string minimum)
     {
@@ -345,6 +348,9 @@ public sealed class DeploymentRecord
 
     public long PackageBytes { get; set; }
 
+    /// <summary>iis (Standard) oder service (Windows-Dienst; dann ist <see cref="Site"/> der Dienstname).</summary>
+    public string Target { get; set; } = DeployTargets.Iis;
+
     public List<DeploymentLogLine> Log { get; set; } = new();
 
     public bool IsFinished => State is DeploymentState.Succeeded or DeploymentState.Failed or DeploymentState.RolledBack;
@@ -392,6 +398,28 @@ public sealed class DeployRequest
     /// </summary>
     public string? Persist { get; set; }
 
+    /// <summary>iis (Standard) oder service – bei service ist <see cref="Site"/> der Dienstname.</summary>
+    public string Target { get; set; } = DeployTargets.Iis;
+
+    /// <summary>Dienst: Programm relativ zum Paket (leer = automatisch: die eine .exe bzw. dotnet + .dll).</summary>
+    public string? ServiceExe { get; set; }
+
+    public string? ServiceArguments { get; set; }
+
+    public string? ServiceDisplayName { get; set; }
+
+    public string? ServiceDescription { get; set; }
+
+    /// <summary>LocalSystem, LocalService, NetworkService oder DOMÄNE\Benutzer (nur beim Anlegen bzw. wenn gesetzt).</summary>
+    public string? ServiceAccount { get; set; }
+
+    public string? ServicePassword { get; set; }
+
+    /// <summary>auto, delayed oder manual.</summary>
+    public string? ServiceStartType { get; set; }
+
+    public bool IsService => string.Equals(Target, DeployTargets.Service, StringComparison.OrdinalIgnoreCase);
+
     public IEnumerable<KeyValuePair<string, string>> ToForm()
     {
         yield return new("site", Site);
@@ -409,6 +437,17 @@ public sealed class DeployRequest
         if (!string.IsNullOrWhiteSpace(Commit)) yield return new("commit", Commit);
         if (!string.IsNullOrWhiteSpace(Notes)) yield return new("notes", Notes);
         if (Persist is not null) yield return new("persist", Persist);
+        if (IsService)
+        {
+            yield return new("target", DeployTargets.Service);
+            if (!string.IsNullOrWhiteSpace(ServiceExe)) yield return new("serviceExe", ServiceExe);
+            if (!string.IsNullOrWhiteSpace(ServiceArguments)) yield return new("serviceArgs", ServiceArguments);
+            if (!string.IsNullOrWhiteSpace(ServiceDisplayName)) yield return new("serviceDisplayName", ServiceDisplayName);
+            if (!string.IsNullOrWhiteSpace(ServiceDescription)) yield return new("serviceDescription", ServiceDescription);
+            if (!string.IsNullOrWhiteSpace(ServiceAccount)) yield return new("serviceAccount", ServiceAccount);
+            if (!string.IsNullOrWhiteSpace(ServicePassword)) yield return new("servicePassword", ServicePassword);
+            if (!string.IsNullOrWhiteSpace(ServiceStartType)) yield return new("serviceStartType", ServiceStartType);
+        }
     }
 
     public static DeployRequest FromForm(Func<string, string?> get)
@@ -431,6 +470,14 @@ public sealed class DeployRequest
             Commit = get("commit"),
             Notes = get("notes"),
             Persist = get("persist"),
+            Target = string.Equals(get("target"), DeployTargets.Service, StringComparison.OrdinalIgnoreCase) ? DeployTargets.Service : DeployTargets.Iis,
+            ServiceExe = get("serviceExe"),
+            ServiceArguments = get("serviceArgs"),
+            ServiceDisplayName = get("serviceDisplayName"),
+            ServiceDescription = get("serviceDescription"),
+            ServiceAccount = get("serviceAccount"),
+            ServicePassword = get("servicePassword"),
+            ServiceStartType = get("serviceStartType"),
         };
     }
 

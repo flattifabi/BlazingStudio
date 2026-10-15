@@ -114,6 +114,24 @@ public sealed class IisDeployProfile
 {
     public List<string> ServerIds { get; set; } = new();
 
+    /// <summary>iis (Site) oder service (Windows-Dienst).</summary>
+    public string Target { get; set; } = BlazorStudio.Deploy.DeployTargets.Iis;
+
+    public string ServiceName { get; set; } = "";
+
+    /// <summary>Programm relativ zum Publish-Ordner; leer = automatisch.</summary>
+    public string? ServiceExe { get; set; }
+
+    public string? ServiceArguments { get; set; }
+
+    public string? ServiceAccount { get; set; }
+
+    public string? ServiceStartType { get; set; }
+
+    public string? ServiceDisplayName { get; set; }
+
+    public bool IsService => string.Equals(Target, BlazorStudio.Deploy.DeployTargets.Service, StringComparison.OrdinalIgnoreCase);
+
     public string Site { get; set; } = "";
 
     public string AppPath { get; set; } = "/";

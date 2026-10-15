@@ -7,7 +7,7 @@ namespace BlazorStudio.Agent;
 /// Führt Deployments im Hintergrund aus: Version ablegen → IIS-Anwendung umschalten → Pool recyceln →
 /// Health-Check → bei Fehler Rollback → alte Versionen aufräumen. Pro Site/Anwendung läuft immer nur eins.
 /// </summary>
-public sealed class DeploymentService(IisManager iis, VersionStore store, SiteConfigService config, DeploymentJournal journal, AgentOptions options, IHttpClientFactory http, ILogger<DeploymentService> log)
+public sealed partial class DeploymentService(IisManager iis, VersionStore store, SiteConfigService config, ServiceManager services, ServiceConfigService serviceConfig, DeploymentJournal journal, AgentOptions options, IHttpClientFactory http, ILogger<DeploymentService> log)
 {
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new(StringComparer.OrdinalIgnoreCase);
 
@@ -16,10 +16,15 @@ public sealed class DeploymentService(IisManager iis, VersionStore store, SiteCo
     /// <summary>Prüft die Eingaben, legt den Verlaufseintrag an und startet das Deployment. Das Paket (temporäre Datei) gehört danach dem Dienst.</summary>
     public DeploymentRecord Start(DeployRequest req, string packageFile, long packageBytes)
     {
-        if (string.IsNullOrWhiteSpace(req.Site)) throw new ArgumentException("Site fehlt.");
+        if (string.IsNullOrWhiteSpace(req.Site)) throw new ArgumentException(req.IsService ? "Dienstname fehlt." : "Site fehlt.");
+        if (req.IsService)
+        {
+            ServiceManager.RequireName(req.Site);
+            req.AppPath = "/";
+        }
         if (!VersionStore.IsValidVersion(req.Version))
             throw new ArgumentException($"Ungültige Version „{req.Version}“ – erlaubt sind Buchstaben, Ziffern und . _ + - (max. 64 Zeichen).");
-        if (req.CreateSite && !iis.SiteExists(req.Site) && !BindingParser.TryParse(req.Binding, out _, out _))
+        if (!req.IsService && req.CreateSite && !iis.SiteExists(req.Site) && !BindingParser.TryParse(req.Binding, out _, out _))
             throw new ArgumentException("Zum Anlegen der Site wird eine Bindung benötigt, z. B. http://*:8080.");
 
         var record = new DeploymentRecord
@@ -35,6 +40,7 @@ public sealed class DeploymentService(IisManager iis, VersionStore store, SiteCo
             HealthUrl = string.IsNullOrWhiteSpace(req.HealthUrl) ? null : req.HealthUrl.Trim(),
             StartedAt = DateTime.UtcNow,
             PackageBytes = packageBytes,
+            Target = req.IsService ? DeployTargets.Service : DeployTargets.Iis,
         };
         journal.Add(record);
         journal.Log(record, $"Paket empfangen ({packageBytes / 1024.0 / 1024.0:0.0} MB) von {req.Source ?? "unbekannt"}");
@@ -44,13 +50,14 @@ public sealed class DeploymentService(IisManager iis, VersionStore store, SiteCo
 
     private async Task RunAsync(DeploymentRecord record, DeployRequest req, string packageFile)
     {
-        var gate = LockFor(req.Site, req.AppPath);
+        var gate = req.IsService ? ServiceLock(req.Site) : LockFor(req.Site, req.AppPath);
         if (gate.CurrentCount == 0) journal.Log(record, "Wartet auf ein laufendes Deployment derselben Anwendung …");
         await gate.WaitAsync();
         try
         {
             journal.Update(record, r => r.State = DeploymentState.Running);
-            await ExecuteAsync(record, req, packageFile);
+            if (req.IsService) await ExecuteServiceAsync(record, req, packageFile);
+            else await ExecuteAsync(record, req, packageFile);
         }
         catch (Exception e)
         {

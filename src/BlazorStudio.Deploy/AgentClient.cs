@@ -156,6 +156,47 @@ public sealed class AgentClient : IDisposable
         GetAsync<SiteConfigContent>($"api/sites/{Esc(site)}/logs/{Esc(file)}?{App(appPath)}", ct);
 
     // ------------------------------------------------------------------
+    // Windows-Dienste
+    // ------------------------------------------------------------------
+
+    public Task<List<ServiceInfo>> GetServicesAsync(bool all = false, CancellationToken ct = default) =>
+        GetAsync<List<ServiceInfo>>("api/services" + (all ? "?all=true" : ""), ct);
+
+    /// <param name="action">start, stop oder restart.</param>
+    public Task ServiceActionAsync(string name, string action, CancellationToken ct = default) =>
+        SendAsync(HttpMethod.Post, $"api/services/{Esc(name)}/{action}", null, ct);
+
+    public Task DeleteServiceAsync(string name, bool removeFiles, CancellationToken ct = default) =>
+        SendAsync(HttpMethod.Delete, $"api/services/{Esc(name)}?removeFiles={(removeFiles ? "true" : "false")}", null, ct);
+
+    public Task<List<SiteVersion>> GetServiceVersionsAsync(string name, CancellationToken ct = default) =>
+        GetAsync<List<SiteVersion>>($"api/services/{Esc(name)}/versions", ct);
+
+    public Task ActivateServiceAsync(string name, string version, CancellationToken ct = default) =>
+        SendAsync(HttpMethod.Post, $"api/services/{Esc(name)}/activate", new ServiceActivateRequest { Version = version }, ct);
+
+    public Task DeleteServiceVersionAsync(string name, string version, CancellationToken ct = default) =>
+        SendAsync(HttpMethod.Delete, $"api/services/{Esc(name)}/versions/{Esc(version)}", null, ct);
+
+    public Task<PersistentSettings> GetServicePersistentAsync(string name, CancellationToken ct = default) =>
+        GetAsync<PersistentSettings>($"api/services/{Esc(name)}/persist", ct);
+
+    public Task<PersistentSettings> SetServicePersistentAsync(string name, IEnumerable<string> paths, CancellationToken ct = default) =>
+        SendAsync<PersistentSettings>(HttpMethod.Put, $"api/services/{Esc(name)}/persist", new PersistentSettings { Paths = paths.ToList() }, ct);
+
+    public Task<List<SiteConfigFile>> GetServiceConfigFilesAsync(string name, CancellationToken ct = default) =>
+        GetAsync<List<SiteConfigFile>>($"api/services/{Esc(name)}/config", ct);
+
+    public Task<SiteConfigContent> GetServiceConfigFileAsync(string name, string file, CancellationToken ct = default) =>
+        GetAsync<SiteConfigContent>($"api/services/{Esc(name)}/config/{Esc(file)}", ct);
+
+    public Task<SiteConfigWriteResult> SaveServiceConfigFileAsync(string name, string file, SiteConfigWrite write, CancellationToken ct = default) =>
+        SendAsync<SiteConfigWriteResult>(HttpMethod.Put, $"api/services/{Esc(name)}/config/{Esc(file)}", write, ct);
+
+    public Task DeleteServiceConfigOverrideAsync(string name, string file, CancellationToken ct = default) =>
+        SendAsync(HttpMethod.Delete, $"api/services/{Esc(name)}/config/{Esc(file)}", null, ct);
+
+    // ------------------------------------------------------------------
     // Deployments
     // ------------------------------------------------------------------
 
