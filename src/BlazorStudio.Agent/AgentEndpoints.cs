@@ -176,6 +176,24 @@ public static class AgentEndpoints
             return Results.NoContent();
         });
 
+        // ---------------- Speicheranalyse ----------------
+        api.MapGet("/memory/processes", (MemoryService memory) => memory.Processes());
+        api.MapGet("/memory/snapshots", (MemoryService memory) => memory.List());
+        api.MapPost("/memory/snapshots", (MemoryService memory, MemorySnapshotRequest r) => memory.Start(r));
+        api.MapGet("/memory/snapshots/{id}", (MemoryService memory, string id) => memory.Get(id));
+        api.MapDelete("/memory/snapshots/{id}", (MemoryService memory, string id) =>
+        {
+            memory.Delete(id);
+            return Results.NoContent();
+        });
+        api.MapGet("/memory/snapshots/{id}/types", (MemoryService memory, string id) => memory.Types(id));
+        api.MapGet("/memory/snapshots/{id}/instances", (MemoryService memory, string id, string type, int? skip, int? take) =>
+            memory.Instances(id, type, skip ?? 0, take ?? 100));
+        api.MapGet("/memory/snapshots/{id}/objects/{address}", (MemoryService memory, string id, string address, int? from, bool? reachable) =>
+            memory.Object(id, ParseAddress(address), from ?? 0, reachable == true));
+        api.MapGet("/memory/snapshots/{id}/objects/{address}/roots", (MemoryService memory, string id, string address) =>
+            memory.Roots(id, ParseAddress(address)));
+
         // ---------------- Deployments ----------------
         api.MapGet("/deployments", (DeploymentJournal journal, string? site, int? take) => journal.List(site, take ?? 50));
         api.MapGet("/deployments/{id}", (DeploymentJournal journal, string id) =>
@@ -212,5 +230,11 @@ public static class AgentEndpoints
                 throw;
             }
         }).DisableAntiforgery();
+    }
+
+    private static ulong ParseAddress(string text)
+    {
+        var t = text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? text[2..] : text;
+        return ulong.TryParse(t, System.Globalization.NumberStyles.HexNumber, null, out var a) ? a : throw new ArgumentException($"Ungültige Adresse „{text}“ (hexadezimal erwartet).");
     }
 }

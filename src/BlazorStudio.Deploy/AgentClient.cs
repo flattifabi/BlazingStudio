@@ -197,6 +197,40 @@ public sealed class AgentClient : IDisposable
         SendAsync(HttpMethod.Delete, $"api/services/{Esc(name)}/config/{Esc(file)}", null, ct);
 
     // ------------------------------------------------------------------
+    // Speicheranalyse (Agent ab 1.13.0)
+    // ------------------------------------------------------------------
+
+    /// <summary>Heap-Durchläufe auf dem Server können bei großen Prozessen dauern.</summary>
+    private static readonly TimeSpan MemoryTimeout = TimeSpan.FromMinutes(2);
+
+    public Task<List<MemoryProcess>> GetMemoryProcessesAsync(CancellationToken ct = default) =>
+        GetAsync<List<MemoryProcess>>("api/memory/processes", ct);
+
+    public Task<List<MemorySnapshotInfo>> GetMemorySnapshotsAsync(CancellationToken ct = default) =>
+        GetAsync<List<MemorySnapshotInfo>>("api/memory/snapshots", ct);
+
+    public Task<MemorySnapshotInfo> GetMemorySnapshotAsync(string id, CancellationToken ct = default) =>
+        GetAsync<MemorySnapshotInfo>($"api/memory/snapshots/{Esc(id)}", ct);
+
+    public Task<MemorySnapshotInfo> StartMemorySnapshotAsync(int processId, string? label, CancellationToken ct = default) =>
+        SendAsync<MemorySnapshotInfo>(HttpMethod.Post, "api/memory/snapshots", new MemorySnapshotRequest { ProcessId = processId, Label = label }, ct);
+
+    public Task DeleteMemorySnapshotAsync(string id, CancellationToken ct = default) =>
+        SendAsync(HttpMethod.Delete, $"api/memory/snapshots/{Esc(id)}", null, ct);
+
+    public Task<List<MemoryTypeStat>> GetMemoryTypesAsync(string id, CancellationToken ct = default) =>
+        GetAsync<List<MemoryTypeStat>>($"api/memory/snapshots/{Esc(id)}/types", ct, MemoryTimeout);
+
+    public Task<List<MemoryObjectRow>> GetMemoryInstancesAsync(string id, string type, int skip = 0, int take = 100, CancellationToken ct = default) =>
+        GetAsync<List<MemoryObjectRow>>($"api/memory/snapshots/{Esc(id)}/instances?type={Esc(type)}&skip={skip}&take={take}", ct, MemoryTimeout);
+
+    public Task<MemoryObjectDetail> GetMemoryObjectAsync(string id, ulong address, int from = 0, bool reachable = false, CancellationToken ct = default) =>
+        GetAsync<MemoryObjectDetail>($"api/memory/snapshots/{Esc(id)}/objects/{address:X}?from={from}&reachable={(reachable ? "true" : "false")}", ct, MemoryTimeout);
+
+    public Task<MemoryRootResult> GetMemoryRootsAsync(string id, ulong address, CancellationToken ct = default) =>
+        GetAsync<MemoryRootResult>($"api/memory/snapshots/{Esc(id)}/objects/{address:X}/roots", ct, MemoryTimeout);
+
+    // ------------------------------------------------------------------
     // Deployments
     // ------------------------------------------------------------------
 
@@ -241,10 +275,10 @@ public sealed class AgentClient : IDisposable
 
     private static string Esc(string s) => Uri.EscapeDataString(s);
 
-    private async Task<T> GetAsync<T>(string url, CancellationToken ct)
+    private async Task<T> GetAsync<T>(string url, CancellationToken ct, TimeSpan? timeout = null)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(CallTimeout);
+        cts.CancelAfter(timeout ?? CallTimeout);
         try
         {
             using var resp = await _http.GetAsync(url, cts.Token);

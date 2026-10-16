@@ -112,6 +112,11 @@
     /// <summary>Beim nächsten Öffnen diesen Reiter zeigen (z. B. „deploy“ aus dem Projekt-Menü).</summary>
     public static void Request(string? tab) => _requestedTab = tab;
 
+    private static string? _requestedServer;
+
+    /// <summary>Beim nächsten Öffnen diesen Server auswählen (z. B. zurück aus der Speicheranalyse).</summary>
+    public static void RequestServer(string? id) => _requestedServer = id;
+
     private sealed record TabDef(string Id, string Icon);
 
     private static readonly TabDef[] Tabs =
@@ -139,7 +144,9 @@
     protected override void OnStudioInitialized()
     {
         Iis.Changed += Refresh;
-        _selected = Iis.Servers.FirstOrDefault(s => Iis.Status(s).Health == ServerHealth.Online) ?? Iis.Servers.FirstOrDefault();
+        _selected = Iis.Servers.FirstOrDefault(s => s.Id == _requestedServer)
+            ?? Iis.Servers.FirstOrDefault(s => Iis.Status(s).Health == ServerHealth.Online) ?? Iis.Servers.FirstOrDefault();
+        _requestedServer = null;
         if (_requestedTab is { } t) _tab = t;
         _requestedTab = null;
         Iis.Watched = _selected;
@@ -161,6 +168,13 @@
         Iis.Watched = null;
         _timer?.Dispose();
         base.Dispose();
+    }
+
+    private void AnalyzeMemory(int processId, string label, string tab)
+    {
+        if (_selected is not { } s) return;
+        MemoryDialog.Request(s.Id, processId, label, tab);
+        Ui.OpenOverlay("memory");
     }
 
     private void Close()
@@ -414,6 +428,10 @@
                             {
                                 <button class="ibtn sm" title="@L["iis.recycle"]" disabled="@_busy" @onclick='() => Act(c => c.PoolActionAsync(pool.Name, "recycle"), L.F("iis.recycled", pool.Name))'><Icon Name="restart" /></button>
                                 <button class="ibtn sm danger" title="@L["iis.stop"]" disabled="@_busy" @onclick="() => StopPool(pool)"><Icon Name="stop" /></button>
+                                @if (pool.WorkerProcesses.Count > 0)
+                                {
+                                    <button class="ibtn sm" title="@L["mem.analyze"]" @onclick='() => AnalyzeMemory(pool.WorkerProcesses[0].ProcessId, L.F("mem.poolLabel", pool.Name), "pools")'><Icon Name="activity" /></button>
+                                }
                             }
                             else
                             {
@@ -1119,6 +1137,10 @@
                                 else
                                 {
                                     <button class="ibtn sm" title="@L["iis.start"]" disabled="@_busy" @onclick='() => Act(c => c.ServiceActionAsync(svc.Name, "start"), L.F("iis.startedToast", svc.Name))'><Icon Name="play" /></button>
+                                }
+                                @if (svc.ProcessId is > 0 and var svcPid)
+                                {
+                                    <button class="ibtn sm" title="@L["mem.analyze"]" @onclick='() => AnalyzeMemory(svcPid, svc.Name, "services")'><Icon Name="activity" /></button>
                                 }
                                 <button class="ibtn sm" title="@L["iis.deployHere"]" @onclick="() => DeployToService(svc.Name)"><Icon Name="rocket" /></button>
                                 <button class="ibtn sm danger" title="@L["action.delete"]" disabled="@_busy" @onclick="() => DeleteService(svc)"><Icon Name="trash" /></button>

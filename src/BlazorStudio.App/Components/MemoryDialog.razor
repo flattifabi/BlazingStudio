@@ -1,0 +1,736 @@
+@inherits StudioComponent
+@inject IisService Iis
+@using System.Globalization
+@using BlazorStudio.Deploy
+
+@* Speicheranalyse eines .NET-Prozesses auf einem Server mit Blazor Studio Agent (ClrMD auf dem Server). *@
+<div class="backdrop" style="padding-top:3vh" @onclick="Close">
+    <div class="dialog nuget iis mem" @onclick:stopPropagation="true">
+        <div class="ng-head">
+            <div class="iic"><Icon Name="activity" /></div>
+            <div class="t">
+                <h2>@L["mem.title"]</h2>
+                <small class="dim">@(_server?.Display ?? "–")@(_agentVersion is { } v ? " · Agent " + v : "")</small>
+            </div>
+            <button class="ibtn" title="@L["nuget.refresh"]" @onclick="ReloadAll"><Icon Name="refresh" Class="@(_loading ? "spin" : null)" /></button>
+            <button class="ibtn" title="@L["mem.back"]" @onclick="Close"><Icon Name="x" /></button>
+        </div>
+
+        <div class="iis-body">
+            @* ------------------------------ Prozesse & Snapshots ------------------------------ *@
+            <div class="iis-servers scroll">
+                <div class="iis-group">@L["mem.processes"]</div>
+                @if (_processes is null)
+                {
+                    <div class="ins-empty" style="padding:12px"><Icon Name="refresh" Class="spin" /></div>
+                }
+                else if (_processes.Count == 0)
+                {
+                    <div class="dim" style="font-size:12px;padding:4px 8px">@L["mem.noProcesses"]</div>
+                }
+                else
+                {
+                    @foreach (var item in _processes)
+                    {
+                        var p = item;
+                        <div class="iis-srv mem-proc" title="@(p.Is32Bit ? L["mem.is32"] : L["mem.snapshotHint"])">
+                            <div class="ng-main">
+                                <b>@(p.Label.Length > 0 ? p.Label : p.Name)</b>
+                                <small>@p.Name · PID @p.ProcessId · @Size(p.WorkingSetBytes)@(p.Is32Bit ? " · 32-Bit" : "")</small>
+                            </div>
+                            <button class="ibtn sm" title="@L["mem.snapshot"]" disabled="@(_starting || p.Is32Bit || Running)" @onclick="() => StartSnapshot(p.ProcessId, p.Label.Length > 0 ? p.Label : p.Name)"><Icon Name="activity" /></button>
+                        </div>
+                    }
+                }
+
+                <div class="iis-group" style="margin-top:8px">@L["mem.snapshots"]</div>
+                @if (_snapshots is { Count: > 0 })
+                {
+                    @foreach (var item in _snapshots)
+                    {
+                        var snap = item;
+                        <div class="iis-srv @(snap.Id == _selectedId ? "on" : "")" @onclick="() => Select(snap.Id)">
+                            <span class="iis-dot @(snap.State switch { "ready" => snap.DetailsAvailable ? "ok" : "", "failed" => "err", _ => "busy" })"></span>
+                            <div class="ng-main">
+                                <b>@(snap.Label.Length > 0 ? snap.Label : snap.ProcessName)</b>
+                                <small>@snap.CreatedAt.ToLocalTime().ToString("dd.MM. HH:mm:ss", CultureInfo.CurrentCulture)@(snap.IsReady ? " · " + Size(snap.HeapBytes) : "")</small>
+                            </div>
+                            <button class="ibtn sm danger" title="@L["action.delete"]" disabled="@(snap.State == "running")" @onclick:stopPropagation="true" @onclick="() => DeleteSnapshot(snap)"><Icon Name="trash" /></button>
+                        </div>
+                    }
+                }
+                else if (_snapshots is not null)
+                {
+                    <div class="dim" style="font-size:12px;padding:4px 8px">@L["mem.noSnapshots"]</div>
+                }
+            </div>
+
+            @* ------------------------------ Inhalt ------------------------------ *@
+            <div class="iis-main">
+                @if (_error is { } err)
+                {
+                    <div class="banner warn" style="margin:10px 14px 0"><Icon Name="alert" /><span>@err</span><span class="grow"></span><button class="ibtn sm" @onclick="() => _error = null"><Icon Name="x" /></button></div>
+                }
+                @if (_tooOld is { } old)
+                {
+                    <div class="iis-welcome scroll"><h3>@L["mem.title"]</h3><p class="dim">@old</p></div>
+                }
+                else if (Selected is not { } snap)
+                {
+                    <div class="iis-welcome scroll">
+                        <div class="iic" style="width:44px;height:44px"><Icon Name="activity" /></div>
+                        <h3>@L["mem.welcomeTitle"]</h3>
+                        <p class="dim">@L["mem.welcomeText"]</p>
+                        <p class="dim">@L["mem.welcomeHow"]</p>
+                    </div>
+                }
+                else if (snap.State == "running")
+                {
+                    <div class="iis-welcome">
+                        <h3><Icon Name="refresh" Class="spin" /> @L["mem.analyzing"]</h3>
+                        <p class="dim">@(snap.Step ?? "…")</p>
+                        <p class="dim">@L["mem.analyzingHint"]</p>
+                    </div>
+                }
+                else if (snap.State == "failed")
+                {
+                    <div class="iis-welcome scroll">
+                        <h3>@L["mem.failed"]</h3>
+                        <p class="err-text">@snap.Error</p>
+                        <button class="btn ac" disabled="@(_starting || Running)" @onclick="() => StartSnapshot(snap.ProcessId, snap.Label)"><Icon Name="refresh" />@L["mem.retry"]</button>
+                    </div>
+                }
+                else
+                {
+                    <div class="iis-tabs">
+                        <div class="seg">
+                            <button class="@(_view == "types" ? "on" : "")" @onclick='() => _view = "types"'><Icon Name="layers" />@L["mem.view.types"]</button>
+                            <button class="@(_view == "object" ? "on" : "")" disabled="@(_stack.Count == 0)" @onclick='() => _view = "object"'><Icon Name="cube" />@L["mem.view.object"]</button>
+                        </div>
+                        <span class="grow"></span>
+                        <span class="dim iis-addr">@snap.ProcessName (PID @snap.ProcessId) · @snap.Runtime</span>
+                    </div>
+                    <div class="iis-content scroll">
+                        @Summary(snap)
+                        @if (!snap.DetailsAvailable)
+                        {
+                            <div class="banner" style="margin:8px 0"><Icon Name="info" /><span>@L["mem.detailsGone"]</span></div>
+                        }
+                        @if (_view == "object" && _stack.Count > 0)
+                        {
+                            @ObjectView(snap)
+                        }
+                        else
+                        {
+                            @TypesView(snap)
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private static string? _requestedServer;
+    private static int? _requestedPid;
+    private static string? _requestedLabel;
+    private static string? _returnTab;
+
+    /// <summary>Beim nächsten Öffnen diesen Server zeigen und – falls angegeben – gleich einen Snapshot des Prozesses erstellen.</summary>
+    public static void Request(string serverId, int? processId = null, string? label = null, string? returnTab = null)
+    {
+        _requestedServer = serverId;
+        _requestedPid = processId;
+        _requestedLabel = label;
+        _returnTab = returnTab;
+    }
+
+    private IisServerEntry? _server;
+    private string? _agentVersion;
+    private string? _tooOld;
+    private string? _error;
+    private bool _loading;
+    private bool _starting;
+    private Timer? _timer;
+
+    private List<MemoryProcess>? _processes;
+    private List<MemorySnapshotInfo>? _snapshots;
+    private string? _selectedId;
+    private string _view = "types";
+
+    // Typen
+    private List<MemoryTypeStat>? _types;
+    private string? _typesFor;
+    private string _filter = "";
+    private string? _compareId;
+    private List<MemoryTypeDelta>? _deltas;
+    private int _typeLimit = 200;
+
+    // Instanzen eines Typs
+    private string? _instType;
+    private List<MemoryObjectRow>? _instances;
+    private bool _instMore;
+
+    // Objekt-Navigation
+    private readonly List<MemoryObjectDetail> _stack = new();
+    private MemoryRootResult? _roots;
+    private bool _objBusy;
+
+    private MemorySnapshotInfo? Selected => _snapshots?.FirstOrDefault(s => s.Id == _selectedId);
+    private bool Running => _snapshots?.Any(s => s.State == "running") == true;
+
+    protected override void OnStudioInitialized()
+    {
+        _server = Iis.Servers.FirstOrDefault(s => s.Id == _requestedServer) ?? Iis.Servers.FirstOrDefault();
+        var pid = _requestedPid;
+        var label = _requestedLabel;
+        _requestedServer = null;
+        _requestedPid = null;
+        _requestedLabel = null;
+        _ = InitAsync(pid, label);
+        _timer = new Timer(_ => InvokeAsync(async () =>
+        {
+            if (Running) await LoadSnapshotsAsync();
+        }), null, 1500, 1500);
+    }
+
+    public override void Dispose()
+    {
+        _timer?.Dispose();
+        base.Dispose();
+    }
+
+    private AgentClient? Client => _server is null ? null : Iis.Client(_server);
+
+    private async Task InitAsync(int? pid, string? label)
+    {
+        if (_server is null || Client is not { } c) return;
+        try
+        {
+            _agentVersion = (await c.PingAsync()).Version;
+            if (AgentDefaults.IsOlderThan(_agentVersion, AgentDefaults.MinimumMemoryVersion))
+            {
+                _tooOld = L.F("mem.agentTooOld", _agentVersion, AgentDefaults.MinimumMemoryVersion);
+                _processes = new();
+                _snapshots = new();
+                StateHasChanged();
+                return;
+            }
+        }
+        catch (AgentException e)
+        {
+            _error = e.Message;
+            StateHasChanged();
+            return;
+        }
+        await Task.WhenAll(LoadProcessesAsync(), LoadSnapshotsAsync());
+        if (pid is { } p) await StartSnapshot(p, label ?? "");
+        else if (_snapshots?.FirstOrDefault(s => s.IsReady && s.DetailsAvailable) is { } latest) await Select(latest.Id);
+        StateHasChanged();
+    }
+
+    private void Close()
+    {
+        IisDialog.Request(_returnTab ?? "pools");
+        IisDialog.RequestServer(_server?.Id);
+        Ui.OpenOverlay("iis");
+    }
+
+    private async Task ReloadAll()
+    {
+        if (_tooOld is not null) return;
+        _loading = true;
+        await Task.WhenAll(LoadProcessesAsync(), LoadSnapshotsAsync());
+        _loading = false;
+    }
+
+    private async Task LoadProcessesAsync()
+    {
+        if (Client is not { } c) return;
+        try
+        {
+            _processes = await c.GetMemoryProcessesAsync();
+        }
+        catch (AgentException e)
+        {
+            _processes = new();
+            _error = e.Message;
+        }
+        StateHasChanged();
+    }
+
+    private async Task LoadSnapshotsAsync()
+    {
+        if (Client is not { } c) return;
+        try
+        {
+            var wasRunning = Selected is { State: "running" };
+            _snapshots = await c.GetMemorySnapshotsAsync();
+            if (wasRunning && Selected is { IsReady: true } done) await LoadTypesAsync(done);
+        }
+        catch (AgentException e)
+        {
+            _error = e.Message;
+        }
+        StateHasChanged();
+    }
+
+    private async Task StartSnapshot(int pid, string label)
+    {
+        if (Client is not { } c) return;
+        _starting = true;
+        _error = null;
+        try
+        {
+            var info = await c.StartMemorySnapshotAsync(pid, label);
+            await LoadSnapshotsAsync();
+            ResetSelection();
+            _selectedId = info.Id;
+        }
+        catch (AgentException e)
+        {
+            _error = e.Message;
+        }
+        finally
+        {
+            _starting = false;
+        }
+    }
+
+    private void ResetSelection()
+    {
+        _types = null;
+        _typesFor = null;
+        _deltas = null;
+        _compareId = null;
+        _instType = null;
+        _instances = null;
+        _stack.Clear();
+        _roots = null;
+        _view = "types";
+        _typeLimit = 200;
+    }
+
+    private async Task Select(string id)
+    {
+        if (_selectedId == id) return;
+        ResetSelection();
+        _selectedId = id;
+        if (Selected is { IsReady: true } snap) await LoadTypesAsync(snap);
+    }
+
+    private async Task DeleteSnapshot(MemorySnapshotInfo snap)
+    {
+        if (Client is not { } c) return;
+        try
+        {
+            await c.DeleteMemorySnapshotAsync(snap.Id);
+            if (_selectedId == snap.Id)
+            {
+                ResetSelection();
+                _selectedId = null;
+            }
+            await LoadSnapshotsAsync();
+        }
+        catch (AgentException e)
+        {
+            _error = e.Message;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Übersicht
+    // ------------------------------------------------------------------
+
+    private RenderFragment Summary(MemorySnapshotInfo s) => __builder =>
+    {
+        var gens = new (string Name, long Bytes, string Css)[]
+        {
+            ("Gen 0", s.Gen0Bytes, "g0"), ("Gen 1", s.Gen1Bytes, "g1"), ("Gen 2", s.Gen2Bytes, "g2"), ("LOH", s.LargeBytes, "loh"), ("POH", s.PinnedBytes, "poh"),
+        };
+        var total = Math.Max(1, gens.Sum(g => g.Bytes));
+        <div class="iis-facts mem-facts">
+            <div class="card iis-big" title="@L["mem.heapHint"]"><b>@Size(s.HeapBytes)</b><span>@L["mem.heap"]</span></div>
+            <div class="card iis-big" title="@L["mem.wsHint"]"><b>@Size(s.WorkingSetBytes)</b><span>@L["mem.workingSet"]</span></div>
+            <div class="card iis-big"><b>@s.ObjectCount.ToString("N0", CultureInfo.CurrentCulture)</b><span>@L.F("mem.objects", s.TypeCount.ToString("N0", CultureInfo.CurrentCulture))</span></div>
+            <div class="card iis-big" title="@L["mem.pauseHint"]"><b>@s.PauseMs ms</b><span>@L.F("mem.pause", (s.AnalysisMs / 1000.0).ToString("0.#", CultureInfo.CurrentCulture))</span></div>
+        </div>
+        <div class="mem-gens">
+            <div class="mem-genbar">
+                @foreach (var g in gens.Where(g => g.Bytes > 0))
+                {
+                    <i class="@g.Css" style="width:@((g.Bytes * 100.0 / total).ToString("0.##", CultureInfo.InvariantCulture))%" title="@g.Name: @Size(g.Bytes)"></i>
+                }
+            </div>
+            <div class="mem-legend">
+                @foreach (var g in gens)
+                {
+                    <span><i class="@g.Css"></i>@g.Name <b>@Size(g.Bytes)</b></span>
+                }
+                <span title="@L["mem.freeHint"]"><i class="free"></i>@L["mem.free"] <b>@Size(s.FreeBytes)</b></span>
+            </div>
+            <small class="dim">@L["mem.gensHint"]</small>
+        </div>
+    };
+
+    // ------------------------------------------------------------------
+    // Typen
+    // ------------------------------------------------------------------
+
+    private async Task LoadTypesAsync(MemorySnapshotInfo snap)
+    {
+        if (Client is not { } c || _typesFor == snap.Id) return;
+        _typesFor = snap.Id;
+        _types = null;
+        try
+        {
+            _types = await c.GetMemoryTypesAsync(snap.Id);
+        }
+        catch (AgentException e)
+        {
+            _types = new();
+            _error = e.Message;
+        }
+        StateHasChanged();
+    }
+
+    private async Task SetCompare(string? id)
+    {
+        _compareId = string.IsNullOrEmpty(id) ? null : id;
+        _deltas = null;
+        if (_compareId is null || Client is not { } c || _types is null) return;
+        try
+        {
+            var before = await c.GetMemoryTypesAsync(_compareId);
+            _deltas = MemoryTypeDelta.Compare(before, _types);
+        }
+        catch (AgentException e)
+        {
+            _error = e.Message;
+            _compareId = null;
+        }
+    }
+
+    private bool Matches(string type) => _filter.Length == 0 || type.Contains(_filter, StringComparison.OrdinalIgnoreCase);
+
+    private RenderFragment TypesView(MemorySnapshotInfo snap) => __builder =>
+    {
+        var others = _snapshots!.Where(o => o.Id != snap.Id && o.IsReady).ToList();
+        <div class="iis-toolbar" style="margin-top:12px">
+            <div class="f" style="width:280px"><Icon Name="search" /><input placeholder="@L["mem.filter"]" value="@_filter" @oninput="e => { _filter = e.Value?.ToString() ?? string.Empty; _typeLimit = 200; }" /></div>
+            <span class="grow"></span>
+            <label class="dim" style="font-size:12px">@L["mem.compare"]</label>
+            <select class="sel" style="max-width:260px" value="@(_compareId ?? "")" @onchange="e => SetCompare(e.Value?.ToString())">
+                <option value="">@L["mem.compareNone"]</option>
+                @foreach (var o in others)
+                {
+                    <option value="@o.Id">@((o.Label.Length > 0 ? o.Label : o.ProcessName) + " · " + o.CreatedAt.ToLocalTime().ToString("dd.MM. HH:mm:ss", CultureInfo.CurrentCulture))</option>
+                }
+            </select>
+        </div>
+        if (_types is null)
+        {
+            <div class="ins-empty"><Icon Name="refresh" Class="spin" /></div>
+            return;
+        }
+        if (_compareId is not null)
+        {
+            if (_deltas is null)
+            {
+                <div class="ins-empty"><Icon Name="refresh" Class="spin" /></div>
+                return;
+            }
+            <p class="dim" style="font-size:12px;margin:0 0 6px">@L["mem.compareHint"]</p>
+            <table class="ptable iis-table mem-table">
+                <thead><tr><th>@L["mem.type"]</th><th class="num" style="width:12%">@L["mem.countBefore"]</th><th class="num" style="width:12%">@L["mem.countAfter"]</th><th class="num" style="width:11%">Δ</th><th class="num" style="width:13%">Δ @L["mem.bytes"]</th></tr></thead>
+                <tbody>
+                    @foreach (var d in _deltas.Where(d => Matches(d.Type)).Take(_typeLimit))
+                    {
+                        var delta = d;
+                        <tr @onclick="() => ToggleInstances(snap, delta.Type)">
+                            <td class="mono mem-type" title="@delta.Type">@delta.Type</td>
+                            <td class="num mono">@N(delta.CountBefore)</td>
+                            <td class="num mono">@N(delta.CountAfter)</td>
+                            <td class="num mono @(delta.CountDelta > 0 ? "err-text" : "ok-text")">@Signed(delta.CountDelta)</td>
+                            <td class="num mono @(delta.BytesDelta > 0 ? "err-text" : "ok-text")">@((delta.BytesDelta > 0 ? "+" : "−") + Size(Math.Abs(delta.BytesDelta)))</td>
+                        </tr>
+                        @if (_instType == delta.Type) { <tr class="iis-versions-row"><td colspan="5">@InstancesPanel(snap)</td></tr> }
+                    }
+                </tbody>
+            </table>
+            @MoreTypes(_deltas.Count(d => Matches(d.Type)))
+            return;
+        }
+        var heap = Math.Max(1, snap.HeapBytes);
+        <table class="ptable iis-table mem-table">
+            <thead><tr><th>@L["mem.type"]</th><th class="num" style="width:12%">@L["mem.count"]</th><th class="num" style="width:12%">@L["mem.bytes"]</th><th style="width:16%">@L["mem.share"]</th><th class="num" style="width:12%">@L["mem.largest"]</th></tr></thead>
+            <tbody>
+                @foreach (var t in _types.Where(t => Matches(t.Type)).Take(_typeLimit))
+                {
+                    var type = t;
+                    var pct = type.Bytes * 100.0 / heap;
+                    <tr class="@(_instType == type.Type ? "iis-open" : "")" @onclick="() => ToggleInstances(snap, type.Type)">
+                        <td class="mono mem-type" title="@type.Type">@type.Type</td>
+                        <td class="num mono">@N(type.Count)</td>
+                        <td class="num mono">@Size(type.Bytes)</td>
+                        <td><div class="mem-share"><i style="width:@(Math.Min(100, pct).ToString("0.##", CultureInfo.InvariantCulture))%"></i></div><small class="dim">@pct.ToString("0.0", CultureInfo.CurrentCulture) %</small></td>
+                        <td class="num mono">@Size(type.MaxBytes)</td>
+                    </tr>
+                    @if (_instType == type.Type) { <tr class="iis-versions-row"><td colspan="5">@InstancesPanel(snap)</td></tr> }
+                }
+            </tbody>
+        </table>
+        @MoreTypes(_types.Count(t => Matches(t.Type)))
+    };
+
+    private RenderFragment MoreTypes(int count) => __builder =>
+    {
+        if (count > _typeLimit)
+        {
+            <button class="btn sm dashed wide" style="margin-top:8px" @onclick="() => _typeLimit += 500">@L.F("mem.moreTypes", N(count - _typeLimit))</button>
+        }
+    };
+
+    // ------------------------------------------------------------------
+    // Instanzen
+    // ------------------------------------------------------------------
+
+    private async Task ToggleInstances(MemorySnapshotInfo snap, string type)
+    {
+        if (_instType == type)
+        {
+            _instType = null;
+            return;
+        }
+        _instType = type;
+        _instances = null;
+        if (!snap.DetailsAvailable) return;
+        await LoadInstancesAsync(snap, 0);
+    }
+
+    private async Task LoadInstancesAsync(MemorySnapshotInfo snap, int skip)
+    {
+        if (Client is not { } c || _instType is not { } type) return;
+        try
+        {
+            var rows = await c.GetMemoryInstancesAsync(snap.Id, type, skip, 100);
+            if (_instType != type) return;
+            _instances = skip == 0 ? rows : (_instances ?? new()).Concat(rows).ToList();
+            _instMore = rows.Count == 100;
+        }
+        catch (AgentException e)
+        {
+            _instances = new();
+            _error = e.Message;
+            await LoadSnapshotsAsync();
+        }
+    }
+
+    private RenderFragment InstancesPanel(MemorySnapshotInfo snap) => __builder =>
+    {
+        <div class="iis-versions">
+            @if (!snap.DetailsAvailable)
+            {
+                <div class="dim" style="font-size:12px;padding:4px 6px">@L["mem.detailsGone"]</div>
+            }
+            else if (_instances is null)
+            {
+                <div class="ins-empty" style="padding:10px"><Icon Name="refresh" Class="spin" /><span>@L["mem.instancesLoading"]</span></div>
+            }
+            else
+            {
+                <div class="iis-versions-h"><b>@L["mem.instances"]</b><span class="dim">@L["mem.instancesHint"]</span></div>
+                @foreach (var r in _instances)
+                {
+                    var row = r;
+                    <div class="iis-ver mem-inst" @onclick="() => OpenObject(snap, row.Address, push: false)">
+                        <span class="mono iis-link">0x@row.Address.ToString("X")</span>
+                        <span class="mono" style="width:80px;text-align:right">@Size(row.Size)</span>
+                        <span class="chip">Gen @row.Generation</span>
+                        <span class="mono dim mem-preview">@row.Preview</span>
+                    </div>
+                }
+                @if (_instMore)
+                {
+                    <button class="btn sm dashed" style="margin:4px 6px" @onclick="() => LoadInstancesAsync(snap, _instances.Count)">@L["mem.more"]</button>
+                }
+            }
+        </div>
+    };
+
+    // ------------------------------------------------------------------
+    // Objekt
+    // ------------------------------------------------------------------
+
+    private async Task OpenObject(MemorySnapshotInfo snap, ulong address, bool push, int from = 0)
+    {
+        if (Client is not { } c || _objBusy) return;
+        _objBusy = true;
+        try
+        {
+            var detail = await c.GetMemoryObjectAsync(snap.Id, address, from);
+            if (!push) _stack.Clear();
+            else if (_stack.Count > 0 && _stack[^1].Address == address) _stack.RemoveAt(_stack.Count - 1);
+            _stack.Add(detail);
+            _roots = null;
+            _view = "object";
+        }
+        catch (AgentException e)
+        {
+            _error = e.Message;
+            await LoadSnapshotsAsync();
+        }
+        finally
+        {
+            _objBusy = false;
+        }
+    }
+
+    private void Back(int index)
+    {
+        _stack.RemoveRange(index + 1, _stack.Count - index - 1);
+        _roots = null;
+    }
+
+    private async Task Reachable(MemorySnapshotInfo snap)
+    {
+        if (Client is not { } c || _stack.Count == 0 || _objBusy) return;
+        _objBusy = true;
+        try
+        {
+            var cur = _stack[^1];
+            _stack[^1] = await c.GetMemoryObjectAsync(snap.Id, cur.Address, cur.ElementsFrom, reachable: true);
+        }
+        catch (AgentException e)
+        {
+            _error = e.Message;
+        }
+        finally
+        {
+            _objBusy = false;
+        }
+    }
+
+    private async Task FindRoots(MemorySnapshotInfo snap)
+    {
+        if (Client is not { } c || _stack.Count == 0 || _objBusy) return;
+        _objBusy = true;
+        _roots = null;
+        try
+        {
+            _roots = await c.GetMemoryRootsAsync(snap.Id, _stack[^1].Address);
+        }
+        catch (AgentException e)
+        {
+            _error = e.Message;
+        }
+        finally
+        {
+            _objBusy = false;
+        }
+    }
+
+    private RenderFragment ObjectView(MemorySnapshotInfo snap) => __builder =>
+    {
+        var o = _stack[^1];
+        <div class="mem-crumbs">
+            @for (var i = 0; i < _stack.Count; i++)
+            {
+                var index = i;
+                var item = _stack[i];
+                @if (i > 0) { <Icon Name="chev" /> }
+                <button class="@(index == _stack.Count - 1 ? "on" : "")" title="0x@item.Address.ToString("X")" @onclick="() => Back(index)">@ShortType(item.Type)</button>
+            }
+        </div>
+        <div class="mem-obj-h">
+            <div class="ng-main">
+                <b class="mono">@o.Type</b>
+                <small class="dim mono">0x@o.Address.ToString("X") · @Size(o.Size) · Gen @o.Generation@(o.Length is { } len ? " · " + L.F("mem.length", N(len)) : "")</small>
+            </div>
+            <span class="grow"></span>
+            @if (o.ReachableBytes is { } rb)
+            {
+                <span class="chip" title="@L["mem.reachableHint"]">@L.F("mem.reachable", Size(rb), N(o.ReachableObjects ?? 0))@(o.ReachableTruncated ? " +" : "")</span>
+            }
+            else
+            {
+                <button class="btn sm" disabled="@_objBusy" title="@L["mem.reachableHint"]" @onclick="() => Reachable(snap)"><Icon Name="layers" />@L["mem.reachableCalc"]</button>
+            }
+            <button class="btn sm ac" disabled="@_objBusy" @onclick="() => FindRoots(snap)"><Icon Name="link" />@L["mem.roots"]</button>
+        </div>
+        @if (_objBusy)
+        {
+            <div class="ins-empty" style="padding:10px"><Icon Name="refresh" Class="spin" /></div>
+        }
+        @if (_roots is { } roots)
+        {
+            <div class="iis-versions" style="margin:8px 0">
+                <div class="iis-versions-h"><b>@L["mem.rootsTitle"]</b><span class="dim">@L["mem.rootsHint"]</span></div>
+                @if (roots.Paths.Count == 0)
+                {
+                    <div class="dim" style="font-size:12px;padding:4px 6px">@L["mem.noRoots"]</div>
+                }
+                @foreach (var path in roots.Paths)
+                {
+                    <div class="mem-path">
+                        <span class="chip ac">@path.RootKind</span>
+                        @foreach (var step in path.Steps)
+                        {
+                            var st = step;
+                            @if (st.Via is { } via) { <span class="dim mono">→ .@via →</span> }
+                            <span class="mono iis-link" title="0x@st.Address.ToString("X")" @onclick="() => OpenObject(snap, st.Address, push: true)">@ShortType(st.Type)</span>
+                        }
+                    </div>
+                }
+                @if (roots.Truncated) { <div class="dim" style="font-size:11.5px;padding:4px 6px">@L["mem.rootsTruncated"]</div> }
+            </div>
+        }
+        @if (o.Text is { } text)
+        {
+            <pre class="mem-text mono">@text</pre>
+        }
+        @if (o.Fields.Count > 0)
+        {
+            @FieldTable(snap, o.Fields, L["mem.field"])
+        }
+        @if (o.Length is { } n && o.Text is null)
+        {
+            <div class="iis-toolbar" style="margin-top:10px">
+                <b style="font-size:12px">@L.F("mem.elements", N(o.ElementsFrom), N(Math.Min(n, o.ElementsFrom + o.Elements.Count)), N(n))</b>
+                <span class="grow"></span>
+                <button class="btn sm" disabled="@(o.ElementsFrom == 0 || _objBusy)" @onclick="() => OpenObject(snap, o.Address, push: true, from: Math.Max(0, o.ElementsFrom - 200))"><Icon Name="up" /></button>
+                <button class="btn sm" disabled="@(o.ElementsFrom + o.Elements.Count >= n || _objBusy)" @onclick="() => OpenObject(snap, o.Address, push: true, from: o.ElementsFrom + 200)"><Icon Name="down" /></button>
+            </div>
+            @FieldTable(snap, o.Elements, L["mem.index"])
+        }
+    };
+
+    private RenderFragment FieldTable(MemorySnapshotInfo snap, List<MemoryField> fields, string firstColumn) => __builder =>
+    {
+        <table class="ptable iis-table mem-table" style="margin-top:8px">
+            <thead><tr><th style="width:26%">@firstColumn</th><th style="width:28%">@L["mem.type"]</th><th>@L["mem.value"]</th></tr></thead>
+            <tbody>
+                @foreach (var f in fields)
+                {
+                    var field = f;
+                    <tr class="@(field.Reference is null ? "mem-noref" : "")" @onclick="() => field.Reference is { } r ? OpenObject(snap, r, push: true) : Task.CompletedTask">
+                        <td class="mono mem-type" title="@field.Name">@field.Name</td>
+                        <td class="mono dim mem-type" title="@field.Type">@ShortType(field.Type)</td>
+                        <td class="mono mem-type @(field.Reference is not null ? "iis-link" : "")" title="@field.Value">@field.Value</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    };
+
+    // ------------------------------------------------------------------
+
+    private static string Size(long bytes) => IisService.ProfilerSize(bytes);
+
+    private static string N(long n) => n.ToString("N0", CultureInfo.CurrentCulture);
+
+    private static string Signed(long n) => (n > 0 ? "+" : n < 0 ? "−" : "") + Math.Abs(n).ToString("N0", CultureInfo.CurrentCulture);
+
+    private static string ShortType(string type) => MemoryTypeDelta.ShortType(type);
+}

@@ -90,9 +90,18 @@ Fertige Vorlagen für GitHub Actions, Azure DevOps und GitLab erzeugt der Pipeli
 | GET/PUT | `/api/services/{name}/persist`, `/api/services/{name}/config[/{file}]` | persistente Dateien, appsettings*.json |
 | GET/PUT | `/api/sites/{name}/persist?app=/` | persistente Dateien/Ordner `{ paths: ["app.db", "App_Data"] }` – wandern bei jedem Umschalten mit |
 | GET | `/api/sites/{name}/logs?app=/`, `/api/sites/{name}/logs/{file}?app=/` | stdout-Logs (Ende der Datei, max. 512 KB) |
+| GET | `/api/memory/processes` | .NET-Prozesse (IIS-Worker, Dienste, andere) für die Speicheranalyse |
+| GET/POST | `/api/memory/snapshots` | Snapshots auflisten / erstellen `{ processId, label }` (läuft im Hintergrund) |
+| GET/DELETE | `/api/memory/snapshots/{id}` | Stand / löschen |
+| GET | `/api/memory/snapshots/{id}/types` | Typ-Statistik (Anzahl, Bytes) |
+| GET | `/api/memory/snapshots/{id}/instances?type=&skip=&take=` | Instanzen eines Typs, größte zuerst |
+| GET | `/api/memory/snapshots/{id}/objects/{hexAdresse}?from=&reachable=` | Felder/Elemente/Text eines Objekts, optional erreichbare Größe |
+| GET | `/api/memory/snapshots/{id}/objects/{hexAdresse}/roots` | Referenzpfade von GC-Wurzeln zum Objekt |
 | POST | `/api/deployments` | multipart: `package` (ZIP) + `site`, `version`, `appPath`, `healthUrl`, `rollback`, `createSite`, `binding`, `pool`, `runtime`, `overwrite`, `activate`, `source`, `commit`, `notes` → 202 |
 | GET | `/api/deployments?site=&take=` | Verlauf |
 | GET | `/api/deployments/{id}` | Stand mit Log (zum Abfragen bis `state` ≠ Queued/Running) |
+
+Speicheranalyse: Der Agent erstellt mit `PssCaptureSnapshot` eine Kopie des Prozesses (die App wird nur Millisekunden angehalten) und liest den .NET-Heap mit ClrMD direkt auf dem Server. Die Typ-Statistik liegt in `<DataDirectory>\memory`; die Kopie bleibt für Objekt-Details bis 20 Minuten nach dem letzten Zugriff offen (höchstens zwei gleichzeitig). Nur 64-Bit-Prozesse; der Agent braucht dafür LocalSystem/Administrator.
 
 Beispiel mit curl:
 
