@@ -21,6 +21,9 @@ public static class AgentDefaults
     /// <summary>Ältester Agent, der Windows-Dienste ausrollen kann.</summary>
     public const string MinimumServiceVersion = "1.11.0";
 
+    /// <summary>Ältester Agent mit Speicheranalyse (ClrMD).</summary>
+    public const string MinimumMemoryVersion = "1.13.0";
+
     /// <summary>True, wenn die Agent-Version (z. B. „1.6.1“) älter als <paramref name="minimum"/> ist. Unlesbare Versionen gelten als veraltet.</summary>
     public static bool IsOlderThan(string? agentVersion, string minimum)
     {

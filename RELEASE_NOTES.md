@@ -1,3 +1,12 @@
+## Neu: Speicheranalyse von Apps auf dem Server
+- Im IIS-Fenster gibt es bei laufenden **App-Pools** und **Diensten** den Knopf **„Speicher analysieren“** (Puls-Symbol). Der Agent erstellt eine Kopie des Prozesses – die App wird dabei nur Millisekunden angehalten – und wertet den .NET-Heap direkt auf dem Server aus (Microsoft ClrMD). Es wird kein Dump übertragen.
+- **Woher kommt der Speicher?** Verwalteter Heap vs. Working Set, Aufteilung auf Gen 0/1/2, Large Object Heap und Pinned Heap, Fragmentierung, und eine Tabelle aller Typen nach Größe und Anzahl (filterbar).
+- **Was steht drin?** Typ anklicken → Instanzen (größte zuerst, mit Vorschau) → Objekt mit allen Feldern und Werten (Strings, Zahlen, DateTime, Guid, Enums, Structs), Listen/Arrays elementweise, Referenzen zum Weiterklicken mit Brotkrumen-Navigation.
+- **„Wer hält das fest?“** zeigt die Referenzpfade von der GC-Wurzel (statisches Feld, Handle, lokale Variable) bis zum Objekt – die Ursache von Speicherlecks. „Erreichbare Größe“ zeigt, wie viel an einem Objekt hängt.
+- **Snapshots vergleichen:** zwei Snapshots desselben Prozesses (z. B. vor und nach einem Lasttest) – sortiert nach Zuwachs pro Typ.
+- ASP.NET Core „out-of-process“ hinter IIS: Der Agent analysiert automatisch den App-Prozess unter w3wp.exe.
+- **Agent 1.13.0 nötig.**
+
 ## Neu: Claude Code im Web – ohne Installation
 - Im Claude-Panel: **„Ohne Installation: Claude Code im Web“** (auch im Zahnrad-Menü; ohne installiertes Claude Code direkt sichtbar). Claude Code im Web läuft in der Cloud mit deinem Claude-Abo – keine Installation, keine API-Kosten – und arbeitet auf deinem GitHub-Repository.
 - Auftrag eintippen → **„Auftrag kopieren & öffnen“**: Der Auftrag kommt mit Repository, Branch und aktiver Datei in die Zwischenablage, claude.ai/code öffnet sich im Browser – dort Repository wählen und einfügen.

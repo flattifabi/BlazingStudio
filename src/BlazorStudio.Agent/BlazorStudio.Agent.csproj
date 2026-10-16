@@ -14,7 +14,7 @@
     <Product>Blazor Studio Agent</Product>
     <Company>Blazor Studio</Company>
     <Copyright>© 2026 Blazor Studio</Copyright>
-    <Version>1.11.0</Version>
+    <Version>1.13.0</Version>
     <ApplicationIcon>..\..\branding\logo.ico</ApplicationIcon>
     <InvariantGlobalization>true</InvariantGlobalization>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
@@ -25,6 +25,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.Diagnostics.NETCore.Client" Version="0.2.750501" />
+    <PackageReference Include="Microsoft.Diagnostics.Runtime" Version="4.2.751201" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.12" />
     <PackageReference Include="Microsoft.Web.Administration" Version="11.1.0" />
   </ItemGroup>

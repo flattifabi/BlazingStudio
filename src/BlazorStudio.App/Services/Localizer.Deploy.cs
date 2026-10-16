@@ -9,6 +9,8 @@ public sealed partial class Localizer
         foreach (var (k, v) in DeployEn) Tables["en"][k] = v;
         foreach (var (k, v) in DockerDe) Tables["de"][k] = v;
         foreach (var (k, v) in DockerEn) Tables["en"][k] = v;
+        foreach (var (k, v) in MemoryDe) Tables["de"][k] = v;
+        foreach (var (k, v) in MemoryEn) Tables["en"][k] = v;
     }
 
     private static readonly Dictionary<string, string> DeployDe = new()
