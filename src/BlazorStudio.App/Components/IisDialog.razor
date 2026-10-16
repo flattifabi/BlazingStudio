@@ -91,6 +91,7 @@
                         {
                             case "pools": @PoolsTab(sel) break;
                             case "sites": @SitesTab(sel) break;
+                            case "services": @ServicesTab(sel) break;
                             case "deploy": @DeployTab() break;
                             case "history": @HistoryTab(sel) break;
                             default: @OverviewTab(st) break;
@@ -115,7 +116,7 @@
 
     private static readonly TabDef[] Tabs =
     {
-        new("overview", "activity"), new("pools", "layers"), new("sites", "globe"), new("deploy", "rocket"), new("history", "history"),
+        new("overview", "activity"), new("pools", "layers"), new("sites", "globe"), new("services", "gear"), new("deploy", "rocket"), new("history", "history"),
     };
 
     private IisServerEntry? _selected;
@@ -148,7 +149,7 @@
         // Pools/Sites alle 5 s nachladen (CPU/RAM der Arbeitsprozesse, Zustände)
         _timer = new Timer(_ => InvokeAsync(async () =>
         {
-            if (_tab is "pools" or "sites" && !_busy && _pool is null && _newSite is null) await LoadTabAsync(quiet: true);
+            if (_tab is "pools" or "sites" or "services" && !_busy && _pool is null && _newSite is null) await LoadTabAsync(quiet: true);
             if (_tab == "history" && _history?.Any(h => !h.IsFinished) == true) await LoadTabAsync(quiet: true);
         }), null, 5000, 5000);
     }
@@ -219,6 +220,9 @@
                         _versions = await client.GetVersionsAsync(_expandedSite, _expandedApp);
                         await LoadAppExtrasAsync(s, client, _expandedSite, _expandedApp);
                     }
+                    break;
+                case "services":
+                    await LoadServicesAsync(s, client);
                     break;
                 case "history":
                     _history = await client.GetDeploymentsAsync(null, 100);
@@ -1002,8 +1006,265 @@
         _profile.Site = site;
         _profile.AppPath = appPath;
         _profile.CreateSite = false;
+        _profile.Target = DeployTargets.Iis;
         if (_selected is not null) _targets = new() { _selected.Id };
         SetTab("deploy");
+    }
+
+    // ==================================================================
+    // Windows-Dienste
+    // ==================================================================
+
+    private List<ServiceInfo>? _services;
+    private bool _allServices;
+    private string? _servicesHint;
+    private string? _expandedService;
+    private List<SiteVersion>? _svcVersions;
+    private List<SiteConfigFile>? _svcConfig;
+    private List<string>? _svcPersist;
+    private string _newSvcPersist = string.Empty;
+
+    private async Task LoadServicesAsync(IisServerEntry s, AgentClient client)
+    {
+        if (Iis.Status(s).Info?.AgentVersion is { Length: > 0 } v && AgentDefaults.IsOlderThan(v, AgentDefaults.MinimumServiceVersion))
+        {
+            _services = new();
+            _servicesHint = L.F("iis.svc.agentTooOld", v, AgentDefaults.MinimumServiceVersion);
+            return;
+        }
+        _servicesHint = null;
+        _services = await client.GetServicesAsync(_allServices);
+        if (_expandedService is { } name && _services.Any(x => x.Name == name && x.Managed))
+        {
+            _svcVersions = await client.GetServiceVersionsAsync(name);
+            _svcConfig = await client.GetServiceConfigFilesAsync(name);
+            _svcPersist = (await client.GetServicePersistentAsync(name)).Paths;
+        }
+    }
+
+    private async Task ToggleService(ServiceInfo svc)
+    {
+        if (!svc.Managed) return;
+        if (_expandedService == svc.Name) { _expandedService = null; return; }
+        _expandedService = svc.Name;
+        _svcVersions = null;
+        _svcConfig = null;
+        _svcPersist = null;
+        await LoadTabAsync(quiet: true);
+    }
+
+    private void DeployToService(string name)
+    {
+        _profile.Target = DeployTargets.Service;
+        _profile.ServiceName = name;
+        if (_selected is not null) _targets = new() { _selected.Id };
+        SetTab("deploy");
+    }
+
+    private static string ServiceStateClass(string state) => state switch
+    {
+        "Running" => "ok",
+        "StartPending" or "StopPending" or "ContinuePending" or "PausePending" => "busy",
+        "Paused" => "warn",
+        _ => "err",
+    };
+
+    private RenderFragment ServicesTab(IisServerEntry srv) => __builder =>
+    {
+        if (_servicesHint is { } hint)
+        {
+            <div class="hint warn"><Icon Name="alert" /><span>@hint</span></div>
+            return;
+        }
+        <div class="iis-toolbar">
+            <label class="check"><input type="checkbox" checked="@_allServices" @onchange="async e => { _allServices = e.Value is true; await LoadTabAsync(); }" />@L["iis.svc.all"]</label>
+            <span class="grow"></span>
+            <button class="btn sm ac" @onclick='() => DeployToService(string.Empty)'><Icon Name="rocket" />@L["iis.svc.new"]</button>
+        </div>
+        if (_services is null)
+        {
+            <div class="ins-empty"><Icon Name="refresh" Class="spin" /></div>
+            return;
+        }
+        if (_services.Count == 0)
+        {
+            <div class="ins-empty" style="padding-top:40px"><Icon Name="gear" /><span>@L["iis.svc.none"]</span></div>
+            return;
+        }
+        <table class="ptable iis-table">
+            <thead><tr>
+                <th style="width:26%">@L["iis.name"]</th><th style="width:11%">@L["iis.status"]</th><th style="width:14%">Version</th>
+                <th style="width:18%">@L["iis.serviceAccount"]</th><th class="num" style="width:7%">CPU</th><th class="num" style="width:9%">RAM</th><th style="width:15%"></th>
+            </tr></thead>
+            <tbody>
+                @foreach (var item in _services)
+                {
+                    var svc = item;
+                    var open = _expandedService == svc.Name;
+                    <tr class="@(open ? "iis-open" : string.Empty) @(svc.Managed ? string.Empty : "dim")" @onclick="() => ToggleService(svc)" title="@svc.CommandLine">
+                        <td><b>@svc.Name</b>@if (svc.Managed) { <span class="chip ac">Agent</span> }<small class="iis-sub">@(svc.DisplayName != svc.Name ? svc.DisplayName : svc.Description)</small></td>
+                        <td><span class="iis-state @ServiceStateClass(svc.State)">@svc.State</span><small class="iis-sub">@L["iis.start." + (svc.StartType is "auto" or "delayed" or "manual" ? svc.StartType : "manual")]</small></td>
+                        <td class="mono">@(svc.ActiveVersion ?? "–")</td>
+                        <td><small>@svc.Account</small></td>
+                        <td class="num mono">@(svc.CpuPercent is { } c ? c.ToString("0.#", CultureInfo.CurrentCulture) + " %" : "–")</td>
+                        <td class="num mono">@(svc.WorkingSetBytes is { } w ? Size(w) : "–")</td>
+                        <td class="iis-actions" @onclick:stopPropagation="true">
+                            @if (svc.Managed)
+                            {
+                                @if (svc.State == "Running")
+                                {
+                                    <button class="ibtn sm" title="@L["iis.svc.restart"]" disabled="@_busy" @onclick='() => Act(c => c.ServiceActionAsync(svc.Name, "restart"), L.F("iis.svc.restarted", svc.Name))'><Icon Name="restart" /></button>
+                                    <button class="ibtn sm danger" title="@L["iis.stop"]" disabled="@_busy" @onclick="() => StopService(svc)"><Icon Name="stop" /></button>
+                                }
+                                else
+                                {
+                                    <button class="ibtn sm" title="@L["iis.start"]" disabled="@_busy" @onclick='() => Act(c => c.ServiceActionAsync(svc.Name, "start"), L.F("iis.startedToast", svc.Name))'><Icon Name="play" /></button>
+                                }
+                                <button class="ibtn sm" title="@L["iis.deployHere"]" @onclick="() => DeployToService(svc.Name)"><Icon Name="rocket" /></button>
+                                <button class="ibtn sm danger" title="@L["action.delete"]" disabled="@_busy" @onclick="() => DeleteService(svc)"><Icon Name="trash" /></button>
+                            }
+                        </td>
+                    </tr>
+                    @if (open)
+                    {
+                        <tr class="iis-versions-row"><td colspan="7">@ServicePanel(svc)</td></tr>
+                    }
+                }
+            </tbody>
+        </table>
+    };
+
+    private RenderFragment ServicePanel(ServiceInfo svc) => __builder =>
+    {
+        <div class="iis-appextras">
+            <div class="iis-appextras-grid">
+                <div class="iis-box">
+                    <div class="iis-versions-h"><Icon Name="gear" /><b>@L["iis.cfg"]</b><span class="dim">@L["iis.cfg.hint"]</span></div>
+                    @if (_svcConfig is { } files)
+                    {
+                        @foreach (var f in files)
+                        {
+                            var file = f;
+                            <div class="iis-cfg">
+                                <FileIcon Path="@file.Name" /><span class="mono">@file.Name</span>
+                                @if (file.HasOverride) { <span class="chip ac" title="@L["iis.cfg.overrideHint"]">@L["iis.cfg.override"]</span> }
+                                else if (!file.InActive) { <span class="chip">@L["iis.cfg.missing"]</span> }
+                                <span class="grow"></span>
+                                <button class="btn sm" disabled="@_busy" @onclick="() => OpenServiceConfig(svc.Name, file.Name)"><Icon Name="code" />@L["iis.cfg.edit"]</button>
+                                @if (file.HasOverride)
+                                {
+                                    <button class="ibtn sm" title="@L["iis.cfg.reset"]" disabled="@_busy" @onclick="() => ResetServiceConfig(svc.Name, file.Name)"><Icon Name="undo" /></button>
+                                }
+                            </div>
+                        }
+                    }
+                </div>
+                <div class="iis-box">
+                    <div class="iis-versions-h"><Icon Name="database" /><b>@L["iis.persist"]</b><span class="dim">@L["iis.persist.hint"]</span></div>
+                    @if (_svcPersist is { } persist)
+                    {
+                        @foreach (var p in persist)
+                        {
+                            var entry = p;
+                            <div class="iis-cfg"><Icon Name="database" /><span class="mono">@entry</span><span class="grow"></span>
+                                <button class="ibtn sm" title="@L["action.remove"]" disabled="@_busy" @onclick="() => SetServicePersist(svc.Name, persist.Where(x => x != entry).ToList(), entry, false)"><Icon Name="x" /></button></div>
+                        }
+                        @if (persist.Count == 0) { <div class="dim" style="padding:4px 8px;font-size:12px">@L["iis.persist.none"]</div> }
+                        <div class="iis-cfg">
+                            <input class="mono" style="flex:1;min-width:0" placeholder="data.db / data" value="@_newSvcPersist" @oninput="e => _newSvcPersist = e.Value?.ToString() ?? string.Empty" />
+                            <button class="btn sm" disabled="@(_busy || PersistentPaths.Normalize(_newSvcPersist) is null)" @onclick="() => SetServicePersist(svc.Name, persist.Append(PersistentPaths.Normalize(_newSvcPersist)!).Distinct(StringComparer.OrdinalIgnoreCase).ToList(), PersistentPaths.Normalize(_newSvcPersist)!, true)"><Icon Name="plus" />@L["action.add"]</button>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+        <div class="iis-versions">
+            <div class="iis-versions-h"><Icon Name="history" /><b>@L["iis.versions"]</b><span class="dim">@svc.CommandLine</span></div>
+            @if (_svcVersions is null)
+            {
+                <div class="dim" style="padding:8px"><Icon Name="refresh" Class="spin" /></div>
+            }
+            else
+            {
+                @foreach (var v in _svcVersions)
+                {
+                    var ver = v;
+                    <div class="iis-ver @(ver.IsActive ? "active" : string.Empty)">
+                        <span class="mono"><b>@ver.Version</b></span>
+                        @if (ver.IsActive) { <span class="iis-state ok">@L["iis.active"]</span> }
+                        else if (ver.IsPrevious) { <span class="iis-state">@L["iis.previous"]</span> }
+                        <span class="dim">@Ago(ver.DeployedAt)</span>
+                        <span class="dim">@ver.Source</span>
+                        <span class="grow"></span>
+                        @if (!ver.IsActive)
+                        {
+                            <button class="btn sm @(ver.IsPrevious ? "ac" : string.Empty)" disabled="@_busy" @onclick="() => ActivateService(svc, ver)"><Icon Name="@(ver.IsPrevious ? "undo" : "play")" />@(ver.IsPrevious ? L["iis.rollback"] : L["iis.activate"])</button>
+                            <button class="ibtn sm danger" title="@L["action.delete"]" disabled="@_busy" @onclick="() => DeleteServiceVersion(svc.Name, ver)"><Icon Name="trash" /></button>
+                        }
+                    </div>
+                }
+            }
+        </div>
+    };
+
+    private async Task StopService(ServiceInfo svc)
+    {
+        if (!await Confirm(L.F("iis.svc.stopTitle", svc.Name), null, L["iis.stop"])) return;
+        await Act(c => c.ServiceActionAsync(svc.Name, "stop"), L.F("iis.stoppedToast", svc.Name));
+    }
+
+    private async Task DeleteService(ServiceInfo svc)
+    {
+        var r = await Ui.ShowDialogAsync(new DialogRequest
+        {
+            Title = L.F("iis.svc.deleteTitle", svc.Name), Message = L["iis.svc.deleteText"],
+            OkText = L["iis.svc.deleteOnly"], AltText = L["iis.deleteSiteFiles"], CancelText = L["action.cancel"], Danger = true,
+        });
+        if (r == DialogResult.Cancel) return;
+        await Act(c => c.DeleteServiceAsync(svc.Name, r == DialogResult.Alt), L.F("iis.deleted", svc.Name));
+    }
+
+    private async Task ActivateService(ServiceInfo svc, SiteVersion v)
+    {
+        if (!await Confirm(L.F("iis.svc.activateTitle", v.Version, svc.Name), L.F("iis.svc.activateText", svc.ActiveVersion ?? svc.CommandLine), L["iis.activate"], danger: false)) return;
+        await Act(c => c.ActivateServiceAsync(svc.Name, v.Version), L.F("iis.activated", v.Version));
+    }
+
+    private async Task DeleteServiceVersion(string name, SiteVersion v)
+    {
+        if (!await Confirm(L.F("iis.deleteVersionTitle", v.Version), null, L["action.delete"])) return;
+        await Act(c => c.DeleteServiceVersionAsync(name, v.Version), L.F("iis.deleted", v.Version));
+    }
+
+    private async Task SetServicePersist(string name, List<string> next, string entry, bool added)
+    {
+        if (!added && !await Confirm(L.F("iis.persist.removeTitle", entry), L["iis.persist.removeText"], L["action.remove"])) return;
+        _newSvcPersist = string.Empty;
+        await Act(c => c.SetServicePersistentAsync(name, next), L.F(added ? "iis.persist.added" : "iis.persist.removed", entry));
+    }
+
+    private async Task OpenServiceConfig(string name, string file)
+    {
+        if (_selected is not { } s) return;
+        _busy = true;
+        try
+        {
+            if (await Iis.OpenRemoteConfigAsync(s, name, "/", file, service: true)) Ui.CloseOverlay();
+        }
+        catch (Exception e) when (e is AgentException or IOException or UnauthorizedAccessException)
+        {
+            _error = e.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ResetServiceConfig(string name, string file)
+    {
+        if (!await Confirm(L.F("iis.cfg.resetTitle", file), L["iis.cfg.resetText"], L["iis.cfg.reset"])) return;
+        await Act(c => c.DeleteServiceConfigOverrideAsync(name, file), L.F("iis.cfg.resetDone", file));
     }
 
     private void ToggleTarget(string id, bool on)
@@ -1015,13 +1276,17 @@
     private async Task StartDeploy()
     {
         if (_deployProject is null) return;
-        if (string.IsNullOrWhiteSpace(_profile.Site)) { _error = L["iis.siteMissing"]; return; }
+        if (_profile.IsService)
+        {
+            if (!ServiceCommandLine.IsValidName(_profile.ServiceName.Trim())) { _error = L["iis.serviceNameInvalid"]; return; }
+        }
+        else if (string.IsNullOrWhiteSpace(_profile.Site)) { _error = L["iis.siteMissing"]; return; }
         var servers = Iis.Servers.Where(s => _targets.Contains(s.Id)).ToList();
         if (servers.Count == 0) { _error = L["iis.noTargets"]; return; }
         var version = IisService.ExpandVersion(_profile.VersionTemplate, _deployProject);
         if (!VersionStore.IsValidVersion(version)) { _error = L.F("iis.versionInvalid", version); return; }
         var names = string.Join(", ", servers.Select(s => s.Display));
-        if (!await Confirm(L.F("iis.deployTitle", Path.GetFileNameWithoutExtension(_deployProject), version), L.F("iis.deployText", _profile.Site + (_profile.AppPath == "/" ? "" : _profile.AppPath), names), L["iis.deploy"], danger: servers.Any(s => (s.Environment ?? string.Empty).Contains("prod", StringComparison.OrdinalIgnoreCase))))
+        if (!await Confirm(L.F("iis.deployTitle", Path.GetFileNameWithoutExtension(_deployProject), version), L.F("iis.deployText", _profile.IsService ? L.F("iis.serviceLabel", _profile.ServiceName.Trim()) : _profile.Site + (_profile.AppPath == "/" ? "" : _profile.AppPath), names), L["iis.deploy"], danger: servers.Any(s => (s.Environment ?? string.Empty).Contains("prod", StringComparison.OrdinalIgnoreCase))))
             return;
         _profile.ServerIds = _targets.ToList();
         Settings.Current.IisDeployProfiles[_deployProject] = _profile;
@@ -1057,11 +1322,41 @@
                     @if (_targets.Count > 1) { <small class="dim">@L["iis.rollingHint"]</small> }
                 </div>
 
+                <div class="row2"><label>@L["iis.target"]</label>
+                    <div class="seg fill">
+                        <button class="@(!_profile.IsService ? "on" : string.Empty)" @onclick="() => _profile.Target = DeployTargets.Iis"><Icon Name="globe" />@L["iis.targetSite"]</button>
+                        <button class="@(_profile.IsService ? "on" : string.Empty)" @onclick="() => _profile.Target = DeployTargets.Service"><Icon Name="gear" />@L["iis.targetService"]</button>
+                    </div>
+                    @if (_profile.IsService) { <small class="dim">@L["iis.serviceHint"]</small> }
+                </div>
                 <div class="g2">
-                    <div class="row2"><label>Site</label>
-                        <div class="f"><input value="@_profile.Site" list="iis-sites" spellcheck="false" @oninput="e => _profile.Site = e.Value?.ToString() ?? string.Empty" /></div>
-                        <datalist id="iis-sites">@foreach (var x in _sites ?? new()) { <option value="@x.Name"></option> }</datalist></div>
-                    <div class="row2"><label>@L["iis.appPath"]</label><div class="f"><input class="mono" value="@_profile.AppPath" spellcheck="false" @onchange="e => _profile.AppPath = DeployRequest.NormalizeAppPath(e.Value?.ToString())" /></div></div>
+                    @if (_profile.IsService)
+                    {
+                        <div class="row2"><label>@L["iis.serviceName"]</label>
+                            <div class="f"><input class="mono" value="@_profile.ServiceName" list="iis-services" spellcheck="false" @oninput="e => _profile.ServiceName = e.Value?.ToString() ?? string.Empty" /></div>
+                            <datalist id="iis-services">@foreach (var x in _services ?? new()) { <option value="@x.Name"></option> }</datalist></div>
+                        <div class="row2"><label>@L["iis.serviceExe"]</label><div class="f"><input class="mono" value="@_profile.ServiceExe" spellcheck="false" placeholder="@L["iis.serviceExeAuto"]" @onchange="e => _profile.ServiceExe = e.Value?.ToString()" /></div></div>
+                        <div class="row2"><label>@L["iis.serviceArgs"]</label><div class="f"><input class="mono" value="@_profile.ServiceArguments" spellcheck="false" placeholder="--urls http://*:5005" @onchange="e => _profile.ServiceArguments = e.Value?.ToString()" /></div></div>
+                        <div class="row2"><label>@L["iis.serviceAccount"]</label>
+                            <div class="f"><input class="mono" value="@_profile.ServiceAccount" list="iis-accounts" spellcheck="false" placeholder="LocalSystem" @onchange="e => _profile.ServiceAccount = e.Value?.ToString()" /></div>
+                            <datalist id="iis-accounts">@foreach (var a in ServiceCommandLine.BuiltInAccounts) { <option value="@a"></option> }</datalist></div>
+                        <div class="row2"><label>@L["iis.serviceStart"]</label>
+                            <div class="seg fill">
+                                @foreach (var st in ServiceCommandLine.StartTypes)
+                                {
+                                    var startType = st;
+                                    <button class="@((_profile.ServiceStartType ?? "auto") == startType ? "on" : string.Empty)" @onclick="() => _profile.ServiceStartType = startType">@L["iis.start." + startType]</button>
+                                }
+                            </div></div>
+                        <div class="row2"><label>@L["iis.serviceDisplay"]</label><div class="f"><input value="@_profile.ServiceDisplayName" placeholder="@_profile.ServiceName" @onchange="e => _profile.ServiceDisplayName = e.Value?.ToString()" /></div></div>
+                    }
+                    else
+                    {
+                        <div class="row2"><label>Site</label>
+                            <div class="f"><input value="@_profile.Site" list="iis-sites" spellcheck="false" @oninput="e => _profile.Site = e.Value?.ToString() ?? string.Empty" /></div>
+                            <datalist id="iis-sites">@foreach (var x in _sites ?? new()) { <option value="@x.Name"></option> }</datalist></div>
+                        <div class="row2"><label>@L["iis.appPath"]</label><div class="f"><input class="mono" value="@_profile.AppPath" spellcheck="false" @onchange="e => _profile.AppPath = DeployRequest.NormalizeAppPath(e.Value?.ToString())" /></div></div>
+                    }
                     <div class="row2 iis-projver"><label>@L["ver.project"]</label>
                         <div class="iis-ver-row">
                             <span class="chip mono">@(_deployProject is { } dp ? Actions.VersionOf(dp) ?? "1.0.0" : "–")</span>
@@ -1086,9 +1381,9 @@
                     <small class="dim">@L["iis.healthHint"]</small></div>
                 <div class="pub-opts">
                     <label class="check"><input type="checkbox" checked="@_profile.Rollback" @onchange="e => _profile.Rollback = e.Value is true" />@L["iis.autoRollback"]</label>
-                    <label class="check"><input type="checkbox" checked="@_profile.CreateSite" @onchange="e => _profile.CreateSite = e.Value is true" />@L["iis.createSite"]</label>
+                    @if (!_profile.IsService) { <label class="check"><input type="checkbox" checked="@_profile.CreateSite" @onchange="e => _profile.CreateSite = e.Value is true" />@L["iis.createSite"]</label> }
                 </div>
-                @if (_profile.CreateSite)
+                @if (_profile.CreateSite && !_profile.IsService)
                 {
                     <div class="g2">
                         <div class="row2"><label>@L["iis.binding"]</label><div class="f"><input class="mono" value="@_profile.Binding" placeholder="http://*:8080" spellcheck="false" @onchange="e => _profile.Binding = e.Value?.ToString()" /></div></div>

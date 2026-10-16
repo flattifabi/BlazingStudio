@@ -147,19 +147,14 @@ public sealed class RunService
             : new[] { "run", "--project", ProjectFile };
         Write("❯ dotnet " + string.Join(' ', args.Select(a => a.Contains(' ') ? $"\"{a}\"" : a)), OutputKind.Command);
 
-        _runner = new ProcessRunner();
-        _runner.Output += OnProcessLine;
-        _runner.Exited += code => _ = _host.InvokeOnUiAsync(() =>
-        {
-            Write(_l.F("run.exited", code), code == 0 ? OutputKind.Muted : OutputKind.Warning);
-            State = RunState.Idle;
-            Url = null;
-            Changed?.Invoke();
-        });
+        _runner?.Dispose();
+        var runner = _runner = new ProcessRunner();
+        runner.Output += OnProcessLine;
+        runner.Exited += code => _ = _host.InvokeOnUiAsync(() => OnRunnerExited(runner, code));
         try
         {
             var env = new Dictionary<string, string> { ["DOTNET_WATCH_RESTART_ON_RUDE_EDIT"] = "true", ["DOTNET_WATCH_SUPPRESS_LAUNCH_BROWSER"] = "1" };
-            _ = _runner.RunAsync("dotnet", args, dir, env);
+            _ = runner.RunAsync("dotnet", args, dir, env);
         }
         catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
@@ -170,10 +165,30 @@ public sealed class RunService
         await Task.CompletedTask;
     }
 
+    /// <summary>Ende des Laufs – nur für den aktuellen Runner (ein spät gemeldetes Ende eines alten Laufs darf den neuen nicht beenden).</summary>
+    private void OnRunnerExited(ProcessRunner runner, int? code)
+    {
+        if (!ReferenceEquals(runner, _runner) || State != RunState.Running) return;
+        Write(code is { } c ? _l.F("run.exited", c) : _l["run.stopped"], code is null or 0 ? OutputKind.Muted : OutputKind.Warning);
+        State = RunState.Idle;
+        Url = null;
+        Changed?.Invoke();
+    }
+
     public void Stop()
     {
-        _runner?.Stop();
+        var runner = _runner;
+        runner?.Stop();
         _buildRunner?.Stop();
+        if (runner is null) return;
+        // Sicherheitsnetz: Kommt das Ende nicht (hängende Pipes), nach kurzer Zeit trotzdem auf „bereit“ –
+        // sonst ließe sich Run erst nach einem Neustart von Studio wieder drücken
+        _ = Task.Run(async () =>
+        {
+            for (var i = 0; i < 30 && runner.IsRunning; i++) await Task.Delay(100);
+            await Task.Delay(1500);
+            await _host.InvokeOnUiAsync(() => OnRunnerExited(runner, null));
+        });
     }
 
     public async Task RestartAsync()
