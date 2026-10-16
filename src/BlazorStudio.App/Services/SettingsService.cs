@@ -77,6 +77,15 @@ public sealed class AppSettings
     /// <summary>Letzte IIS-Deployment-Einstellungen je Projektdatei.</summary>
     public Dictionary<string, IisDeployProfile> IisDeployProfiles { get; set; } = new();
 
+    /// <summary>Claude-Panel: Berechtigungsmodus (plan, acceptEdits, bypassPermissions).</summary>
+    public string ClaudeMode { get; set; } = "acceptEdits";
+
+    /// <summary>Claude-Modell (leer = Standard von Claude Code), z. B. sonnet oder opus.</summary>
+    public string? ClaudeModel { get; set; }
+
+    /// <summary>Dauerhaft erlaubte Werkzeuge/Befehle, z. B. „Bash(dotnet build *)“.</summary>
+    public List<string> ClaudeAllowedTools { get; set; } = new() { "Bash(dotnet build *)", "Bash(dotnet test *)", "Bash(git status *)", "Bash(git diff *)" };
+
     public List<DockerHostEntry> DockerHosts { get; set; } = new();
 
     /// <summary>Docker-Deploy-Einstellungen je Projektdatei.</summary>

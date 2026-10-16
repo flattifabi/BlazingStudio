@@ -40,6 +40,7 @@ public partial class MainWindow : Window
         sc.AddSingleton<IisService>();
         sc.AddSingleton<DockerService>();
         sc.AddSingleton<ProblemMarkers>();
+        sc.AddSingleton<ClaudeService>();
         _services = sc.BuildServiceProvider();
         Resources.Add("services", _services);
 
@@ -112,6 +113,7 @@ public partial class MainWindow : Window
         _services.GetRequiredService<IisService>().Dispose();
         _services.GetRequiredService<DockerService>().Dispose();
         _services.GetRequiredService<ProblemMarkers>().Dispose();
+        _services.GetRequiredService<ClaudeService>().Dispose();
         _services.GetRequiredService<RunService>().StopAll();
         _ = _services.GetRequiredService<DebugService>().StopAsync();
     }

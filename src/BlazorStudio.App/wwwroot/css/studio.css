@@ -1118,7 +1118,7 @@ textarea.dk-area { width: 100%; min-height: 64px; resize: vertical; font-size: 1
 .iis-cfg:hover { background: var(--hover); }
 .iis-cfg .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .iis-cfg input { height: 24px; padding: 0 6px; font-size: 12px; }
-.tabs .tab .remote-ico { width: 12px; height: 12px; color: var(--accent); }
+.tabs .tab .remote-ico { width: 12px; height: 12px; color: var(--ac); }
 .iis-versions { margin: 0 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--island-2); padding: 6px; }
 .iis-versions-h { display: flex; gap: 8px; align-items: center; padding: 4px 6px 8px; font-size: 12px; }
 .iis-versions-h .dim { font: 11px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1196,3 +1196,31 @@ textarea.dk-area { width: 100%; min-height: 64px; resize: vertical; font-size: 1
 /* Fehler im Projektmappen-Explorer (lösungsweite Analyse + Build) */
 .tree .row .err-name { color: var(--err); text-decoration: underline wavy var(--err); text-decoration-skip-ink: none; text-underline-offset: 3px; text-decoration-thickness: 1px; }
 .tree .row.on .err-name { color: var(--err); }
+
+/* Claude-Panel (rechte Seitenleiste) */
+.side.side-claude { grid-template-rows: 1fr; }
+.claude { display: flex; flex-direction: column; height: calc(100% - 40px); min-height: 0; }
+.claude-head { display: flex; align-items: center; gap: 6px; padding: 6px 8px; font-size: 12px; border-bottom: 1px solid var(--line); min-width: 0; }
+.claude-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--line); }
+.claude-dot.ok { background: var(--ok); } .claude-dot.warn { background: var(--warn); } .claude-dot.err { background: var(--err); }
+.claude-log { flex: 1; min-height: 0; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.claude-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 8px; padding: 24px 12px; }
+.claude-empty h4 { margin: 0; }
+.claude-empty p { margin: 0; font-size: 12px; }
+.claude-msg { font-size: 12.5px; line-height: 1.5; border-radius: 9px; padding: 7px 10px; overflow-wrap: anywhere; }
+.claude-msg.user { align-self: flex-end; max-width: 88%; background: var(--ac-soft); white-space: pre-wrap; }
+.claude-msg.bot { background: var(--island-2); }
+.claude-msg.streaming { border-left: 2px solid var(--ac); }
+.claude-text { white-space: pre-wrap; }
+.claude-code { font: 11.5px var(--mono); background: var(--island); border: 1px solid var(--line); border-radius: 7px; padding: 6px 8px; margin: 6px 0; overflow-x: auto; white-space: pre; max-height: 320px; }
+.claude-tool { font-size: 12px; border: 1px solid var(--line); border-radius: 7px; padding: 3px 8px; }
+.claude-tool summary { display: flex; align-items: center; gap: 6px; cursor: pointer; min-width: 0; list-style: none; }
+.claude-tool summary .mono { color: var(--dim, inherit); opacity: .8; }
+.claude-tool.failed { border-color: color-mix(in srgb, var(--err) 50%, transparent); }
+.claude-file { color: var(--ac); cursor: pointer; text-decoration: underline; }
+.claude-info { font-size: 11.5px; opacity: .8; display: flex; flex-direction: column; gap: 6px; }
+.claude-info ul { margin: 0; padding-left: 16px; }
+.claude-input { border-top: 1px solid var(--line); padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.claude-input textarea { width: 100%; min-height: 64px; max-height: 220px; resize: vertical; box-sizing: border-box; font: 12.5px inherit; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--line); background: var(--island); color: inherit; }
+.claude-bar { display: flex; align-items: center; gap: 6px; }
+.claude-bar select { font-size: 11.5px; height: 26px; border-radius: 6px; border: 1px solid var(--line); background: var(--island); color: inherit; }

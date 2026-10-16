@@ -2,25 +2,30 @@
 @inject Workspace Ws
 @inject Localizer L
 
-<aside class="side">
+<aside class="side @(_tab == "claude" ? "side-claude" : string.Empty)">
     <section class="island">
         <div class="sh">
             <div class="seg">
                 <button class="@(_tab == "layers" ? "on" : "")" @onclick='() => _tab = "layers"'><Icon Name="layers" />@L["side.layers"]</button>
                 <button class="@(_tab == "files" ? "on" : "")" @onclick='() => _tab = "files"'><Icon Name="sln" />@L["side.solution"]</button>
+                <button class="@(_tab == "claude" ? "on" : "")" title="@L["claude.tabHint"]" @onclick='() => _tab = "claude"'><Icon Name="sparkle" />Claude</button>
             </div>
         </div>
         @switch (_tab)
         {
             case "layers": <LayersTree /> break;
             case "files": <SolutionExplorer /> break;
+            case "claude": <ClaudePanel /> break;
             default: <LayersTree /> break;
         }
     </section>
-    <div class="vsplit" data-splitter="layers"></div>
-    <section class="island">
-        <InspectorPanel />
-    </section>
+    @if (_tab != "claude")
+    {
+        <div class="vsplit" data-splitter="layers"></div>
+        <section class="island">
+            <InspectorPanel />
+        </section>
+    }
 </aside>
 
 @code {
