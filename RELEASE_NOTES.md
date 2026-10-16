@@ -1,3 +1,10 @@
+## Neu: Claude im IDE (mit deinem Claude-Abo)
+- Rechte Seitenleiste → **Claude** (oder Tools → Claude): Chat mit Claude direkt zum geöffneten Projekt. Claude liest Code, ändert Dateien und führt erlaubte Befehle aus; geänderte Dateien lädt der Editor automatisch neu. Antworten erscheinen live, Werkzeugaufrufe (Datei gelesen/geändert, Befehl) als aufklappbare Zeilen – Dateinamen öffnen die Datei.
+- Blazor Studio nutzt dafür **Claude Code** von Anthropic, das auf deinem Rechner installiert ist. Die **Anmeldung machst du selbst in Claude Code** (Knopf „Anmelden“ öffnet ein Konsolenfenster mit `claude auth login`) – mit deinem **Claude-Abo (Pro/Max)** oder einem API-Schlüssel. Blazor Studio sieht und speichert keine Zugangsdaten. Ist Claude Code noch nicht installiert, startet „Claude Code installieren“ das offizielle Skript von Anthropic.
+- Berechtigungen: „Nur planen“, „Dateien ändern“ (Standard) oder „Alles erlauben“. Befehle, die nicht erlaubt sind, lehnt Claude ab – danach „Erlauben und weitermachen“. Erlaubte Befehle (z. B. `Bash(dotnet build *)`) lassen sich verwalten. Modell wählbar (Standard, Opus, Sonnet, Haiku).
+- Der Chat merkt sich den Verlauf (Sitzung wird fortgesetzt), „Neuer Chat“ beginnt neu. Für das volle interaktive Claude: Menü → „Claude im Konsolenfenster öffnen“ (im Projektordner).
+- Ungespeicherte Dateien werden vor jeder Anfrage gespeichert.
+
 ## Neu: Deployment als Windows-Dienst
 - Im Bereitstellen-Reiter der IIS-Server gibt es jetzt **Ziel: IIS-Site | Windows-Dienst**. Für Worker/Hintergrunddienste: Dienstname, Programm (leer = die .exe der App wird automatisch gefunden, framework-abhängig ohne .exe läuft sie über dotnet), Argumente, Konto (LocalSystem, LocalService, NetworkService oder Domänenkonto), Starttyp.
 - Gibt es den Dienst noch nicht, legt der Agent ihn an (mit automatischem Neustart bei Absturz). Sonst: Dienst stoppen → **persistente Dateien** mitnehmen → Programmpfad auf die neue Version → starten → prüfen (läuft er nach 8 s noch? optional Health-URL). Schlägt das fehl, läuft automatisch wieder die vorherige Version.

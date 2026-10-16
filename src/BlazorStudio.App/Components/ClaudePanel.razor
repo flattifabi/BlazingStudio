@@ -1,0 +1,291 @@
+@* Claude im IDE – nutzt die installierte Claude-Code-CLI mit der eigenen Anmeldung des Benutzers (Abo oder API-Schlüssel). *@
+@implements IDisposable
+@inject ClaudeService Claude
+@inject SettingsService Settings
+@inject UiService Ui
+@inject Workspace Ws
+@inject Localizer L
+@inject IJSRuntime JS
+
+<div class="claude">
+    <div class="claude-head">
+        @if (Claude.Status is not { } st || Claude.Checking)
+        {
+            <span class="dim"><Icon Name="refresh" Class="spin" /> @L["claude.checking"]</span>
+        }
+        else if (!st.Installed)
+        {
+            <span class="claude-dot err"></span><span class="grow">@L["claude.notInstalledShort"]</span>
+        }
+        else if (!st.LoggedIn)
+        {
+            <span class="claude-dot warn"></span><span class="grow">@L["claude.notLoggedIn"]</span>
+            <button class="btn sm ac" @onclick="Login"><Icon Name="lock" />@L["claude.login"]</button>
+        }
+        else
+        {
+            <span class="claude-dot ok"></span>
+            <span class="grow ellipsis" title="@st.Version">@AuthText(st)</span>
+        }
+        <button class="ibtn sm" title="@L["claude.recheck"]" @onclick="() => Claude.CheckAsync()"><Icon Name="refresh" /></button>
+        <button class="ibtn sm" title="@L["claude.more"]" @onclick="Menu"><Icon Name="gear" /></button>
+    </div>
+
+    @if (Claude.Status is { Installed: false })
+    {
+        <div class="claude-empty">
+            <Icon Name="sparkle" />
+            <h4>@L["claude.welcomeTitle"]</h4>
+            <p class="dim">@L["claude.welcomeText"]</p>
+            <button class="btn ac" @onclick="Install"><Icon Name="package" />@L["claude.install"]</button>
+            <small class="dim">@L["claude.installHint"]</small>
+        </div>
+    }
+    else
+    {
+        <div class="claude-log scroll" @ref="_log">
+            @if (Claude.Entries.Count == 0)
+            {
+                <div class="claude-empty">
+                    <Icon Name="sparkle" />
+                    <h4>@L["claude.emptyTitle"]</h4>
+                    <p class="dim">@L["claude.emptyText"]</p>
+                    @if (Claude.Status is { LoggedIn: false }) { <button class="btn ac" @onclick="Login"><Icon Name="lock" />@L["claude.login"]</button> }
+                </div>
+            }
+            @foreach (var e in Claude.Entries)
+            {
+                var entry = e;
+                switch (entry.Kind)
+                {
+                    case ClaudeEntryKind.User:
+                        <div class="claude-msg user">@entry.Text</div>
+                        break;
+                    case ClaudeEntryKind.Assistant:
+                        <div class="claude-msg bot @(entry.Streaming ? "streaming" : string.Empty)">
+                            @foreach (var (isCode, text) in Segments(entry.Text))
+                            {
+                                if (isCode) { <pre class="claude-code">@text</pre> }
+                                else { <div class="claude-text">@text</div> }
+                            }
+                        </div>
+                        break;
+                    case ClaudeEntryKind.Tool:
+                        <details class="claude-tool @(entry.Failed ? "failed" : string.Empty)">
+                            <summary>
+                                <Icon Name="@ToolIcon(entry.Tool)" /><b>@entry.Tool</b>
+                                @if (entry.FilePath is { } fp)
+                                {
+                                    <a class="claude-file" title="@fp" @onclick="() => OpenFile(fp)" @onclick:preventDefault="true" @onclick:stopPropagation="true">@Path.GetFileName(fp)</a>
+                                }
+                                else { <span class="mono ellipsis">@entry.Text</span> }
+                                @if (entry.Output is null && Claude.Busy) { <Icon Name="refresh" Class="spin" /> }
+                            </summary>
+                            @if (!string.IsNullOrEmpty(entry.Output)) { <pre class="claude-code">@entry.Output</pre> }
+                        </details>
+                        break;
+                    case ClaudeEntryKind.Error:
+                        <div class="hint warn"><Icon Name="alert" /><span style="white-space:pre-wrap">@entry.Text</span></div>
+                        break;
+                    default:
+                        <div class="claude-info">
+                            <span>@entry.Text</span>
+                            @if (entry.Denials is { Count: > 0 } denials)
+                            {
+                                <ul>@foreach (var d in denials) { <li><b>@d.ToolName</b> <span class="mono">@d.Summary</span></li> }</ul>
+                                <button class="btn sm ac" disabled="@Claude.Busy" @onclick="() => Claude.AllowAndContinueAsync(entry)"><Icon Name="check" />@L["claude.allowContinue"]</button>
+                            }
+                        </div>
+                        break;
+                }
+            }
+        </div>
+
+        <div class="claude-input">
+            <textarea placeholder="@L["claude.placeholder"]" value="@_prompt" disabled="@(Claude.Status is { LoggedIn: false })"
+                      @oninput="e => _prompt = e.Value?.ToString() ?? string.Empty" @onkeydown="OnKey" @onkeydown:preventDefault="_suppress"></textarea>
+            <div class="claude-bar">
+                <select title="@L["claude.mode"]" value="@Settings.Current.ClaudeMode" @onchange="e => SetMode(e.Value?.ToString())">
+                    <option value="plan">@L["claude.mode.plan"]</option>
+                    <option value="acceptEdits">@L["claude.mode.acceptEdits"]</option>
+                    <option value="bypassPermissions">@L["claude.mode.bypass"]</option>
+                </select>
+                <select title="@L["claude.model"]" value="@(Settings.Current.ClaudeModel ?? string.Empty)" @onchange="e => SetModel(e.Value?.ToString())">
+                    <option value="">@L["claude.model.default"]</option>
+                    <option value="opus">Opus</option>
+                    <option value="sonnet">Sonnet</option>
+                    <option value="haiku">Haiku</option>
+                </select>
+                <span class="grow"></span>
+                @if (Claude.SessionId is not null && !Claude.Busy)
+                {
+                    <button class="ibtn sm" title="@L["claude.new"]" @onclick="Claude.NewChat"><Icon Name="plus" /></button>
+                }
+                @if (Claude.Busy)
+                {
+                    <button class="btn sm" @onclick="Claude.Stop"><Icon Name="stop" />@L["action.cancel"]</button>
+                }
+                else
+                {
+                    <button class="btn sm ac" disabled="@(string.IsNullOrWhiteSpace(_prompt) || Claude.Status is { LoggedIn: false })" @onclick="Send"><Icon Name="up" />@L["claude.send"]</button>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private string _prompt = string.Empty;
+    private bool _suppress;
+    private ElementReference _log;
+    private int _lastCount;
+
+    protected override void OnInitialized()
+    {
+        Claude.Changed += Refresh;
+        if (Claude.Status is null) _ = Claude.CheckAsync();
+    }
+
+    private void Refresh() => InvokeAsync(StateHasChanged);
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Ans Ende scrollen, wenn neue Einträge oder Text dazukommen
+        var count = Claude.Entries.Count + Claude.Entries.LastOrDefault()?.Text.Length ?? 0;
+        if (count != _lastCount)
+        {
+            _lastCount = count;
+            try { await JS.InvokeVoidAsync("eval", "document.querySelector('.claude-log')?.scrollTo({top: 1e9})"); }
+            catch (JSException) { }
+        }
+    }
+
+    private string AuthText(ClaudeStatus st) => st.AuthMethod switch
+    {
+        "claude.ai" => L.F("claude.loggedInSub", st.Account ?? "Claude"),
+        "api_key" or "api_key_helper" => L["claude.loggedInKey"],
+        _ => L.F("claude.loggedInOther", st.AuthMethod ?? "?"),
+    };
+
+    private static string ToolIcon(string? tool) => tool switch
+    {
+        "Read" or "Glob" or "Grep" or "LS" => "search",
+        "Edit" or "MultiEdit" or "Write" or "NotebookEdit" => "code",
+        "Bash" or "PowerShell" => "terminal",
+        "WebFetch" or "WebSearch" => "globe",
+        "TodoWrite" => "list",
+        _ => "zap",
+    };
+
+    /// <summary>Text in normale Abschnitte und ```-Codeblöcke zerlegen.</summary>
+    private static IEnumerable<(bool IsCode, string Text)> Segments(string text)
+    {
+        var parts = text.Split("```");
+        for (var i = 0; i < parts.Length; i++)
+        {
+            var p = parts[i];
+            if (i % 2 == 1)
+            {
+                // Sprache in der ersten Zeile weglassen
+                var nl = p.IndexOf('\n');
+                if (nl >= 0 && nl < 20 && !p[..nl].Contains(' ')) p = p[(nl + 1)..];
+                yield return (true, p.TrimEnd());
+            }
+            else if (p.Trim().Length > 0)
+            {
+                yield return (false, p.Trim('\n'));
+            }
+        }
+    }
+
+    private void OnKey(KeyboardEventArgs e)
+    {
+        // Enter sendet, Umschalt+Enter macht eine neue Zeile
+        _suppress = e.Key == "Enter" && !e.ShiftKey;
+        if (_suppress && !Claude.Busy) _ = Send();
+    }
+
+    private async Task Send()
+    {
+        var text = _prompt;
+        if (string.IsNullOrWhiteSpace(text)) return;
+        _prompt = string.Empty;
+        StateHasChanged();
+        await Claude.SendAsync(text);
+    }
+
+    private void SetMode(string? mode)
+    {
+        Settings.Current.ClaudeMode = mode ?? "acceptEdits";
+        Settings.Save();
+    }
+
+    private void SetModel(string? model)
+    {
+        Settings.Current.ClaudeModel = string.IsNullOrWhiteSpace(model) ? null : model;
+        Settings.Save();
+    }
+
+    private void OpenFile(string path)
+    {
+        var full = Path.IsPathRooted(path) ? path : Path.Combine(Ws.RootDirectory ?? string.Empty, path);
+        if (File.Exists(full)) Ws.Open(full);
+    }
+
+    private void Login()
+    {
+        try
+        {
+            Claude.Login();
+            Ui.ShowToast(L["claude.loginHint"], ToastKind.Info, 9000);
+        }
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            Ui.ShowToast(e.Message, ToastKind.Error, 6000);
+        }
+    }
+
+    private async Task Install()
+    {
+        var r = await Ui.ShowDialogAsync(new DialogRequest
+        {
+            Title = L["claude.installTitle"], Message = L["claude.installText"], OkText = L["claude.install"], CancelText = L["action.cancel"],
+        });
+        if (r != DialogResult.Ok) return;
+        try { Claude.Install(); }
+        catch (System.ComponentModel.Win32Exception e) { Ui.ShowToast(e.Message, ToastKind.Error, 6000); }
+    }
+
+    private void Menu(MouseEventArgs e)
+    {
+        Ui.ShowMenu(e.ClientX, e.ClientY, new List<MenuEntry>
+        {
+            MenuEntry.Do(L["claude.openConsole"], "terminal", () => Run(Claude.OpenInteractive)),
+            MenuEntry.Do(L["claude.new"], "plus", () => { Claude.NewChat(); return Task.CompletedTask; }),
+            MenuEntry.Do(L["claude.allowed"], "lock", ShowAllowed),
+            MenuEntry.Do(L["claude.login"], "lock", () => { Login(); return Task.CompletedTask; }),
+            MenuEntry.Do(L["claude.logout"], "x", () => Run(Claude.Logout)),
+        });
+    }
+
+    private Task Run(Action action)
+    {
+        try { action(); }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception) { Ui.ShowToast(ex.Message, ToastKind.Error, 6000); }
+        return Task.CompletedTask;
+    }
+
+    private async Task ShowAllowed()
+    {
+        var d = new DialogRequest
+        {
+            Title = L["claude.allowed"], Message = L["claude.allowedHint"], OkText = L["action.save"], CancelText = L["action.cancel"],
+            InputValue = string.Join("; ", Settings.Current.ClaudeAllowedTools),
+        };
+        if (await Ui.ShowDialogAsync(d) != DialogResult.Ok || d.InputValue is null) return;
+        Settings.Current.ClaudeAllowedTools = d.InputValue.Split(';').Select(x => x.Trim()).Where(x => x.Length > 0).Distinct().ToList();
+        Settings.Save();
+    }
+
+    public void Dispose() => Claude.Changed -= Refresh;
+}

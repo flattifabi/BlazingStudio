@@ -5,7 +5,7 @@ public sealed partial class Localizer
 {
     private static readonly Dictionary<string, string> DockerDe = new()
     {
-        ["menu.deploy"] = "Deployment", ["cmd.docker"] = "Docker …", ["cmd.dockerDeploy"] = "In Docker bereitstellen …",
+        ["menu.deploy"] = "Deployment", ["cmd.claude"] = "Claude", ["cmd.docker"] = "Docker …", ["cmd.dockerDeploy"] = "In Docker bereitstellen …",
         ["dk.subtitle"] = "{0} von {1} Hosts online", ["dk.subtitleEmpty"] = "Noch kein Docker-Host eingetragen",
         ["dk.hostLine"] = "Docker {0} · {1}/{2} Container laufen",
         ["dk.addHost"] = "Docker-Host hinzufügen", ["dk.editHost"] = "Host bearbeiten", ["dk.editHostTitle"] = "{0} bearbeiten",
@@ -72,7 +72,7 @@ public sealed partial class Localizer
 
     private static readonly Dictionary<string, string> DockerEn = new()
     {
-        ["menu.deploy"] = "Deployment", ["cmd.docker"] = "Docker …", ["cmd.dockerDeploy"] = "Deploy to Docker …",
+        ["menu.deploy"] = "Deployment", ["cmd.claude"] = "Claude", ["cmd.docker"] = "Docker …", ["cmd.dockerDeploy"] = "Deploy to Docker …",
         ["dk.subtitle"] = "{0} of {1} hosts online", ["dk.subtitleEmpty"] = "No Docker host yet",
         ["dk.hostLine"] = "Docker {0} · {1}/{2} containers running",
         ["dk.addHost"] = "Add Docker host", ["dk.editHost"] = "Edit host", ["dk.editHostTitle"] = "Edit {0}",
