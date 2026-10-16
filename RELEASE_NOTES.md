@@ -1,3 +1,9 @@
+## Neu: Claude Code im Web – ohne Installation
+- Im Claude-Panel: **„Ohne Installation: Claude Code im Web“** (auch im Zahnrad-Menü; ohne installiertes Claude Code direkt sichtbar). Claude Code im Web läuft in der Cloud mit deinem Claude-Abo – keine Installation, keine API-Kosten – und arbeitet auf deinem GitHub-Repository.
+- Auftrag eintippen → **„Auftrag kopieren & öffnen“**: Der Auftrag kommt mit Repository, Branch und aktiver Datei in die Zwischenablage, claude.ai/code öffnet sich im Browser – dort Repository wählen und einfügen.
+- Hinweis, wenn lokale Änderungen noch nicht auf GitHub sind (Claude im Web sieht nur Gepushtes).
+- **„Ergebnis holen“**: holt die Branches von GitHub und listet die von Claude (`claude/…`) zum Auschecken.
+
 ## Neu: Claude im IDE (mit deinem Claude-Abo)
 - Rechte Seitenleiste → **Claude** (oder Tools → Claude): Chat mit Claude direkt zum geöffneten Projekt. Claude liest Code, ändert Dateien und führt erlaubte Befehle aus; geänderte Dateien lädt der Editor automatisch neu. Antworten erscheinen live, Werkzeugaufrufe (Datei gelesen/geändert, Befehl) als aufklappbare Zeilen – Dateinamen öffnen die Datei.
 - Blazor Studio nutzt dafür **Claude Code** von Anthropic, das auf deinem Rechner installiert ist. Die **Anmeldung machst du selbst in Claude Code** (Knopf „Anmelden“ öffnet ein Konsolenfenster mit `claude auth login`) – mit deinem **Claude-Abo (Pro/Max)** oder einem API-Schlüssel. Blazor Studio sieht und speichert keine Zugangsdaten. Ist Claude Code noch nicht installiert, startet „Claude Code installieren“ das offizielle Skript von Anthropic.

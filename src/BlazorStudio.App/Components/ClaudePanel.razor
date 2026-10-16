@@ -6,6 +6,9 @@
 @inject Workspace Ws
 @inject Localizer L
 @inject IJSRuntime JS
+@inject GitService Git
+@inject IHostBridge Host
+@using BlazorStudio.Core.Assistant
 
 <div class="claude">
     <div class="claude-head">
@@ -40,6 +43,11 @@
             <button class="btn ac" @onclick="Install"><Icon Name="package" />@L["claude.install"]</button>
             <small class="dim">@L["claude.installHint"]</small>
         </div>
+        @WebBox()
+    }
+    else if (_showWeb)
+    {
+        <div class="claude-log scroll">@WebBox()</div>
     }
     else
     {
@@ -51,6 +59,7 @@
                     <h4>@L["claude.emptyTitle"]</h4>
                     <p class="dim">@L["claude.emptyText"]</p>
                     @if (Claude.Status is { LoggedIn: false }) { <button class="btn ac" @onclick="Login"><Icon Name="lock" />@L["claude.login"]</button> }
+                    <button class="btn ghost sm" @onclick="() => ShowWeb(true)"><Icon Name="globe" />@L["claude.web.open"]</button>
                 </div>
             }
             @foreach (var e in Claude.Entries)
@@ -138,6 +147,99 @@
     private string _prompt = string.Empty;
     private bool _suppress;
     private ElementReference _log;
+
+    // ---------------- Claude Code im Web (ohne Installation) ----------------
+
+    private bool _showWeb;
+    private string _webTask = string.Empty;
+    private string? _repo;
+    private bool _repoChecked;
+    private bool _fetching;
+
+    private async Task ShowWeb(bool show)
+    {
+        _showWeb = show;
+        if (show && !_repoChecked) await LoadRepoAsync();
+    }
+
+    private async Task LoadRepoAsync()
+    {
+        _repoChecked = true;
+        if (Git.Root is not { } root) { _repo = null; return; }
+        var r = await BlazorStudio.Core.Git.GitClient.RunAsync(root, "remote", "get-url", "origin");
+        _repo = r.Ok ? ClaudeWeb.GitHubRepo(r.Output.Trim()) : null;
+        StateHasChanged();
+    }
+
+    private void OpenWeb(bool withTask)
+    {
+        if (withTask && !string.IsNullOrWhiteSpace(_webTask))
+        {
+            var file = Ws.Active is { Remote: null } d && Git.Root is { } root ? Path.GetRelativePath(root, d.Path).Replace('\\', '/') : null;
+            Host.SetClipboard(ClaudeWeb.TaskPrompt(_repo, Git.Status.Branch, file, _webTask));
+            Ui.ShowToast(L["claude.web.copied"], ToastKind.Info, 9000);
+        }
+        Host.OpenExternal(ClaudeWeb.Url);
+    }
+
+    private async Task FetchResults()
+    {
+        _fetching = true;
+        try
+        {
+            await Git.FetchAsync();
+            await Git.RefreshAsync();
+        }
+        finally
+        {
+            _fetching = false;
+        }
+    }
+
+    private RenderFragment WebBox() => __builder =>
+    {
+        var claudeBranches = Git.Branches.Where(b => b.IsRemote && ClaudeWeb.IsClaudeBranch(b.Name)).ToList();
+        <div class="claude-web">
+            <div class="claude-web-h"><Icon Name="globe" /><b>@L["claude.web.title"]</b><span class="grow"></span>
+                @if (Claude.Status is { Installed: true }) { <button class="ibtn sm" title="@L["action.close"]" @onclick="() => ShowWeb(false)"><Icon Name="x" /></button> }</div>
+            <p class="dim">@L["claude.web.text"]</p>
+            @if (!_repoChecked)
+            {
+                <button class="btn sm" @onclick="LoadRepoAsync"><Icon Name="git" />@L["claude.web.checkRepo"]</button>
+            }
+            else if (_repo is null)
+            {
+                <div class="hint warn"><Icon Name="alert" /><span>@L["claude.web.noRepo"]</span></div>
+            }
+            else
+            {
+                <div class="claude-web-repo"><Icon Name="git" /><span class="mono">@_repo</span>@if (Git.Status.Branch is { } br) { <span class="chip mono">@br</span> }</div>
+                @if (Git.Status.Changes.Count > 0 || Git.Status.Ahead > 0)
+                {
+                    <div class="hint warn"><Icon Name="alert" /><span>@L["claude.web.unpushed"]</span></div>
+                }
+            }
+            <textarea placeholder="@L["claude.web.taskPlaceholder"]" value="@_webTask" @oninput="e => _webTask = e.Value?.ToString() ?? string.Empty"></textarea>
+            <div class="claude-bar">
+                <button class="btn sm ac" @onclick="() => OpenWeb(true)"><Icon Name="ext" />@(string.IsNullOrWhiteSpace(_webTask) ? L["claude.web.openOnly"] : L["claude.web.copyOpen"])</button>
+                <span class="grow"></span>
+                <button class="btn sm" disabled="@(_fetching || Git.Root is null)" @onclick="FetchResults">@if (_fetching) { <Icon Name="refresh" Class="spin" /> } else { <Icon Name="down" /> }@L["claude.web.fetch"]</button>
+            </div>
+            @if (claudeBranches.Count > 0)
+            {
+                <div class="claude-web-branches">
+                    <small class="dim">@L["claude.web.branches"]</small>
+                    @foreach (var b in claudeBranches)
+                    {
+                        var branch = b;
+                        <div class="iis-cfg"><Icon Name="git" /><span class="mono ellipsis">@branch.Name</span><span class="grow"></span>
+                            <button class="btn sm" disabled="@(Git.Busy is not null)" @onclick="() => Git.CheckoutAsync(branch)">@L["git.checkout"]</button></div>
+                    }
+                    <small class="dim">@L["claude.web.branchesHint"]</small>
+                </div>
+            }
+        </div>
+    };
     private int _lastCount;
 
     protected override void OnInitialized()
@@ -261,6 +363,7 @@
         Ui.ShowMenu(e.ClientX, e.ClientY, new List<MenuEntry>
         {
             MenuEntry.Do(L["claude.openConsole"], "terminal", () => Run(Claude.OpenInteractive)),
+            MenuEntry.Do(L["claude.web.open"], "globe", () => ShowWeb(true)),
             MenuEntry.Do(L["claude.new"], "plus", () => { Claude.NewChat(); return Task.CompletedTask; }),
             MenuEntry.Do(L["claude.allowed"], "lock", ShowAllowed),
             MenuEntry.Do(L["claude.login"], "lock", () => { Login(); return Task.CompletedTask; }),
