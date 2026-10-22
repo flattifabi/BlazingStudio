@@ -1440,3 +1440,13 @@ textarea.dk-area { width: 100%; min-height: 64px; resize: vertical; font-size: 1
 .sec h4 { font-size: 12.5px; letter-spacing: 0; text-transform: none; color: var(--text); font-weight: 600; }
 .sec { padding: 12px 14px; }
 .side > .split-x { z-index: 6; }
+
+/* Kopfbereich zweizeilig: Logo + Menü + Symbole in einer Zeile */
+.menurow { height: 40px; gap: 4px; padding: 0 8px 0 12px; }
+.menurow .brand-logo { height: 20px; max-width: 120px; margin-right: 8px; }
+.menurow .brand-logo.custom { height: 22px; }
+.menurow .ibtn { width: 30px; height: 30px; }
+.menurow .ibtn svg { width: 17px; height: 17px; }
+.menurow .tsep { height: 18px; margin: 0 6px 0 10px; }
+.proj-pop { top: 88px; }
+.theme-pop { top: 38px; }
