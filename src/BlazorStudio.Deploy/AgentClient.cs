@@ -197,6 +197,34 @@ public sealed class AgentClient : IDisposable
         SendAsync(HttpMethod.Delete, $"api/services/{Esc(name)}/config/{Esc(file)}", null, ct);
 
     // ------------------------------------------------------------------
+    // Zertifikate (Agent ab 1.14.0)
+    // ------------------------------------------------------------------
+
+    public Task<CertificateOverview> GetCertificatesAsync(bool probe = true, CancellationToken ct = default) =>
+        GetAsync<CertificateOverview>("api/certificates?probe=" + (probe ? "true" : "false"), ct, TimeSpan.FromMinutes(1));
+
+    public Task<WinAcmeInfo> SetCertificatePolicyAsync(CertificatePolicy policy, CancellationToken ct = default) =>
+        SendAsync<WinAcmeInfo>(HttpMethod.Put, "api/certificates/policy", policy, ct);
+
+    public Task<CertificateJob> CreateCertificateAsync(AcmeOrderRequest request, CancellationToken ct = default) =>
+        SendAsync<CertificateJob>(HttpMethod.Post, "api/certificates/renewals", request, ct);
+
+    public Task<CertificateJob> RenewCertificateAsync(string renewalId, CancellationToken ct = default) =>
+        SendAsync<CertificateJob>(HttpMethod.Post, $"api/certificates/renewals/{Esc(renewalId)}/renew", null, ct);
+
+    public Task<CertificateJob> RenewAllCertificatesAsync(bool force, CancellationToken ct = default) =>
+        SendAsync<CertificateJob>(HttpMethod.Post, "api/certificates/renew?force=" + (force ? "true" : "false"), null, ct);
+
+    public Task<CertificateJob> CancelRenewalAsync(string renewalId, CancellationToken ct = default) =>
+        SendAsync<CertificateJob>(HttpMethod.Delete, $"api/certificates/renewals/{Esc(renewalId)}", null, ct);
+
+    public Task<CertificateJob> ReloadNginxAsync(CancellationToken ct = default) =>
+        SendAsync<CertificateJob>(HttpMethod.Post, "api/certificates/nginx/reload", null, ct);
+
+    public Task<CertificateJob> GetCertificateJobAsync(string id, CancellationToken ct = default) =>
+        GetAsync<CertificateJob>($"api/certificates/jobs/{Esc(id)}", ct);
+
+    // ------------------------------------------------------------------
     // Speicheranalyse (Agent ab 1.13.0)
     // ------------------------------------------------------------------
 

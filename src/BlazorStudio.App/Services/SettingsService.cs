@@ -7,9 +7,9 @@ public sealed class AppSettings
     public string Theme { get; set; } = "dark";
 
     /// <summary>"dark", "light" oder "system".</summary>
-    public string ThemeMode { get; set; } = "dark";
+    public string ThemeMode { get; set; } = "light";
 
-    public string Accent { get; set; } = "#4c8dff";
+    public string Accent { get; set; } = "#e2001a";
 
     /// <summary>"de" oder "en"; leer = Systemsprache.</summary>
     public string Language { get; set; } = "";
@@ -48,6 +48,21 @@ public sealed class AppSettings
     public int ToolboxWidth { get; set; } = 240;
 
     public bool ToolboxCollapsed { get; set; }
+
+    /// <summary>Inhalt der linken Spalte: components (Komponenten), explorer (Projektmappe), claude.</summary>
+    public string LeftPanel { get; set; } = "components";
+
+    /// <summary>Build-Konfiguration für Build/Start (Debug oder Release).</summary>
+    public string BuildConfiguration { get; set; } = "Debug";
+
+    /// <summary>Firmenlogo in der Kopfzeile (Pfad zu PNG/SVG); leer = Blazor-Studio-Logo.</summary>
+    public string? BrandLogo { get; set; }
+
+    /// <summary>Produktname rechts in der Menüzeile (z. B. „Fronius Studio“); leer = „Blazor Studio“.</summary>
+    public string? BrandName { get; set; }
+
+    /// <summary>Stand des Oberflächen-Designs – beim Wechsel auf ein neues Design einmalig Standardwerte setzen.</summary>
+    public int DesignVersion { get; set; }
 
     public int BottomHeight { get; set; } = 190;
 
@@ -90,6 +105,9 @@ public sealed class AppSettings
 
     /// <summary>Docker-Deploy-Einstellungen je Projektdatei.</summary>
     public Dictionary<string, DockerDeployProfile> DockerDeployProfiles { get; set; } = new();
+
+    /// <summary>Zertifikatsrichtlinie der Firma (Laufzeit, Vorlauf) – Bewertung in Studio und Vorgabe für win-acme.</summary>
+    public BlazorStudio.Deploy.CertificatePolicy CertificatePolicy { get; set; } = new();
 }
 
 public sealed class IisServerEntry

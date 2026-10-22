@@ -16,7 +16,7 @@
 
             <label>@L["theme.mode"]</label>
             <div class="seg fill">
-                @foreach (var m in new[] { "dark", "light", "system" })
+                @foreach (var m in new[] { "light", "dark", "system" })
                 {
                     <button class="@(Settings.Current.ThemeMode == m ? "on" : "")" @onclick="() => Shell.SetThemeModeAsync(m)">@L["theme." + m]</button>
                 }
@@ -29,6 +29,18 @@
                     <button class="@(Settings.Current.Accent == a ? "on" : "")" style="background:@a" @onclick="() => Shell.SetAccentAsync(a)"></button>
                 }
             </div>
+
+            <label>@L["settings.brandLogo"]</label>
+            <div>
+                <div style="display:flex;gap:6px">
+                    <div class="f" style="flex:1"><input class="mono" value="@Settings.Current.BrandLogo" placeholder="@L["settings.brandLogoHint"]" spellcheck="false" @onchange="e => SetBrandLogo(e.Value?.ToString())" /></div>
+                    <button class="btn" title="@L["settings.brandLogoPick"]" @onclick="PickBrandLogo"><Icon Name="folder" /></button>
+                    @if (!string.IsNullOrEmpty(Settings.Current.BrandLogo)) { <button class="btn" title="@L["action.clear"]" @onclick="() => SetBrandLogo(null)"><Icon Name="x" /></button> }
+                </div>
+            </div>
+
+            <label>@L["settings.brandName"]</label>
+            <div class="f"><input value="@Settings.Current.BrandName" placeholder="Blazor Studio" @onchange="e => { Settings.Current.BrandName = string.IsNullOrWhiteSpace(e.Value?.ToString()) ? null : e.Value!.ToString()!.Trim(); Settings.Save(); }" /></div>
 
             <label>@L["settings.scheme"]</label>
             <div class="seg fill">
@@ -114,5 +126,16 @@
         var exe = Path.Combine(folder, "netcoredbg.exe");
         Settings.Current.DebuggerPath = File.Exists(exe) ? exe : folder;
         Settings.Save();
+    }
+
+    private void SetBrandLogo(string? path)
+    {
+        Settings.Current.BrandLogo = string.IsNullOrWhiteSpace(path) ? null : path.Trim().Trim('"');
+        Settings.Save();
+    }
+
+    private async Task PickBrandLogo()
+    {
+        if (await Host.PickFileAsync(L["settings.brandLogoPick"], "Bilder|*.svg;*.png;*.jpg;*.jpeg;*.gif;*.webp") is { } file) SetBrandLogo(file);
     }
 }

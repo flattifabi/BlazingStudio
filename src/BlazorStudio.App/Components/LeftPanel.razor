@@ -1,0 +1,40 @@
+@* Linke Spalte: Komponenten (Toolbox), Projektmappe oder Claude – umgeschaltet über die Werkzeugleiste ganz links. *@
+@inherits StudioComponent
+
+<aside class="island toolbox leftpanel">
+    <div class="split-x" data-splitter="tool" style="right:0"></div>
+    <div class="ph">
+        <b>@L["left." + View]</b>
+        <span class="grow"></span>
+        <button class="ibtn sm" title="@L["cmd.toggleToolbox"] (Ctrl+Alt+X)" @onclick="Collapse"><Icon Name="chevl" /></button>
+    </div>
+    @switch (View)
+    {
+        case "explorer": <SolutionExplorer /> break;
+        case "claude": <ClaudePanel /> break;
+        default: <Toolbox /> break;
+    }
+</aside>
+
+@code {
+    private string View => Settings.Current.LeftPanel is "explorer" or "claude" ? Settings.Current.LeftPanel : "components";
+
+    private void Collapse()
+    {
+        Settings.Current.ToolboxCollapsed = true;
+        Settings.Save();
+    }
+
+    /// <summary>Ansicht zeigen; ist sie schon offen und <paramref name="toggle"/> gesetzt, wird die Spalte eingeklappt.</summary>
+    public static void Show(SettingsService settings, string view, bool toggle = false)
+    {
+        var s = settings.Current;
+        if (toggle && !s.ToolboxCollapsed && s.LeftPanel == view) s.ToolboxCollapsed = true;
+        else
+        {
+            s.LeftPanel = view;
+            s.ToolboxCollapsed = false;
+        }
+        settings.Save();
+    }
+}

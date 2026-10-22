@@ -1,66 +1,30 @@
+@* Rechte Spalte: Ebenen (Struktur der Seite) oben, Eigenschaften/Ereignisse des gewählten Elements darunter. *@
 @implements IDisposable
 @inject Workspace Ws
 @inject Localizer L
 
-<aside class="side @(_tab == "claude" ? "side-claude" : string.Empty)">
+<aside class="side">
+    <div class="split-x" data-splitter="side" style="left:-3px;width:6px"></div>
     <section class="island">
-        <div class="sh">
-            <div class="seg">
-                <button class="@(_tab == "layers" ? "on" : "")" @onclick='() => _tab = "layers"'><Icon Name="layers" />@L["side.layers"]</button>
-                <button class="@(_tab == "files" ? "on" : "")" @onclick='() => _tab = "files"'><Icon Name="sln" />@L["side.solution"]</button>
-                <button class="@(_tab == "claude" ? "on" : "")" title="@L["claude.tabHint"]" @onclick='() => _tab = "claude"'><Icon Name="sparkle" />Claude</button>
-            </div>
+        <div class="ph">
+            <b>@L["side.layers"]</b>
+            <span class="grow"></span>
+            @if (Ws.Active?.Doc is { } doc) { <span class="dim">@L.F("side.elements", Count(doc.Root) - 1)</span> }
         </div>
-        @switch (_tab)
-        {
-            case "layers": <LayersTree /> break;
-            case "files": <SolutionExplorer /> break;
-            case "claude": <ClaudePanel /> break;
-            default: <LayersTree /> break;
-        }
+        <LayersTree />
     </section>
-    @if (_tab != "claude")
-    {
-        <div class="vsplit" data-splitter="layers"></div>
-        <section class="island">
-            <InspectorPanel />
-        </section>
-    }
+    <div class="vsplit" data-splitter="layers"></div>
+    <section class="island">
+        <InspectorPanel />
+    </section>
 </aside>
 
 @code {
-    /// <summary>Aktueller Reiter (layers/files) – für die Werkzeugleiste.</summary>
-    public static string CurrentTab { get; private set; } = "layers";
-
-    public static Action<string>? ShowTab;
-
-    public static event Action? TabChanged;
-
-    private string _tab
-    {
-        get => CurrentTab;
-        set
-        {
-            CurrentTab = value;
-            TabChanged?.Invoke();
-        }
-    }
-
-    protected override void OnInitialized()
-    {
-        Ws.Changed += Refresh;
-        ShowTab = t => InvokeAsync(() =>
-        {
-            _tab = t;
-            StateHasChanged();
-        });
-    }
+    protected override void OnInitialized() => Ws.Changed += Refresh;
 
     private void Refresh() => InvokeAsync(StateHasChanged);
 
-    public void Dispose()
-    {
-        Ws.Changed -= Refresh;
-        ShowTab = null;
-    }
+    private static int Count(BlazorStudio.Core.Model.DesignNode n) => 1 + n.Children.Sum(Count);
+
+    public void Dispose() => Ws.Changed -= Refresh;
 }

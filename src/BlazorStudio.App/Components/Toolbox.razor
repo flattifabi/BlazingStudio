@@ -3,21 +3,19 @@
 @inject DesignActions Design
 @inject LiveDesignService LiveDesign
 
-<aside class="island toolbox">
-    <div class="split-x" data-splitter="tool" style="right:0"></div>
-    <div class="sh">
-        <div class="seg">
+<div class="f side-search" style="margin:10px 12px 6px">
+    <Icon Name="search" Class="sm dim" />
+    <input placeholder="@L["tb.search"]" value="@_filter" spellcheck="false" @oninput="e => _filter = e.Value?.ToString() ?? string.Empty" />
+    @if (_filter.Length > 0) { <span class="clr" @onclick='() => _filter = ""'><Icon Name="x" /></span> }
+</div>
+    <div class="sh tb-tabs">
+        <div class="utabs">
             <button class="@(_tab == "elements" ? "on" : "")" @onclick='() => _tab = "elements"'>@L["tb.tabElements"]</button>
             <button class="@(_tab == "project" ? "on" : "")" @onclick='() => _tab = "project"'>@L["tb.tabProject"]</button>
             <button class="@(_tab == "libs" ? "on" : "")" @onclick='() => _tab = "libs"' title="@L["tb.tabLibrariesHint"]">
                 @L["tb.tabLibraries"] @if (Ws.Libraries.Count > 0) { <span class="cnt lib">@Ws.Libraries.Sum(l => l.Components.Count)</span> }
             </button>
         </div>
-    </div>
-    <div class="f side-search" style="margin:6px 6px 2px">
-        <Icon Name="search" Class="sm dim" />
-        <input placeholder="@L["tb.search"]" value="@_filter" spellcheck="false" @oninput="e => _filter = e.Value?.ToString() ?? string.Empty" />
-        @if (_filter.Length > 0) { <span class="clr" @onclick='() => _filter = ""'><Icon Name="x" /></span> }
     </div>
 
     <div class="scroll tb-list" style="flex:1">
@@ -78,7 +76,7 @@
         }
     </div>
     <ToolboxTip Item="_tip" Top="_tipTop" Libraries="Ws.Libraries" OnHover="TipHover" />
-</aside>
+
 
 @code {
     private string _tab = "elements";

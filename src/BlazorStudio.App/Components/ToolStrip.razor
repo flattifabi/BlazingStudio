@@ -1,35 +1,27 @@
-@* Werkzeugleiste ganz links wie in Rider: oben Fenster der linken/rechten Seite, unten die Werkzeuge im unteren Panel. *@
+@* Werkzeugleiste ganz links: oben die Ansichten der linken Spalte und Werkzeuge, unten Hilfe und Einstellungen. *@
 @inherits StudioComponent
 @inject GitService Git
 
 <nav class="strip">
-    <button class="@(!Settings.Current.ToolboxCollapsed ? "on" : "")" title="@L["strip.toolbox"]" @onclick="ToggleToolbox"><Icon Name="blocks" /></button>
-    <button class="@(SidePanel.CurrentTab == "files" ? "on" : "")" title="@L["strip.solution"]" @onclick='() => SidePanel.ShowTab?.Invoke("files")'><Icon Name="sln" /></button>
-    <button class="@(SidePanel.CurrentTab == "layers" ? "on" : "")" title="@L["strip.layers"]" @onclick='() => SidePanel.ShowTab?.Invoke("layers")'><Icon Name="layers" /></button>
-    <button class="@(IsOn(BottomTab.Git) && GitPanel.View == "changes" ? "on" : "")" title="@L["strip.commit"] (Ctrl+K)" @onclick='() => ToggleGit("changes")'>
-        <Icon Name="commit" />
+    <button class="@(IsLeft("explorer") ? "on" : "")" title="@L["left.explorer"]" @onclick='() => LeftPanel.Show(Settings, "explorer", toggle: true)'><Icon Name="folder" /></button>
+    <button class="@(IsLeft("components") ? "on" : "")" title="@L["left.components"] (Ctrl+Alt+X)" @onclick='() => LeftPanel.Show(Settings, "components", toggle: true)'><Icon Name="cube" /></button>
+    <button class="@(IsOn(BottomTab.Find) ? "on" : "")" title="@L["find.title"] (Ctrl+Shift+F)" @onclick="() => { if (IsOn(BottomTab.Find)) Shell.ToggleBottom(); else FindPanel.Request(); }"><Icon Name="search" /></button>
+    <button class="@(IsOn(BottomTab.Git) ? "on" : "")" title="Git (Alt+0)" @onclick='() => ToggleGit("changes")'>
+        <Icon Name="sitemap" />
         @if (Git.Status.Changes.Count > 0) { <i class="badge">@(Git.Status.Changes.Count > 99 ? "99+" : Git.Status.Changes.Count)</i> }
-    </button>
-    <hr />
-    <button title="NuGet" class="@(IsOn(BottomTab.NuGet) ? "on" : "")" @onclick="() => Toggle(BottomTab.NuGet)"><Icon Name="package" /></button>
-
-    <span class="grow"></span>
-
-    <button class="@(IsOn(BottomTab.Output) ? "on" : "")" title="@L["bottom.build"]" @onclick="() => Toggle(BottomTab.Output)">
-        <Icon Name="hammer" />
-        @if (Run.State is RunState.Building) { <i class="dot run"></i> }
-    </button>
-    <button class="@(IsOn(BottomTab.Problems) ? "on" : "")" title="@L["bottom.problems"]" @onclick="() => Toggle(BottomTab.Problems)">
-        <Icon Name="alertc" />
-        @if (Run.ErrorCount > 0) { <i class="badge err">@Run.ErrorCount</i> }
     </button>
     <button class="@(IsOn(BottomTab.Debug) ? "on" : "")" title="@L["bottom.debug"]" @onclick="() => Toggle(BottomTab.Debug)">
         <Icon Name="bug" />
         @if (Debug.IsStopped) { <i class="dot warn"></i> }
     </button>
-    <button class="@(IsOn(BottomTab.Find) ? "on" : "")" title="@L["find.title"] (Ctrl+Shift+F)" @onclick="() => { if (IsOn(BottomTab.Find)) Shell.ToggleBottom(); else FindPanel.Request(); }"><Icon Name="search" /></button>
+    <button class="@(IsOn(BottomTab.NuGet) ? "on" : "")" title="NuGet" @onclick="() => Toggle(BottomTab.NuGet)"><Icon Name="package" /></button>
+    <button class="@(IsLeft("claude") ? "on" : "")" title="Claude" @onclick='() => LeftPanel.Show(Settings, "claude", toggle: true)'><Icon Name="sparkle" /></button>
+
+    <span class="grow"></span>
+
     <button class="@(IsOn(BottomTab.Terminal) ? "on" : "")" title="@L["bottom.terminal"] (Alt+F12)" @onclick="() => Toggle(BottomTab.Terminal)"><Icon Name="terminal" /></button>
-    <button class="@(IsOn(BottomTab.Git) && GitPanel.View != "changes" ? "on" : "")" title="Git" @onclick='() => ToggleGit("log")'><Icon Name="git" /></button>
+    <button title="@L["cmd.helpShortcuts"]" @onclick='() => Shell.ExecuteAsync("help.shortcuts")'><Icon Name="help" /></button>
+    <button title="@L["cmd.settings"] (Ctrl+,)" @onclick='() => Ui.OpenOverlay("settings")'><Icon Name="gear" /></button>
 </nav>
 
 @code {
@@ -39,10 +31,11 @@
     {
         Git.Changed += Refresh;
         BottomPanel.TabChanged += Refresh;
-        SidePanel.TabChanged += Refresh;
         GitPanel.ViewChanged += Refresh;
         _ = Git.RefreshAsync();
     }
+
+    private bool IsLeft(string view) => !Settings.Current.ToolboxCollapsed && (Settings.Current.LeftPanel == view || (view == "components" && Settings.Current.LeftPanel is not ("explorer" or "claude")));
 
     private bool IsOn(BottomTab t) => BottomPanel.Current == t && !Settings.Current.BottomCollapsed;
 
@@ -55,15 +48,9 @@
 
     private void ToggleGit(string view)
     {
-        if (IsOn(BottomTab.Git) && GitPanel.View == view) { Shell.ToggleBottom(); return; }
+        if (IsOn(BottomTab.Git)) { Shell.ToggleBottom(); return; }
         GitPanel.Request(view);
         BottomPanel.Show?.Invoke(BottomTab.Git);
-    }
-
-    private void ToggleToolbox()
-    {
-        Settings.Current.ToolboxCollapsed = !Settings.Current.ToolboxCollapsed;
-        Settings.Save();
     }
 
     public override void Dispose()
@@ -71,7 +58,6 @@
         base.Dispose();
         Git.Changed -= Refresh;
         BottomPanel.TabChanged -= Refresh;
-        SidePanel.TabChanged -= Refresh;
         GitPanel.ViewChanged -= Refresh;
     }
 }

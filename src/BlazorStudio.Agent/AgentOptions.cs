@@ -23,6 +23,15 @@ public sealed class AgentOptions
     /// <summary>So lange versucht der Health-Check, eine erfolgreiche Antwort zu bekommen.</summary>
     public int HealthCheckSeconds { get; set; } = 60;
 
+    /// <summary>Pfad zu wacs.exe; leer = automatisch (Aufgabenplanung, übliche Ordner).</summary>
+    public string WinAcmePath { get; set; } = "";
+
+    /// <summary>Pfad zu nginx.exe oder nginx.conf; leer = automatisch (laufender Prozess, C:\nginx).</summary>
+    public string NginxPath { get; set; } = "";
+
+    /// <summary>Weitere Zertifikatsdateien (PEM/CRT/PFX), die in der Übersicht erscheinen sollen.</summary>
+    public List<string> CertificateFiles { get; set; } = new();
+
     public void Normalize()
     {
         if (string.IsNullOrWhiteSpace(DataDirectory))

@@ -24,6 +24,9 @@ public static class AgentDefaults
     /// <summary>Ältester Agent mit Speicheranalyse (ClrMD).</summary>
     public const string MinimumMemoryVersion = "1.13.0";
 
+    /// <summary>Ältester Agent mit Zertifikatsverwaltung (win-acme).</summary>
+    public const string MinimumCertificateVersion = "1.14.0";
+
     /// <summary>True, wenn die Agent-Version (z. B. „1.6.1“) älter als <paramref name="minimum"/> ist. Unlesbare Versionen gelten als veraltet.</summary>
     public static bool IsOlderThan(string? agentVersion, string minimum)
     {

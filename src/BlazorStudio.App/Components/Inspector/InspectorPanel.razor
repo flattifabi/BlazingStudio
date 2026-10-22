@@ -39,7 +39,7 @@ else
         </div>
         @if (node.IsTagLike)
         {
-            <div class="seg fill itabs">
+            <div class="utabs itabs">
                 <button class="@(_tab == "design" ? "on" : "")" @onclick='() => _tab = "design"'>@L["inspector.tabDesign"]</button>
                 <button class="@(_tab == "props" ? "on" : "")" @onclick='() => _tab = "props"'>@L["inspector.tabProps"]</button>
                 <button class="@(_tab == "events" ? "on" : "")" @onclick='() => _tab = "events"'>@L["inspector.tabEvents"]
