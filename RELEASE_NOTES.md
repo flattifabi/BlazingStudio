@@ -1,7 +1,9 @@
+## Geändert: kompakterer Kopfbereich
+- Die oberste Zeile mit dem Projektnamen ist weg (der Name steht bereits in der Projektauswahl der Werkzeugleiste). Logo, Befehle (Strg+K), Meldungen und Profil sitzen jetzt in der Menüzeile – mehr Platz für die Arbeitsfläche.
+
 ## Neu: Oberflächen-Design
-- **Neue Kopfzeile in drei Ebenen:**
-  - Markenleiste mit Logo und Projektname, rechts Befehle (Strg+K), Meldungen (Fehler/Warnungen mit Zähler) und Profil (Darstellung, Sprache, Einstellungen).
-  - Menüzeile mit Produktname und Version.
+- **Neuer Kopfbereich:**
+  - Menüzeile mit Logo, Produktname und Version, rechts Befehle (Strg+K), Meldungen (Fehler/Warnungen mit Zähler) und Profil (Darstellung, Sprache, Einstellungen).
   - Werkzeugleiste: Projektauswahl, Speichern, Neu einlesen, Rückgängig/Wiederholen; in der Mitte **Build-Konfiguration (Debug/Release)**, **Geräteansicht (Desktop/Tablet/Smartphone · Web)**, **Build** und **Starten** (mit Menü für Debuggen, ohne Hot Reload, Browser, Profiler); rechts der Speicherstatus und **Bereitstellen** (IIS, Docker, Veröffentlichen, Pipelines).
 - **Durchgehende Arbeitsfläche ohne Inseln:** flache Spalten mit feinen Trennlinien und Reitern mit Unterstrich (Designer | Quelltext | Split, Build | Probleme | Debugkonsole | Terminal, Design | Eigenschaften | Ereignisse). Dunkle Primärknöpfe, der Akzent (Standard Rot) markiert Auswahl und aktive Elemente. Die Statusleiste ist dunkel.
 - **Linke Spalte umschaltbar** über die Leiste ganz links: Komponenten, Projektmappe oder Claude. Weitere Knöpfe dort: Suche, Git, Debug, NuGet, Terminal, Hilfe, Einstellungen. Ein Klick auf die aktive Ansicht klappt die Spalte ein.

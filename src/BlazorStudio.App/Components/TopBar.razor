@@ -1,25 +1,21 @@
 @inherits StudioComponent
 @inject IHostBridge Host
 
-@* Kopfbereich in drei Zeilen: Marke (Logo, Projekt, Befehle/Meldungen/Profil) · Menü · Werkzeugleiste (Build/Start/Bereitstellen). *@
+@* Kopfbereich: Menüzeile (Logo, Menü, Produkt, Befehle/Meldungen/Profil) · Werkzeugleiste (Projekt, Build/Start/Bereitstellen). *@
 <header class="top">
-    <div class="brandbar">
+    <div class="menurow">
         <img class="brand-logo @(Settings.Current.BrandLogo is { Length: > 0 } ? "custom" : "")" src="@LogoSrc" alt="" title="@BrandName" />
-        <b class="brand-app ellipsis">@(Ws.Solution?.Name ?? Ws.Project?.Name ?? BrandName)</b>
+        <MenuBar />
         <span class="grow"></span>
+        <span class="brand-name">@BrandName</span>
+        <span class="brand-ver">@Version</span>
+        <span class="tsep"></span>
         <button class="ibtn" title="@L["cmd.commands"] (Ctrl+K)" @onclick='() => Ui.OpenCommandPalette(Ws.HasProject ? "" : ">")'><Icon Name="grid" /></button>
         <button class="ibtn" title="@L["bottom.problems"]" disabled="@(!Ws.HasProject)" @onclick="() => BottomPanel.Show?.Invoke(BottomTab.Problems)">
             <Icon Name="bell" />
             @if (Run.ErrorCount + Run.WarningCount > 0) { <i class="nbadge @(Run.ErrorCount > 0 ? "err" : "")">@(Run.ErrorCount + Run.WarningCount > 99 ? "99+" : Run.ErrorCount + Run.WarningCount)</i> }
         </button>
         <button class="ibtn @(_themePop ? "on" : "")" title="@L["top.appearance"]" @onclick="() => _themePop = !_themePop"><Icon Name="user" /></button>
-    </div>
-
-    <div class="menurow">
-        <MenuBar />
-        <span class="grow"></span>
-        <span class="brand-name">@BrandName</span>
-        <span class="brand-ver">@Version</span>
     </div>
 
     <div class="toolbar">
