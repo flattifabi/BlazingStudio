@@ -23,6 +23,12 @@ public sealed class RunService
     private ProcessRunner? _runner;
     private ProcessRunner? _buildRunner;
 
+    /// <summary>Ergebnis des letzten Builds (null = noch keiner).</summary>
+    public bool? LastBuildOk { get; private set; }
+
+    /// <summary>Build-Konfiguration aus den Einstellungen (Debug/Release).</summary>
+    private string Config => _settings.Current.BuildConfiguration is "Release" ? "Release" : "Debug";
+
     public RunService(Workspace ws, SettingsService settings, Localizer l, IHostBridge host)
     {
         _ws = ws;
@@ -106,13 +112,13 @@ public sealed class RunService
         State = RunState.Building;
         _diagnostics.Clear();
         Changed?.Invoke();
-        Write("❯ dotnet build", OutputKind.Command);
+        Write("❯ dotnet build -c " + Config, OutputKind.Command);
         _buildRunner = new ProcessRunner();
         _buildRunner.Output += OnProcessLine;
         int code;
         try
         {
-            code = await _buildRunner.RunAsync("dotnet", new[] { "build", ProjectFile, "-nologo", "-v", "q", "-clp:NoSummary" }, Path.GetDirectoryName(ProjectFile)!);
+            code = await _buildRunner.RunAsync("dotnet", new[] { "build", ProjectFile, "-c", Config, "-nologo", "-v", "q", "-clp:NoSummary" }, Path.GetDirectoryName(ProjectFile)!);
         }
         catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
@@ -125,6 +131,7 @@ public sealed class RunService
             _buildRunner = null;
         }
         Write(code == 0 ? "✓ " + _l["run.buildOk"] : "✗ " + _l["run.buildFailed"], code == 0 ? OutputKind.Success : OutputKind.Error);
+        LastBuildOk = code == 0;
         State = wasRunning == RunState.Running && _runner?.IsRunning == true ? RunState.Running : RunState.Idle;
         Changed?.Invoke();
         return code == 0;
@@ -143,8 +150,8 @@ public sealed class RunService
 
         var dir = Path.GetDirectoryName(ProjectFile)!;
         var args = HotReload
-            ? new[] { "watch", "--non-interactive", "--project", ProjectFile }
-            : new[] { "run", "--project", ProjectFile };
+            ? new[] { "watch", "--non-interactive", "--project", ProjectFile, "-c", Config }
+            : new[] { "run", "--project", ProjectFile, "-c", Config };
         Write("❯ dotnet " + string.Join(' ', args.Select(a => a.Contains(' ') ? $"\"{a}\"" : a)), OutputKind.Command);
 
         _runner?.Dispose();
@@ -233,10 +240,10 @@ public sealed class RunService
         var name = Path.GetFileName(target);
         var steps = action switch
         {
-            BuildAction.Build => new[] { new[] { "build", target, "-nologo", "-v", "q", "-clp:NoSummary" } },
-            BuildAction.Rebuild => new[] { new[] { "build", target, "--no-incremental", "-nologo", "-v", "q", "-clp:NoSummary" } },
-            BuildAction.Clean => new[] { new[] { "clean", target, "-nologo", "-v", "q" } },
-            BuildAction.CleanBuild => new[] { new[] { "clean", target, "-nologo", "-v", "q" }, new[] { "build", target, "-nologo", "-v", "q", "-clp:NoSummary" } },
+            BuildAction.Build => new[] { new[] { "build", target, "-c", Config, "-nologo", "-v", "q", "-clp:NoSummary" } },
+            BuildAction.Rebuild => new[] { new[] { "build", target, "-c", Config, "--no-incremental", "-nologo", "-v", "q", "-clp:NoSummary" } },
+            BuildAction.Clean => new[] { new[] { "clean", target, "-c", Config, "-nologo", "-v", "q" } },
+            BuildAction.CleanBuild => new[] { new[] { "clean", target, "-c", Config, "-nologo", "-v", "q" }, new[] { "build", target, "-c", Config, "-nologo", "-v", "q", "-clp:NoSummary" } },
             BuildAction.Restore => new[] { new[] { "restore", target, "-nologo", "-v", "q" } },
             _ => Array.Empty<string[]>(),
         };
@@ -269,6 +276,7 @@ public sealed class RunService
         var secs = (DateTime.Now - started).TotalSeconds.ToString("0.0", System.Globalization.CultureInfo.CurrentCulture);
         var label = _l["build." + action];
         Write(code == 0 ? $"✓ {label}: {name} ({secs} s)" : $"✗ {label}: {name} – {_l["run.buildFailed"]}", code == 0 ? OutputKind.Success : OutputKind.Error);
+        if (action != BuildAction.Clean && action != BuildAction.Restore) LastBuildOk = code == 0;
         State = wasRunning == RunState.Running && _runner?.IsRunning == true ? RunState.Running : RunState.Idle;
         Changed?.Invoke();
         return code == 0;

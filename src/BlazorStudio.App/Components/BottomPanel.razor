@@ -11,7 +11,20 @@
 <section class="island bottom">
     <div class="split-y" data-splitter="bottom" style="top:0;height:5px"></div>
     <div class="btabs rider">
-        <b class="ptitle" @onclick="() => { if (Settings.Current.BottomCollapsed) Shell.ToggleBottom(); }">@Title</b>
+        <div class="utabs">
+            @foreach (var t in MainTabs.Append(Tab).Distinct())
+            {
+                var tab = t;
+                <button class="@(Tab == tab && !Settings.Current.BottomCollapsed ? "on" : "")" @onclick="() => Select(tab)">
+                    @TitleOf(tab)
+                    @if (tab == BottomTab.Problems) { <span class="dim">(@(Run.ErrorCount + Run.WarningCount))</span> }
+                </button>
+            }
+        </div>
+        @if (Tab == BottomTab.Output && Run.State != RunState.Building && Run.LastBuildOk is { } ok)
+        {
+            <span class="bstate @(ok ? "ok" : "err")">@(ok ? L["bottom.buildOk"] : L["bottom.buildFailed"])</span>
+        }
         @switch (Tab)
         {
             case BottomTab.Terminal:
@@ -197,7 +210,11 @@
         }
     }
 
-    private string Title => Tab switch
+    private static readonly BottomTab[] MainTabs = { BottomTab.Output, BottomTab.Problems, BottomTab.Debug, BottomTab.Terminal };
+
+    private string Title => TitleOf(Tab);
+
+    private string TitleOf(BottomTab tab) => tab switch
     {
         BottomTab.Output => L["bottom.build"],
         BottomTab.Problems => L["bottom.problems"],

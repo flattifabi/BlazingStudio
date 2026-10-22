@@ -7,73 +7,71 @@
 @inject UiService Ui
 
 <div class="bpbar">
-    @if (Session.View != ViewMode.Code && !_live)
-    {
-        <div class="seg ic" title="@L["dev.title"]">
-            <button class="@(Session.DevicePreset == "desktop" ? "on" : "")" title="@L["dev.desktop"]" @onclick='() => SetPreset("desktop")'><Icon Name="monitor" />@L["dev.desktop"]</button>
-            <button class="@(Session.DevicePreset == "tablet" ? "on" : "")" title="@L["dev.tablet"]" @onclick='() => SetPreset("tablet")'><Icon Name="tablet" />@L["dev.tablet"]</button>
-            <button class="@(Session.DevicePreset == "phone" ? "on" : "")" title="@L["dev.phone"]" @onclick='() => SetPreset("phone")'><Icon Name="phone" />@L["dev.phone"]</button>
-        </div>
-        @if (Session.DevicePreset is "tablet" or "phone")
-        {
-            <button class="ibtn sm @(Session.DeviceLandscape ? "on" : "")" title="@L["dev.rotate"]" @onclick="Rotate"><Icon Name="rotate" /></button>
-        }
-        <div class="bps" title="Breakpoints">
-            @foreach (var bp in Breakpoints.Where(b => b.Width > 0))
-            {
-                var b = bp;
-                <button class="@(Session.DevicePreset == "custom" && Session.DeviceWidth == b.Width ? "on" : "")" title="@b.Title" @onclick="() => SetDevice(b.Width)">@b.Name</button>
-            }
-        </div>
-        <span class="dim mono" style="font-size:11.5px">@(Session.DeviceWidth > 0 ? Session.DeviceWidth + " px" : "")</span>
-    }
+    <div class="utabs">
+        <button class="@(Session.View == ViewMode.Design && !_live ? "on" : "")" @onclick="() => SetView(ViewMode.Design)">@L["view.designer"]</button>
+        <button class="@(Session.View == ViewMode.Code && !_live ? "on" : "")" @onclick="() => SetView(ViewMode.Code)">@L["view.source"]</button>
+        <button class="@(Session.View == ViewMode.Split && !_live ? "on" : "")" @onclick="() => SetView(ViewMode.Split)">@L["view.split"]</button>
+    </div>
     <span class="grow"></span>
     @if (Session.View != ViewMode.Code && !_live)
     {
-        <div class="crumb">
-            @if (Session.Selected is { } sel)
+        @if (Session.DevicePreset is "tablet" or "phone")
+        {
+            <button class="ibtn sm @(Session.DeviceLandscape ? "on" : "")" title="@L["dev.rotate"]" @onclick="() => Rotate(Session, Ws)"><Icon Name="rotate" /></button>
+        }
+        <div class="bps" title="Breakpoints">
+            @foreach (var bp in Breakpoints)
             {
-                var chain = sel.Ancestors().Where(a => !a.IsRoot).Reverse().Append(sel).ToList();
-                @foreach (var n in chain.TakeLast(4))
-                {
-                    var node = n;
-                    @if (node != chain.TakeLast(4).First()) { <Icon Name="chev" /> }
-                    <span class="@(node == sel ? "cur" : "")" @onclick="() => Session.SelectNode(node)">@CanvasRenderer.LabelOf(node)</span>
-                }
-            }
-            else
-            {
-                <span class="dim">@(Session.Doc?.PageRoute is { } r ? r : Session.Name)</span>
+                var b = bp;
+                <button class="@(b.Width == 0 ? (Session.DevicePreset == "desktop" ? "on" : "") : Session.DevicePreset == "custom" && Session.DeviceWidth == b.Width ? "on" : "")" title="@b.Title"
+                        @onclick='() => { if (b.Width == 0) ApplyPreset(Session, Ws, "desktop"); else SetDevice(b.Width); }'>@b.Name</button>
             }
         </div>
-        <span class="grow"></span>
+        <span class="tsep"></span>
         <div class="zoomctl">
             <button class="ibtn sm" title="@L["cmd.zoomOut"]" @onclick="() => Zoom(-10)"><Icon Name="minus" /></button>
             <span title="@L["cmd.zoomReset"]" @onclick="() => Zoom(0)">@Session.Zoom %</span>
             <button class="ibtn sm" title="@L["cmd.zoomIn"]" @onclick="() => Zoom(10)"><Icon Name="plus" /></button>
         </div>
-    }
-    @if (Session.View != ViewMode.Code && !_live && LiveDesign.Enabled && Session.Doc?.PageRoute is not null)
-    {
-        <button class="tog-layout @(LiveDesign.ShowLayout ? "on" : "")" title="@L["live.layoutHint"]" @onclick="() => LiveDesign.SetShowLayout(!LiveDesign.ShowLayout)">
-            <Icon Name="layout" />@L["live.layout"]
-        </button>
-    }
-    @if (Session.View != ViewMode.Code && !_live)
-    {
+        <span class="grow"></span>
+        @if (LiveDesign.Enabled && Session.Doc?.PageRoute is not null)
+        {
+            <button class="tog-layout @(LiveDesign.ShowLayout ? "on" : "")" title="@L["live.layoutHint"]" @onclick="() => LiveDesign.SetShowLayout(!LiveDesign.ShowLayout)">
+                <Icon Name="layout" />@L["live.layout"]
+            </button>
+        }
         <button class="live-badge st-@LiveDesign.State.ToString().ToLowerInvariant() @(LiveDesign.Enabled ? "" : "off")" title="@L["live.menuTitle"]" @onclick="LiveMenu">
             <i></i>
             @(LiveDesign.Enabled ? L["live.state." + LiveDesign.State] : L["live.approx"])
             @if (LiveDesign.Interact && LiveDesign.State == LiveDesignState.Ready) { <span class="int">@L["live.interacting"]</span> }
         </button>
     }
-    <div class="seg">
-        <button class="@(Session.View == ViewMode.Design && !_live ? "on" : "")" @onclick="() => SetView(ViewMode.Design)"><Icon Name="design" />@L["view.design"]</button>
-        <button class="@(Session.View == ViewMode.Split && !_live ? "on" : "")" @onclick="() => SetView(ViewMode.Split)"><Icon Name="split" />@L["view.split"]</button>
-        <button class="@(Session.View == ViewMode.Code && !_live ? "on" : "")" @onclick="() => SetView(ViewMode.Code)"><Icon Name="code" />@L["view.code"]</button>
-        <button class="@(_live ? "on" : "")" title="@L["view.liveHint"]" @onclick="() => _live = !_live"><Icon Name="globe" />@L["view.live"]</button>
-    </div>
+    <button class="btn sm preview-btn @(_live ? "on" : "")" title="@L["view.liveHint"]" @onclick="() => _live = !_live"><Icon Name="eye" />@L["view.preview"]</button>
 </div>
+
+@if (Session.View != ViewMode.Code && !_live)
+{
+    <div class="canvas-meta">
+        <div class="crumb">
+            @if (Session.Selected is { } sel)
+            {
+                var chain = sel.Ancestors().Where(a => !a.IsRoot).Reverse().Append(sel).ToList();
+                @foreach (var n in chain.TakeLast(5))
+                {
+                    var node = n;
+                    @if (node != chain.TakeLast(5).First()) { <Icon Name="chev" /> }
+                    <span class="@(node == sel ? "cur" : "")" @onclick="() => Session.SelectNode(node)">@CanvasRenderer.LabelOf(node)</span>
+                }
+            }
+            else
+            {
+                <span>@CrumbPath</span>
+            }
+        </div>
+        <span class="grow"></span>
+        <span class="dim">@DeviceText</span>
+    </div>
+}
 
 @if (LiveDesign.Enabled && LiveDesign.State == LiveDesignState.Failed && Session.View != ViewMode.Code && !_live)
 {
@@ -251,21 +249,23 @@
         Ws.Activate(Session);
     }
 
-    private void SetPreset(string preset)
+    /// <summary>Geräteansicht setzen (auch aus der Werkzeugleiste oben).</summary>
+    public static void ApplyPreset(DocumentSession session, Workspace ws, string preset)
     {
-        Session.DevicePreset = preset;
-        ApplyPreset();
+        session.DevicePreset = preset;
+        if (preset == "desktop") session.DeviceLandscape = false;
+        UpdateWidth(session, ws);
     }
 
-    private void Rotate()
+    public static void Rotate(DocumentSession session, Workspace ws)
     {
-        Session.DeviceLandscape = !Session.DeviceLandscape;
-        ApplyPreset();
+        session.DeviceLandscape = !session.DeviceLandscape;
+        UpdateWidth(session, ws);
     }
 
-    private void ApplyPreset()
+    private static void UpdateWidth(DocumentSession session, Workspace ws)
     {
-        Session.DeviceWidth = (Session.DevicePreset, Session.DeviceLandscape) switch
+        session.DeviceWidth = (session.DevicePreset, session.DeviceLandscape) switch
         {
             ("tablet", false) => 768,
             ("tablet", true) => 1024,
@@ -273,8 +273,30 @@
             ("phone", true) => 844,
             _ => 0,
         };
-        Ws.Activate(Session);
+        ws.Activate(session);
     }
+
+    /// <summary>„Pages / Equipment / EquipmentResultList“ aus dem Pfad relativ zum Projekt.</summary>
+    private string CrumbPath
+    {
+        get
+        {
+            var root = Ws.Project?.RootDirectory;
+            var rel = root is not null && Session.Path.StartsWith(root, StringComparison.OrdinalIgnoreCase) ? Path.GetRelativePath(root, Session.Path) : Session.Name;
+            var parts = rel.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries).ToList();
+            if (parts.Count > 0) parts[^1] = Path.GetFileNameWithoutExtension(parts[^1]);
+            if (parts.Count > 1 && parts[0].Equals("Components", StringComparison.OrdinalIgnoreCase)) parts.RemoveAt(0);
+            return string.Join(" / ", parts) + (Session.Doc?.PageRoute is { } r ? "  ·  " + r : "");
+        }
+    }
+
+    private string DeviceText => Session.DevicePreset switch
+    {
+        "tablet" => L["dev.tablet"],
+        "phone" => L["dev.phone"],
+        "custom" => BreakpointName(Session.DeviceWidth) ?? "Custom",
+        _ => L["dev.desktop"],
+    } + (Session.DeviceWidth > 0 ? $" · {Session.DeviceWidth} px" : " · 100 %") + $" · {Session.Zoom} %";
 
     private void Zoom(int delta)
     {

@@ -1,58 +1,53 @@
 @inherits StudioComponent
 @inject IHostBridge Host
 
+@* Kopfbereich in drei Zeilen: Marke (Logo, Projekt, Befehle/Meldungen/Profil) · Menü · Werkzeugleiste (Build/Start/Bereitstellen). *@
 <header class="top">
-    <img class="mark" src="img/logo.svg" alt="" title="Blazor Studio" />
-
-    <button class="proj" @onclick="() => _projMenu = !_projMenu">
-        <b class="ellipsis">@(Ws.Solution?.Name ?? Ws.Project?.Name ?? "Blazor Studio")</b>@if (Ws.Solution is not null && Ws.Project is not null && Ws.Solution.Name != Ws.Project.Name) { <span class="dim" style="font-size:12px">› @Ws.Project.Name</span> }<Icon Name="chevd" />
-    </button>
-    @if (_projMenu)
-    {
-        <div class="click-catcher" @onclick="() => _projMenu = false"></div>
-        <div class="pop menu-pop" style="left:40px;top:42px">
-            <button class="mi" @onclick='() => Run_("file.open")'><Icon Name="folderopen" />@L["cmd.openProject"]<kbd>Ctrl O</kbd></button>
-            <button class="mi" @onclick='() => Run_("file.openSolution")'><Icon Name="sln" />@L["cmd.openSolution"]</button>
-            <button class="mi" @onclick='() => Run_("file.newProject")'><Icon Name="foldernew" />@L["cmd.newProject"]</button>
-            @if (Ws.HasProject)
-            {
-                <button class="mi" @onclick='() => Run_("file.newComponent")'><Icon Name="filenew" />@L["cmd.newComponent"]<kbd>Ctrl N</kbd></button>
-                <button class="mi" @onclick='() => Run_("tools.nuget")'><Icon Name="package" />@L["cmd.nuget"]<kbd>Ctrl Shift N</kbd></button>
-                <button class="mi" @onclick='() => Run_("tools.ef")'><Icon Name="database" />@L["cmd.ef"]</button>
-                <button class="mi" @onclick='() => Run_("file.reveal")'><Icon Name="folder" />@L["cmd.reveal"]</button>
-                <button class="mi" @onclick='() => Run_("file.rescan")'><Icon Name="refresh" />@L["cmd.rescan"]</button>
-            }
-            @if (Settings.Current.RecentProjects.Count > 0)
-            {
-                <div class="sep"></div>
-                <div class="hdr">@L["welcome.recent"]</div>
-                @foreach (var r in Settings.Current.RecentProjects.Take(6))
-                {
-                    <button class="mi" title="@r" @onclick="() => OpenRecent(r)"><Icon Name="folder" /><span class="ellipsis" style="max-width:260px">@Path.GetFileName(r.TrimEnd('\\'))</span></button>
-                }
-            }
-            @if (Ws.HasProject)
-            {
-                <div class="sep"></div>
-                <button class="mi" @onclick='() => Run_("file.closeProject")'><Icon Name="x" />@L["cmd.closeProject"]</button>
-            }
-        </div>
-    }
-
-    <MenuBar />
-
-    @if (Ws.HasProject)
-    {
-        <span class="chip" title="@Ws.Project!.RootDirectory"><Icon Name="git" />@(GitBranch ?? Ws.Project.Name)</span>
-    }
-
-    <div class="cmd" @onclick='() => Ui.OpenCommandPalette(Ws.HasProject ? "" : ">")'>
-        <Icon Name="search" Class="sm" /><span>@L["top.search"]</span><kbd>Ctrl K</kbd>
+    <div class="brandbar">
+        <img class="brand-logo @(Settings.Current.BrandLogo is { Length: > 0 } ? "custom" : "")" src="@LogoSrc" alt="" title="@BrandName" />
+        <b class="brand-app ellipsis">@(Ws.Solution?.Name ?? Ws.Project?.Name ?? BrandName)</b>
+        <span class="grow"></span>
+        <button class="ibtn" title="@L["cmd.commands"] (Ctrl+K)" @onclick='() => Ui.OpenCommandPalette(Ws.HasProject ? "" : ">")'><Icon Name="grid" /></button>
+        <button class="ibtn" title="@L["bottom.problems"]" disabled="@(!Ws.HasProject)" @onclick="() => BottomPanel.Show?.Invoke(BottomTab.Problems)">
+            <Icon Name="bell" />
+            @if (Run.ErrorCount + Run.WarningCount > 0) { <i class="nbadge @(Run.ErrorCount > 0 ? "err" : "")">@(Run.ErrorCount + Run.WarningCount > 99 ? "99+" : Run.ErrorCount + Run.WarningCount)</i> }
+        </button>
+        <button class="ibtn @(_themePop ? "on" : "")" title="@L["top.appearance"]" @onclick="() => _themePop = !_themePop"><Icon Name="user" /></button>
     </div>
 
-    <div class="cluster">
+    <div class="menurow">
+        <MenuBar />
+        <span class="grow"></span>
+        <span class="brand-name">@BrandName</span>
+        <span class="brand-ver">@Version</span>
+    </div>
+
+    <div class="toolbar">
+        <button class="tsel proj" title="@(Ws.Project?.RootDirectory ?? L["cmd.openProject"])" @onclick="() => _projMenu = !_projMenu">
+            <Icon Name="folder" />
+            <span class="ellipsis">@(Ws.Project?.Name ?? Ws.Solution?.Name ?? L["cmd.openProject"])</span>
+            <Icon Name="chevd" Class="cv" />
+        </button>
+        @if (Ws.HasProject)
+        {
+            <span class="tsep"></span>
+            <button class="ibtn" title="@L["cmd.saveAll"] (Ctrl+Shift+S)" disabled="@(!Dirty)" @onclick='() => Run_("file.saveAll")'><Icon Name="save" /></button>
+            <button class="ibtn" title="@L["cmd.rescan"]" @onclick='() => Run_("file.rescan")'><Icon Name="refresh" /></button>
+            <button class="ibtn" title="@L["cmd.undo"] (Ctrl+Z)" @onclick='() => Run_("edit.undo")'><Icon Name="undo" /></button>
+            <button class="ibtn" title="@L["cmd.redo"] (Ctrl+Y)" @onclick='() => Run_("edit.redo")'><Icon Name="redo" /></button>
+        }
+
+        <span class="grow"></span>
+
         @if (Ws.Project?.ProjectFile is not null)
         {
+            <button class="tsel" title="@L["top.configuration"]" @onclick="ConfigMenu">
+                <span>@Settings.Current.BuildConfiguration</span><Icon Name="chevd" Class="cv" />
+            </button>
+            <button class="tsel" title="@L["dev.title"]" disabled="@(Ws.Active?.Doc is null)" @onclick="DeviceMenu">
+                <span>@DeviceLabel · Web</span><Icon Name="chevd" Class="cv" />
+            </button>
+
             @if (Debug.IsActive)
             {
                 <div class="runpill">
@@ -85,21 +80,58 @@
             }
             else
             {
-                <button class="ibtn" title="@L["cmd.build"] (Ctrl+Shift+B)" @onclick='() => Run_("run.build")'><Icon Name="hammer" /></button>
-                <button class="ibtn" title="@L["cmd.debug"] (F5)" @onclick='() => Run_("run.debug")'><Icon Name="bug" /></button>
-                <button class="btn ac" title="@L["cmd.run"] (Ctrl+F5)" @onclick='() => Run_("run.start")'><Icon Name="play" />@L["run.start"]</button>
+                <button class="btn" title="@L["cmd.build"] (Ctrl+Shift+B)" @onclick='() => Run_("run.build")'><Icon Name="hammer" />@L["top.build"]</button>
+                <div class="splitbtn">
+                    <button class="btn ac" title="@L["cmd.run"] (Ctrl+F5)" @onclick='() => Run_("run.start")'><Icon Name="play" />@L["run.start"]</button>
+                    <button class="btn ac more" title="@L["top.runOptions"]" @onclick="RunMenu"><Icon Name="chevd" /></button>
+                </div>
             }
         }
-        @if (Ws.Project?.ProjectFile is not null)
+
+        <span class="grow"></span>
+
+        @if (Ws.HasProject)
         {
-            <button class="ibtn" title="@L["cmd.ef"]" @onclick='() => Ui.OpenOverlay("ef")'><Icon Name="database" /></button>
-            <button class="ibtn" title="@L["cmd.nuget"] (Ctrl+Shift+N)" @onclick='() => Ui.OpenOverlay("nuget")'><Icon Name="package" /></button>
+            <span class="savestate @(Dirty ? "dirty" : "")">
+                @if (Dirty) { <text>● @L["top.unsaved"]</text> } else { <Icon Name="check" />@L["top.saved"] }
+            </span>
+            @if (Ws.Project?.ProjectFile is not null)
+            {
+                <button class="btn" @onclick="DeployMenu"><Icon Name="cloudup" />@L["top.deploy"]</button>
+            }
         }
-        <button class="ibtn @(_themePop ? "on" : "")" title="@L["top.appearance"]" @onclick="() => _themePop = !_themePop">
-            <Icon Name="@(Shell.EffectiveTheme == "light" ? "sun" : "moon")" />
-        </button>
-        <button class="ibtn" title="@L["cmd.settings"]" @onclick='() => Ui.OpenOverlay("settings")'><Icon Name="gear" /></button>
     </div>
+
+    @if (_projMenu)
+    {
+        <div class="click-catcher" @onclick="() => _projMenu = false"></div>
+        <div class="pop menu-pop proj-pop">
+            <button class="mi" @onclick='() => Run_("file.open")'><Icon Name="folderopen" />@L["cmd.openProject"]<kbd>Ctrl O</kbd></button>
+            <button class="mi" @onclick='() => Run_("file.openSolution")'><Icon Name="sln" />@L["cmd.openSolution"]</button>
+            <button class="mi" @onclick='() => Run_("file.newProject")'><Icon Name="foldernew" />@L["cmd.newProject"]</button>
+            @if (Ws.HasProject)
+            {
+                <button class="mi" @onclick='() => Run_("file.newComponent")'><Icon Name="filenew" />@L["cmd.newComponent"]<kbd>Ctrl N</kbd></button>
+                <button class="mi" @onclick='() => Run_("tools.nuget")'><Icon Name="package" />@L["cmd.nuget"]<kbd>Ctrl Shift N</kbd></button>
+                <button class="mi" @onclick='() => Run_("tools.ef")'><Icon Name="database" />@L["cmd.ef"]</button>
+                <button class="mi" @onclick='() => Run_("file.reveal")'><Icon Name="folder" />@L["cmd.reveal"]</button>
+            }
+            @if (Settings.Current.RecentProjects.Count > 0)
+            {
+                <div class="sep"></div>
+                <div class="hdr">@L["welcome.recent"]</div>
+                @foreach (var r in Settings.Current.RecentProjects.Take(6))
+                {
+                    <button class="mi" title="@r" @onclick="() => OpenRecent(r)"><Icon Name="folder" /><span class="ellipsis" style="max-width:260px">@Path.GetFileName(r.TrimEnd('\\'))</span></button>
+                }
+            }
+            @if (Ws.HasProject)
+            {
+                <div class="sep"></div>
+                <button class="mi" @onclick='() => Run_("file.closeProject")'><Icon Name="x" />@L["cmd.closeProject"]</button>
+            }
+        </div>
+    }
 
     @if (_themePop)
     {
@@ -107,7 +139,7 @@
         <div class="pop theme-pop">
             <div class="tp-h">@L["theme.mode"]</div>
             <div class="tmodes">
-                @foreach (var m in new[] { "dark", "light", "system" })
+                @foreach (var m in new[] { "light", "dark", "system" })
                 {
                     <button class="@(Settings.Current.ThemeMode == m ? "on" : "")" @onclick="() => Shell.SetThemeModeAsync(m)">@L["theme." + m]</button>
                 }
@@ -120,10 +152,11 @@
                 }
             </div>
             <div class="tp-h">@L["settings.language"]</div>
-            <div class="tmodes" style="grid-template-columns:1fr 1fr;margin-bottom:0">
+            <div class="tmodes" style="grid-template-columns:1fr 1fr">
                 <button class="@(L.Language == "de" ? "on" : "")" @onclick='() => Shell.SetLanguage("de")'>Deutsch</button>
                 <button class="@(L.Language == "en" ? "on" : "")" @onclick='() => Shell.SetLanguage("en")'>English</button>
             </div>
+            <button class="btn wide" @onclick='() => { _themePop = false; Ui.OpenOverlay("settings"); }'><Icon Name="gear" />@L["cmd.settings"]</button>
         </div>
     }
 </header>
@@ -133,27 +166,47 @@
 
     private bool _projMenu;
     private bool _themePop;
+    private (string? Path, string Src) _logo;
 
-    public static readonly string[] Accents = { "#4c8dff", "#14b8a6", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899", "#64748b" };
+    public static readonly string[] Accents = { "#e2001a", "#4c8dff", "#14b8a6", "#22c55e", "#f59e0b", "#8b5cf6", "#ec4899", "#64748b" };
+
+    private string BrandName => Settings.Current.BrandName is { Length: > 0 } n ? n : "Blazor Studio";
+
+    private static string Version => "v" + UpdateService.CurrentVersion.Split('+')[0];
+
+    private bool Dirty => Ws.Documents.Any(d => d.IsDirty);
 
     private string ShortUrl => Run.Url?.Replace("https://", "").Replace("http://", "").TrimEnd('/') ?? "";
 
-    private string? GitBranch
+    private string DeviceLabel => Ws.Active?.DevicePreset switch
+    {
+        "tablet" => L["dev.tablet"],
+        "phone" => L["dev.phone"],
+        "custom" when Ws.Active.DeviceWidth > 0 => Ws.Active.DeviceWidth + " px",
+        _ => L["dev.desktop"],
+    };
+
+    /// <summary>Eigenes Firmenlogo als data-URL (die WebView darf keine lokalen Dateien laden).</summary>
+    private string LogoSrc
     {
         get
         {
-            var dir = Ws.Project?.RootDirectory;
-            for (var i = 0; i < 4 && dir is not null; i++)
+            var path = Settings.Current.BrandLogo;
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return "img/logo.svg";
+            if (_logo.Path == path) return _logo.Src;
+            try
             {
-                var head = Path.Combine(dir, ".git", "HEAD");
-                if (File.Exists(head))
+                var mime = Path.GetExtension(path).ToLowerInvariant() switch
                 {
-                    var t = Workspace.ReadText(head)?.Trim();
-                    return t?.StartsWith("ref: refs/heads/", StringComparison.Ordinal) == true ? t[16..] : t?[..Math.Min(7, t.Length)];
-                }
-                dir = Path.GetDirectoryName(dir);
+                    ".svg" => "image/svg+xml", ".png" => "image/png", ".jpg" or ".jpeg" => "image/jpeg", ".gif" => "image/gif", ".webp" => "image/webp", _ => "image/png",
+                };
+                _logo = (path, $"data:{mime};base64,{Convert.ToBase64String(File.ReadAllBytes(path))}");
+                return _logo.Src;
             }
-            return null;
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                return "img/logo.svg";
+            }
         }
     }
 
@@ -175,4 +228,39 @@
         var route = Ws.Active?.Doc?.PageRoute;
         Host.OpenExternal(Run.Url.TrimEnd('/') + (route is not null && !route.Contains('{') ? route : "/"));
     }
+
+    private MenuEntry Cmd(string id, bool @checked = false)
+    {
+        var c = Shell.Commands.FirstOrDefault(x => x.Id == id);
+        return c is null
+            ? MenuEntry.Separator
+            : new MenuEntry(L[c.LabelKey], c.Icon, () => Shell.ExecuteAsync(id), c.Keys, Disabled: c.Enabled?.Invoke() == false, Checked: @checked);
+    }
+
+    private void ConfigMenu(MouseEventArgs e) => Ui.ShowMenu(e.ClientX - 40, e.ClientY + 14, new[] { "Debug", "Release" }.Select(c =>
+        MenuEntry.Do(c, c == "Debug" ? "bug" : "rocket", () => { Settings.Current.BuildConfiguration = c; Settings.Save(); })
+            with { Checked = Settings.Current.BuildConfiguration == c }));
+
+    private void DeviceMenu(MouseEventArgs e)
+    {
+        if (Ws.Active is not { } s) return;
+        Ui.ShowMenu(e.ClientX - 40, e.ClientY + 14, new[]
+        {
+            MenuEntry.Do(L["dev.desktop"] + " · Web", "monitor", () => DesignerView.ApplyPreset(s, Ws, "desktop")) with { Checked = s.DevicePreset == "desktop" },
+            MenuEntry.Do(L["dev.tablet"] + " · Web", "tablet", () => DesignerView.ApplyPreset(s, Ws, "tablet")) with { Checked = s.DevicePreset == "tablet" },
+            MenuEntry.Do(L["dev.phone"] + " · Web", "phone", () => DesignerView.ApplyPreset(s, Ws, "phone")) with { Checked = s.DevicePreset == "phone" },
+            MenuEntry.Separator,
+            MenuEntry.Do(L["dev.rotate"], "rotate", () => DesignerView.Rotate(s, Ws), disabled: s.DevicePreset is not ("tablet" or "phone")) with { Checked = s.DeviceLandscape },
+        });
+    }
+
+    private void RunMenu(MouseEventArgs e) => Ui.ShowMenu(e.ClientX - 200, e.ClientY + 14, new[]
+    {
+        Cmd("run.start"), Cmd("run.startNoHot"), Cmd("run.debug"), MenuEntry.Separator, Cmd("run.browser"), Cmd("tools.profiler"),
+    });
+
+    private void DeployMenu(MouseEventArgs e) => Ui.ShowMenu(e.ClientX - 220, e.ClientY + 14, new[]
+    {
+        Cmd("tools.iisDeploy"), Cmd("deploy.dockerDeploy"), Cmd("run.publish"), MenuEntry.Separator, Cmd("tools.iis"), Cmd("deploy.docker"), Cmd("tools.pipelines"),
+    });
 }

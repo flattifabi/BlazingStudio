@@ -1287,3 +1287,156 @@ textarea.dk-area { width: 100%; min-height: 64px; resize: vertical; font-size: 1
 .cert-target .check svg { width: 13px; height: 13px; color: var(--ac); margin-right: 2px; }
 .cert-create { width: min(720px, 94%); }
 .cert-preview { max-height: 120px; margin-top: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); }
+
+/* ==================================================================
+   Design 2 – flache Arbeitsfläche: Markenleiste, Menüzeile, Werkzeugleiste,
+   durchgehende Spalten mit 1-px-Trennlinien, Unterstrich-Reiter, dunkle Statusleiste.
+   ================================================================== */
+:root, [data-theme="dark"] {
+  --primary: #e9eaee; --on-primary: #16171a;
+  --status-bg: #0c0c0e; --status-fg: #d8d9de; --status-dim: #8a8b93;
+}
+[data-theme="light"] {
+  --bg: #ffffff; --island: #ffffff; --island-2: #f7f8fa; --raised: #f0f1f3; --hover: #f2f3f5;
+  --line: #e3e5e9; --line-2: #cdd1d7; --canvas: #ebecef;
+  --text: #1c1f24; --text-2: #3b4048; --muted: #676d76; --dim: #9aa0a8;
+  --field: #ffffff; --pop: #ffffff; --shadow: 0 10px 28px rgba(20,24,32,.14);
+  --primary: #2b2f36; --on-primary: #ffffff;
+  --status-bg: #2f333a; --status-fg: #e6e8eb; --status-dim: #a9aeb6;
+}
+
+/* ---------- Raster ---------- */
+.shell { padding: 0; gap: 1px; background: var(--line);
+  grid-template-rows: auto 1fr var(--bottom-h, 190px) 24px;
+  grid-template-columns: 48px var(--tool-w, 260px) 1fr var(--side-w, 320px);
+  grid-template-areas: "top top top top" "strip tool doc side" "strip tool bottom side" "status status status status"; }
+.shell.no-toolbox { grid-template-columns: 48px 1fr var(--side-w, 320px); grid-template-areas: "top top top" "strip doc side" "strip bottom side" "status status status"; }
+.shell.bottom-collapsed { grid-template-rows: auto 1fr 34px 24px; }
+.shell.no-project { grid-template-rows: auto 1fr 24px; grid-template-columns: 1fr; grid-template-areas: "top" "doc" "status"; }
+.island { border: 0; border-radius: 0; background: var(--island); }
+.side { background: var(--line); grid-template-rows: var(--layers-h, 250px) 5px 1fr; }
+.side .vsplit { background: var(--island); border-top: 1px solid var(--line); }
+.side .vsplit:hover { background: var(--ac-soft); }
+
+/* Panel-Kopf (Komponenten, Ebenen …) */
+.ph { display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 8px 0 14px; border-bottom: 1px solid var(--line); flex: none; font-size: 13px; }
+.ph b { font-weight: 650; }
+.ph .dim { font-size: 11.5px; }
+
+/* ---------- Kopfbereich ---------- */
+.top { flex-direction: column; align-items: stretch; gap: 0; padding: 0; background: var(--island); }
+.brandbar { display: flex; align-items: center; gap: 6px; height: 52px; padding: 0 12px 0 16px; border-bottom: 1px solid var(--line); }
+.brand-logo { height: 26px; width: auto; max-width: 160px; display: block; margin-right: 10px; }
+.brand-logo.custom { height: 30px; filter: none; }
+.brand-app { font-size: 14.5px; font-weight: 650; max-width: 40vw; }
+.brandbar .ibtn { width: 34px; height: 34px; }
+.brandbar .ibtn svg { width: 18px; height: 18px; }
+.nbadge { position: absolute; top: 3px; right: 3px; min-width: 15px; height: 15px; padding: 0 3px; border-radius: 8px; background: var(--warn); color: #fff; font: 700 9px/15px var(--ui); font-style: normal; text-align: center; }
+.nbadge.err { background: var(--err); }
+.menurow { display: flex; align-items: center; height: 30px; padding: 0 10px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.menurow .mb { height: 26px; padding: 0 9px; border-radius: 4px; font-size: 12.5px; }
+.brand-name { color: var(--muted); font-size: 11.5px; }
+.brand-ver { color: var(--dim); font-size: 11px; margin-left: 10px; padding-left: 10px; border-left: 1px solid var(--line); }
+.toolbar { display: flex; align-items: center; gap: 6px; height: 52px; padding: 0 12px; }
+.toolbar .ibtn { width: 32px; height: 32px; border-radius: 5px; }
+.toolbar .btn { height: 34px; padding: 0 14px; border-radius: 5px; }
+.tsel { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px 0 12px; border-radius: 5px; border: 1px solid var(--line-2); background: var(--field); color: var(--text); font-size: 12.5px; min-width: 96px; max-width: 260px; }
+.tsel:hover:not(:disabled) { border-color: var(--muted); }
+.tsel svg { width: 15px; height: 15px; color: var(--muted); }
+.tsel .cv { width: 12px; height: 12px; margin-left: auto; }
+.tsel.proj { min-width: 220px; }
+.tsel > span { flex: 1; text-align: left; }
+.tsep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; flex: none; }
+.splitbtn { display: inline-flex; }
+.splitbtn .btn.ac { border-radius: 5px 0 0 5px; }
+.splitbtn .btn.more { border-radius: 0 5px 5px 0; padding: 0 9px; border-left: 1px solid color-mix(in srgb, var(--on-primary) 22%, transparent); }
+.savestate { display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 12px; margin-right: 6px; white-space: nowrap; }
+.savestate svg { width: 13px; height: 13px; }
+.savestate.dirty { color: var(--warn); }
+.toolbar .runpill { height: 34px; border-radius: 5px; }
+.proj-pop { left: 12px; top: 128px; }
+.theme-pop { top: 50px; right: 10px; }
+.theme-pop .btn.wide { margin-top: 2px; }
+
+/* Primär-Schaltflächen dunkel, Akzent bleibt für Auswahl/Markierungen */
+.btn { border-radius: 5px; }
+.btn.ac { background: var(--primary); color: var(--on-primary); border-color: transparent; }
+.btn.ac:hover:not(:disabled) { background: var(--primary); filter: brightness(1.15); }
+[data-theme="dark"] .btn.ac:hover:not(:disabled) { filter: brightness(.92); }
+.f { border-radius: 5px; border-color: var(--line-2); }
+.f:focus-within { border-color: var(--muted); }
+
+/* ---------- Werkzeugleiste links ---------- */
+.strip { margin: 0; padding: 8px 0; gap: 6px; background: var(--island); }
+.strip button { width: 36px; height: 36px; border-radius: 6px; }
+.strip button svg { width: 19px; height: 19px; }
+.strip button.on { background: var(--raised); color: var(--text); box-shadow: inset 2px 0 0 var(--ac); }
+
+/* ---------- Unterstrich-Reiter ---------- */
+.utabs { display: flex; align-items: stretch; gap: 20px; align-self: stretch; min-width: 0; }
+.utabs button { position: relative; display: inline-flex; align-items: center; gap: 5px; padding: 0 1px; color: var(--muted); font-size: 12.5px; white-space: nowrap; border-radius: 0; }
+.utabs button:hover:not(:disabled) { color: var(--text); }
+.utabs button.on { color: var(--text); font-weight: 600; }
+.utabs button.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--text); }
+.utabs .dim { font-weight: 400; }
+
+/* ---------- Linke Spalte ---------- */
+.leftpanel { position: relative; }
+.toolbox .sh.tb-tabs { padding: 0 14px; height: 34px; align-items: stretch; border-bottom: 1px solid var(--line); }
+.toolbox .sh.tb-tabs .utabs { gap: 16px; }
+.leftpanel > .side-search, .leftpanel .side-search { margin: 10px 12px 6px; }
+.tb-list { padding: 4px 8px 12px; }
+.tb-group { height: 36px; margin: 0 -8px; padding: 0 10px 0 14px; font-size: 12.5px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--text-2); border-radius: 0; border-bottom: 1px solid var(--line); }
+.tb-item { height: 32px; padding-left: 10px; border-radius: 4px; color: var(--text-2); }
+.tb-item:hover { border-color: transparent; background: var(--hover); }
+
+/* ---------- Dokumentbereich ---------- */
+.tabs { padding: 0 6px; gap: 0; height: 40px; align-items: stretch; border-bottom: 1px solid var(--line); background: var(--island); }
+.tab { height: auto; border-radius: 0; padding: 0 10px 0 14px; color: var(--muted); }
+.tab:hover { background: var(--hover); }
+.tab.on { background: var(--island); color: var(--text); font-weight: 550; }
+.tab.on::after { left: 0; right: 0; bottom: -1px; height: 2px; border-radius: 0; background: var(--text); }
+.docbody { border-top: 0; background: var(--island); }
+.bpbar { height: 44px; padding: 0 14px; gap: 10px; border-bottom: 1px solid var(--line); background: var(--island); }
+.bpbar .utabs { gap: 22px; }
+.bpbar .tsep { height: 18px; }
+.bps { border-radius: 5px; }
+.bps button { border-radius: 4px; }
+.preview-btn { height: 30px; }
+.preview-btn.on { background: var(--primary); color: var(--on-primary); border-color: transparent; }
+.canvas-meta { display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 16px; flex: none; font-size: 11.5px; color: var(--muted); background: var(--canvas); }
+.canvas-meta .crumb { font: 11.5px var(--ui); }
+.canvas-meta .crumb span.cur { color: var(--ac); background: transparent; font-weight: 600; }
+.stage { margin: 0; border: 0; border-radius: 0; }
+.surface.design .stage, .surface.live .stage { margin: 0; border: 0; border-radius: 0; }
+.codepane, .surface.code .codepane, .codepane.solo { margin: 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; }
+.surface.code .codepane { border-top: 0; }
+.hs { background: var(--line); }
+
+/* ---------- Unteres Panel ---------- */
+.btabs { height: 38px; padding: 0 8px 0 14px; gap: 8px; align-items: stretch; }
+.btabs > .ibtn, .btabs > .sub, .btabs > .cnt, .btabs > .hint, .btabs > .bstate { align-self: center; }
+.btabs .utabs { margin-right: 10px; }
+.bstate { font-size: 11.5px; font-weight: 600; margin-right: 4px; }
+.bstate.ok { color: var(--ok); } .bstate.err { color: var(--err); }
+
+/* ---------- Eigenschaften ---------- */
+.ihead { padding: 12px 14px 0; }
+.ititle b { font: 650 14px var(--ui); }
+.itabs { margin: 12px -14px 0; padding: 0 14px; height: 36px; border-top: 1px solid var(--line); }
+.ins-search { margin: 8px 0 10px; }
+
+/* ---------- Statusleiste ---------- */
+.status { background: var(--status-bg); color: var(--status-dim); padding: 0 12px; }
+.status button { color: var(--status-dim); }
+.status button:hover { color: var(--status-fg); }
+.status .r, .status .r * { color: var(--status-dim); }
+.status > span:first-child { color: var(--status-fg); }
+.status .ok { color: #57d07a; } .status .warn { color: #e8b44a; } .status .err { color: #ff7b72; }
+
+/* Auswahl ruhig grau statt Akzentfläche; Akzent nur als Markierung */
+.tree .row.on { background: var(--raised); color: var(--text); box-shadow: inset 2px 0 0 var(--ac); }
+.bps button.on { background: var(--raised); color: var(--text); font-weight: 600; }
+.sec h4 { font-size: 12.5px; letter-spacing: 0; text-transform: none; color: var(--text); font-weight: 600; }
+.sec { padding: 12px 14px; }
+.side > .split-x { z-index: 6; }

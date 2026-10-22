@@ -1,3 +1,16 @@
+## Neu: Oberflächen-Design
+- **Neue Kopfzeile in drei Ebenen:**
+  - Markenleiste mit Logo und Projektname, rechts Befehle (Strg+K), Meldungen (Fehler/Warnungen mit Zähler) und Profil (Darstellung, Sprache, Einstellungen).
+  - Menüzeile mit Produktname und Version.
+  - Werkzeugleiste: Projektauswahl, Speichern, Neu einlesen, Rückgängig/Wiederholen; in der Mitte **Build-Konfiguration (Debug/Release)**, **Geräteansicht (Desktop/Tablet/Smartphone · Web)**, **Build** und **Starten** (mit Menü für Debuggen, ohne Hot Reload, Browser, Profiler); rechts der Speicherstatus und **Bereitstellen** (IIS, Docker, Veröffentlichen, Pipelines).
+- **Durchgehende Arbeitsfläche ohne Inseln:** flache Spalten mit feinen Trennlinien und Reitern mit Unterstrich (Designer | Quelltext | Split, Build | Probleme | Debugkonsole | Terminal, Design | Eigenschaften | Ereignisse). Dunkle Primärknöpfe, der Akzent (Standard Rot) markiert Auswahl und aktive Elemente. Die Statusleiste ist dunkel.
+- **Linke Spalte umschaltbar** über die Leiste ganz links: Komponenten, Projektmappe oder Claude. Weitere Knöpfe dort: Suche, Git, Debug, NuGet, Terminal, Hilfe, Einstellungen. Ein Klick auf die aktive Ansicht klappt die Spalte ein.
+- **Rechte Spalte:** Ebenen (mit Anzahl der Elemente) und darunter Eigenschaften/Ereignisse.
+- **Designer:** Pfad der Seite und Geräteansicht über der Arbeitsfläche, „Vorschau“ zeigt die laufende App.
+- **Build-Konfiguration** gilt für Build, Starten (`dotnet run`/`watch -c …`) und die Build-Befehle der Projektmappe. Das untere Panel zeigt nach dem Build „Erfolgreich“/„Fehlgeschlagen“.
+- **Eigenes Firmenlogo und Produktname:** Einstellungen → Firmenlogo (SVG/PNG) und Produktname.
+- Beim ersten Start mit dieser Version stellt Studio einmalig auf hell mit roter Akzentfarbe um. Dunkel und andere Farben bleiben wählbar.
+
 ## Neu: Zertifikate im Griff (win-acme, IIS, nginx, Dienste)
 - Im IIS-Fenster neuer Reiter **Zertifikate**: alle Zertifikate des Servers in einer Liste – aus dem Windows-Zertifikatsspeicher (mit den IIS-Bindungen, die sie nutzen), aus der **nginx**-Konfiguration (`ssl_certificate`, inkl. `include`), aus **Diensten mit PFX-Datei** (`Kestrel:Certificates` in appsettings.json) und aus den **win-acme-Erneuerungen**. Mit „alle Server“ alle Server in einer Übersicht.
 - Pro Zertifikat: Namen, Aussteller, gültig bis (Tage übrig), Laufzeit, wo es verwendet wird, zugehörige win-acme-Erneuerung mit letztem Lauf, Fehler und Fälligkeit.

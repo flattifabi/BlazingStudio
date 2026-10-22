@@ -20,7 +20,7 @@
         @if (Ws.HasProject)
         {
             <ToolStrip />
-            @if (!Settings.Current.ToolboxCollapsed) { <Toolbox /> }
+            @if (!Settings.Current.ToolboxCollapsed) { <LeftPanel /> }
             <DocumentArea />
             <BottomPanel />
             <SidePanel />
@@ -65,6 +65,15 @@
 
     protected override void OnInitialized()
     {
+        // Neues Oberflächen-Design (2): einmalig hell mit roter Akzentfarbe – danach frei wählbar
+        if (Settings.Current.DesignVersion < 2)
+        {
+            Settings.Current.DesignVersion = 2;
+            Settings.Current.ThemeMode = "light";
+            Settings.Current.Accent = "#e2001a";
+            Settings.Current.ToolboxCollapsed = false;
+            Settings.Save();
+        }
         L.SetLanguage(Settings.Current.Language);
         Ws.Changed += Refresh;
         Ui.Changed += Refresh;
@@ -172,7 +181,7 @@
             new("tools.ef", "cmd.ef", "database", null, () => { Ui.OpenOverlay("ef"); return Task.CompletedTask; }, () => Ws.Solution is not null),
             new("tools.iis", "cmd.iis", "server", null, () => { IisDialog.Request(null); Ui.OpenOverlay("iis"); return Task.CompletedTask; }),
             new("tools.iisDeploy", "cmd.iisDeploy", "upload", null, () => { IisDialog.Request("deploy"); Ui.OpenOverlay("iis"); return Task.CompletedTask; }, () => Ws.Project?.ProjectFile is not null),
-            new("tools.claude", "cmd.claude", "sparkle", null, () => { SidePanel.ShowTab?.Invoke("claude"); return Task.CompletedTask; }, () => Ws.HasProject),
+            new("tools.claude", "cmd.claude", "sparkle", null, () => { LeftPanel.Show(Settings, "claude"); return Task.CompletedTask; }, () => Ws.HasProject),
             new("deploy.docker", "cmd.docker", "box", null, () => { DockerDialog.Request(null); Ui.OpenOverlay("docker"); return Task.CompletedTask; }),
             new("deploy.dockerDeploy", "cmd.dockerDeploy", "rocket", null, () => { DockerDialog.Request("deploy"); Ui.OpenOverlay("docker"); return Task.CompletedTask; }, () => Ws.Project?.ProjectFile is not null),
             new("project.version", "ver.change", "type", null, () => Actions.ChangeVersionAsync(Ws.StartupItem?.Path ?? Ws.Project?.ProjectFile), () => Ws.Project?.ProjectFile is not null),

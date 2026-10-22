@@ -1,10 +1,17 @@
 namespace BlazorStudio.App.Services;
 
-/// <summary>Texte der Zertifikatsverwaltung (werden im statischen Konstruktor in Localizer.Deploy.cs übernommen).</summary>
+/// <summary>Texte der Zertifikatsverwaltung und der Kopf-/Werkzeugleiste (Design 2) (werden im statischen Konstruktor in Localizer.Deploy.cs übernommen).</summary>
 public sealed partial class Localizer
 {
     private static readonly Dictionary<string, string> CertDe = new()
     {
+        ["top.configuration"] = "Build-Konfiguration", ["top.build"] = "Build", ["top.runOptions"] = "Weitere Startoptionen",
+        ["top.unsaved"] = "Nicht gespeichert", ["top.saved"] = "Gespeichert", ["top.deploy"] = "Bereitstellen",
+        ["view.designer"] = "Designer", ["view.source"] = "Quelltext", ["view.preview"] = "Vorschau",
+        ["left.components"] = "Komponenten", ["left.explorer"] = "Projektmappe", ["left.claude"] = "Claude",
+        ["settings.brandLogo"] = "Firmenlogo", ["settings.brandLogoHint"] = "leer = Blazor-Studio-Logo", ["settings.brandLogoPick"] = "Logo auswählen (SVG/PNG)",
+        ["settings.brandName"] = "Produktname",
+        ["side.elements"] = "{0} Elemente", ["bottom.buildOk"] = "Erfolgreich", ["bottom.buildFailed"] = "Fehlgeschlagen",
         ["iis.tab.certs"] = "Zertifikate",
         ["cert.filter"] = "Host, Dienst, Site …", ["cert.allServers"] = "alle Server", ["cert.allServersHint"] = "Zertifikate aller erreichbaren Server in einer Liste",
         ["cert.policy"] = "Richtlinie", ["cert.renewDue"] = "Fällige erneuern", ["cert.renewDueHint"] = "win-acme erneuert alle Zertifikate, die laut Einstellungen fällig sind",
@@ -63,6 +70,13 @@ public sealed partial class Localizer
 
     private static readonly Dictionary<string, string> CertEn = new()
     {
+        ["top.configuration"] = "Build configuration", ["top.build"] = "Build", ["top.runOptions"] = "More run options",
+        ["top.unsaved"] = "Unsaved", ["top.saved"] = "Saved", ["top.deploy"] = "Deploy",
+        ["view.designer"] = "Designer", ["view.source"] = "Source", ["view.preview"] = "Preview",
+        ["left.components"] = "Components", ["left.explorer"] = "Solution", ["left.claude"] = "Claude",
+        ["settings.brandLogo"] = "Company logo", ["settings.brandLogoHint"] = "empty = Blazor Studio logo", ["settings.brandLogoPick"] = "Choose logo (SVG/PNG)",
+        ["settings.brandName"] = "Product name",
+        ["side.elements"] = "{0} elements", ["bottom.buildOk"] = "Succeeded", ["bottom.buildFailed"] = "Failed",
         ["iis.tab.certs"] = "Certificates",
         ["cert.filter"] = "Host, service, site …", ["cert.allServers"] = "all servers", ["cert.allServersHint"] = "Certificates of all reachable servers in one list",
         ["cert.policy"] = "Policy", ["cert.renewDue"] = "Renew due", ["cert.renewDueHint"] = "win-acme renews all certificates that are due according to its settings",

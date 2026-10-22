@@ -185,13 +185,14 @@
       let value = 0;
       const move = (ev) => {
         if (kind === 'tool') {
-          value = Math.round(Math.min(460, Math.max(180, ev.clientX - 6)));
+          const left = handle.parentElement ? handle.parentElement.getBoundingClientRect().left : 6;
+          value = Math.round(Math.min(460, Math.max(180, ev.clientX - left)));
           shell.style.setProperty('--tool-w', value + 'px');
         } else if (kind === 'side') {
-          value = Math.round(Math.min(640, Math.max(260, window.innerWidth - ev.clientX - 6)));
+          value = Math.round(Math.min(640, Math.max(240, window.innerWidth - ev.clientX)));
           shell.style.setProperty('--side-w', value + 'px');
         } else if (kind === 'bottom') {
-          value = Math.round(Math.min(window.innerHeight - 220, Math.max(90, window.innerHeight - ev.clientY - 30)));
+          value = Math.round(Math.min(window.innerHeight - 260, Math.max(90, window.innerHeight - ev.clientY - 25)));
           shell.style.setProperty('--bottom-h', value + 'px');
         } else if (kind === 'code' && surface) {
           const r = surface.getBoundingClientRect();
