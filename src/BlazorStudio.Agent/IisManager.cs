@@ -256,6 +256,21 @@ public sealed class IisManager(SystemSampler sampler, VersionStore store, ILogge
         }).OrderBy(s => s.Name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
+    /// <summary>https-Bindungen mit Zertifikat (Fingerabdruck in Großbuchstaben, Speichername).</summary>
+    public List<(string Site, string Binding, string Host, int Port, string Thumbprint, string Store)> GetCertificateBindings()
+    {
+        using var sm = Open();
+        var list = new List<(string, string, string, int, string, string)>();
+        foreach (var site in sm.Sites)
+        foreach (var b in site.Bindings)
+        {
+            if (b.Protocol != "https" || b.CertificateHash is not { Length: > 0 } hash) continue;
+            list.Add((site.Name, b.BindingInformation, b.Host ?? "", BindingParser.Split(b.BindingInformation).Port,
+                Convert.ToHexString(hash), string.IsNullOrEmpty(b.CertificateStoreName) ? "My" : b.CertificateStoreName));
+        }
+        return list;
+    }
+
     public SiteApplicationInfo? FindApplication(string site, string appPath) =>
         GetSites().FirstOrDefault(s => s.Name.Equals(site, StringComparison.OrdinalIgnoreCase))
             ?.Applications.FirstOrDefault(a => a.Path.Equals(appPath, StringComparison.OrdinalIgnoreCase));

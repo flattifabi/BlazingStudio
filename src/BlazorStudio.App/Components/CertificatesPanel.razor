@@ -1,0 +1,671 @@
+@inherits StudioComponent
+@inject IisService Iis
+@using System.Globalization
+@using BlazorStudio.Deploy
+
+@* Reiter „Zertifikate“ im IIS-Fenster: Übersicht (IIS, nginx, Dienste, win-acme), Erneuern, Anlegen, Richtlinie. *@
+<div class="iis-toolbar">
+    <div class="f" style="width:240px"><Icon Name="search" /><input placeholder="@L["cert.filter"]" value="@_filter" @oninput="e => _filter = e.Value?.ToString() ?? string.Empty" /></div>
+    <label class="check" style="font-size:12px" title="@L["cert.allServersHint"]"><input type="checkbox" checked="@_all" @onchange="async e => { _all = e.Value is true; await LoadAsync(); }" />@L["cert.allServers"]</label>
+    <span class="grow"></span>
+    <button class="btn sm" @onclick="OpenPolicy"><Icon Name="lock" />@L["cert.policy"]</button>
+    <button class="btn sm" disabled="@(Busy || _all)" title="@L["cert.renewDueHint"]" @onclick="() => RenewAll(Server, false)"><Icon Name="refresh" />@L["cert.renewDue"]</button>
+    <button class="btn sm ac" disabled="@(Busy || _all || Current?.Overview?.WinAcme.Installed != true)" @onclick="OpenCreate"><Icon Name="plus" />@L["cert.new"]</button>
+    <button class="ibtn sm" title="@L["nuget.refresh"]" @onclick="LoadAsync"><Icon Name="refresh" Class="@(_loading ? "spin" : null)" /></button>
+</div>
+
+@if (_job is { } job)
+{
+    <div class="iis-result" style="margin:0 0 10px">
+        <div class="iis-result-h">
+            @if (!job.Job.IsFinished) { <Icon Name="refresh" Class="spin" /> }
+            else if (job.Job.State == "succeeded") { <Icon Name="checkc" Class="ok-text" /> }
+            else { <Icon Name="alert" Class="err-text" /> }
+            <b>@job.Job.Title</b><span class="dim">@job.Server.Display</span>
+            <span class="grow"></span>
+            @if (job.Job.IsFinished) { <button class="ibtn sm" @onclick="() => _job = null"><Icon Name="x" /></button> }
+        </div>
+        <div class="iis-log mono">
+            <div class="dim">@job.Job.CommandLine</div>
+            @foreach (var line in job.Job.Log) { <div class="@LineClass(line)">@line</div> }
+        </div>
+    </div>
+}
+
+@if (_results is null)
+{
+    <div class="ins-empty"><Icon Name="refresh" Class="spin" /></div>
+    return;
+}
+
+@foreach (var res in _results.Where(r => r.Error is not null))
+{
+    <div class="banner warn" style="margin-bottom:8px"><Icon Name="alert" /><span>@(_all ? res.Server.Display + ": " : "")@res.Error</span></div>
+}
+
+@{
+    var policy = Settings.Current.CertificatePolicy;
+    var now = DateTime.UtcNow;
+    var rows = _results.Where(r => r.Overview is not null)
+        .SelectMany(r => r.Overview!.Certificates.Select(c => (r.Server, Overview: r.Overview!, Cert: c, State: policy.Evaluate(c, now))))
+        .Where(x => Matches(x.Cert))
+        .OrderByDescending(x => Severity(x.State)).ThenBy(x => x.Cert.NotAfter == default ? DateTime.MaxValue : x.Cert.NotAfter)
+        .ToList();
+    var counts = rows.GroupBy(r => r.State).ToDictionary(g => g.Key, g => g.Count());
+}
+
+@if (!_all && Current?.Overview is { } single)
+{
+    @WinAcmeBox(single, policy)
+}
+
+<div class="cert-chips">
+    <span class="chip">@L.F("cert.count", rows.Count)</span>
+    @foreach (var st in new[] { CertificateState.Expired, CertificateState.ExpiresSoon, CertificateState.Stale, CertificateState.TooLong })
+    {
+        if (counts.TryGetValue(st, out var n))
+        {
+            <span class="chip @StateCss(st)">@n × @L["cert.state." + st]</span>
+        }
+    }
+    <span class="dim" style="font-size:11.5px">@L.F("cert.policyLine", policy.ValidDays, policy.RenewBeforeDays)</span>
+</div>
+
+@if (rows.Count == 0)
+{
+    <div class="ins-empty" style="padding-top:30px"><Icon Name="lock" /><span>@L["cert.none"]</span></div>
+}
+else
+{
+    <table class="ptable iis-table cert-table">
+        <thead><tr>
+            <th style="width:13%">@L["iis.status"]</th>
+            <th>@L["cert.cert"]</th>
+            @if (_all) { <th style="width:12%">Server</th> }
+            <th style="width:13%">@L["cert.expires"]</th>
+            <th class="num" style="width:7%" title="@L["cert.validityHint"]">@L["cert.validity"]</th>
+            <th style="width:26%">@L["cert.usedBy"]</th>
+            <th style="width:11%"></th>
+        </tr></thead>
+        <tbody>
+            @foreach (var row in rows)
+            {
+                var r = row;
+                var key = r.Server.Id + "|" + r.Cert.Source + "|" + (r.Cert.Path ?? r.Cert.Thumbprint);
+                var open = _expanded == key;
+                var left = r.Cert.NotAfter == default ? (double?)null : (r.Cert.NotAfter - now).TotalDays;
+                <tr class="@(open ? "iis-open" : "")" @onclick="() => _expanded = open ? null : key">
+                    <td><span class="iis-state @StateCss(r.State)">@L["cert.state." + r.State]</span></td>
+                    <td>
+                        <b class="cert-name">@r.Cert.DisplayName</b>
+                        <small class="iis-sub" title="@string.Join(", ", r.Cert.DnsNames)">@(r.Cert.DnsNames.Count > 1 ? "+" + (r.Cert.DnsNames.Count - 1) + " · " : "")@r.Cert.Issuer@(r.Cert.Error is { } err ? " · " + err : "")</small>
+                    </td>
+                    @if (_all) { <td><small>@r.Server.Display</small></td> }
+                    <td>
+                        @if (left is { } d)
+                        {
+                            <span class="mono">@r.Cert.NotAfter.ToLocalTime().ToString("dd.MM.yyyy", CultureInfo.CurrentCulture)</span>
+                            <small class="iis-sub @(d < policy.RenewBeforeDays ? "err-text" : "")">@(d < 0 ? L["cert.expired"] : L.F("cert.daysLeft", Math.Floor(d)))</small>
+                        }
+                        else { <span class="dim">–</span> }
+                    </td>
+                    <td class="num mono @(r.State == CertificateState.TooLong ? "warn-text" : "")">@(r.Cert.NotAfter == default ? "–" : r.Cert.ValidityDays + " d")</td>
+                    <td>
+                        @foreach (var u in r.Cert.Usages.Where(u => u.Kind != "winacme").Take(4))
+                        {
+                            <span class="chip cert-use @(Served(u, r.Cert) == false ? "warnchip" : "")" title="@UsageTitle(u, r.Cert)"><Icon Name="@UsageIcon(u.Kind)" />@u.Target</span>
+                        }
+                        @if (r.Cert.Usages.Count(u => u.Kind != "winacme") > 4) { <span class="dim">…</span> }
+                        @if (r.Cert.Usages.All(u => u.Kind == "winacme")) { <small class="dim">@SourceText(r.Cert)</small> }
+                    </td>
+                    <td class="iis-actions" @onclick:stopPropagation="true">
+                        @if (r.Cert.RenewalId is { } rid)
+                        {
+                            <button class="ibtn sm" title="@L["cert.renewNow"]" disabled="@Busy" @onclick="() => Renew(r.Server, rid, r.Cert.DisplayName)"><Icon Name="refresh" /></button>
+                        }
+                        @if (r.Cert.Usages.Any(u => u.Kind == "nginx") && r.Overview.NginxExe is not null)
+                        {
+                            <button class="ibtn sm" title="@L["cert.reloadNginx"]" disabled="@Busy" @onclick="() => ReloadNginx(r.Server)"><Icon Name="restart" /></button>
+                        }
+                    </td>
+                </tr>
+                @if (open)
+                {
+                    <tr class="iis-versions-row"><td colspan="@(_all ? 7 : 6)">@Details(r.Server, r.Overview, r.Cert)</td></tr>
+                }
+            }
+        </tbody>
+    </table>
+}
+
+@if (!_all && Current?.Overview is { Renewals.Count: > 0 } ov)
+{
+    <h4 class="cert-h">@L["cert.renewals"]</h4>
+    <table class="ptable iis-table cert-table">
+        <thead><tr><th>@L["cert.cert"]</th><th style="width:16%">@L["cert.lastRun"]</th><th style="width:12%">@L["cert.due"]</th><th style="width:30%">@L["cert.stores"]</th><th style="width:9%"></th></tr></thead>
+        <tbody>
+            @foreach (var item in ov.Renewals.Where(r => _filter.Length == 0 || r.Hosts.Any(h => h.Contains(_filter, StringComparison.OrdinalIgnoreCase)) || r.Name.Contains(_filter, StringComparison.OrdinalIgnoreCase)))
+            {
+                var ren = item;
+                <tr class="cert-norow">
+                    <td><b class="cert-name">@(ren.Hosts.Count > 0 ? string.Join(", ", ren.Hosts) : ren.Name)</b><small class="iis-sub mono">@ren.Id@(ren.Validation is { } v ? " · " + v : "")</small></td>
+                    <td>
+                        @if (ren.LastRun is { } lr)
+                        {
+                            <span class="@(ren.LastSuccess == false ? "err-text" : "")">@lr.ToLocalTime().ToString("dd.MM. HH:mm", CultureInfo.CurrentCulture) · @(ren.LastSuccess == false ? L["cert.failed"] : "OK")</span>
+                            @if (ren.LastSuccess == false && ren.LastError is { } le) { <small class="iis-sub err-text" title="@le">@le</small> }
+                        }
+                        else { <span class="dim">–</span> }
+                    </td>
+                    <td class="mono @(ren.Due < DateTime.UtcNow ? "warn-text" : "")">@(ren.Due?.ToLocalTime().ToString("dd.MM.yyyy", CultureInfo.CurrentCulture) ?? "–")</td>
+                    <td><small>@string.Join(" · ", ren.Stores.Concat(ren.Installations))</small></td>
+                    <td class="iis-actions">
+                        <button class="ibtn sm" title="@L["cert.renewNow"]" disabled="@Busy" @onclick="() => Renew(Server, ren.Id, ren.Hosts.FirstOrDefault() ?? ren.Name)"><Icon Name="refresh" /></button>
+                        <button class="ibtn sm danger" title="@L["cert.cancelRenewal"]" disabled="@Busy" @onclick="() => CancelRenewal(ren)"><Icon Name="trash" /></button>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@if (!_all && Current?.Overview is { Notes.Count: > 0 } notes)
+{
+    <details class="cert-notes"><summary class="dim">@L.F("cert.notes", notes.Notes.Count)</summary>
+        @foreach (var n in notes.Notes) { <div class="dim">@n</div> }
+    </details>
+}
+
+@if (_policyEdit is { } pe)
+{
+    @PolicySheet(pe)
+}
+@if (_create is { } cr)
+{
+    @CreateSheet(cr)
+}
+
+@code {
+    [Parameter, EditorRequired] public IisServerEntry Server { get; set; } = default!;
+
+    private sealed class Result
+    {
+        public required IisServerEntry Server { get; init; }
+        public CertificateOverview? Overview { get; set; }
+        public string? Error { get; set; }
+    }
+
+    private sealed record RunningJob(IisServerEntry Server, CertificateJob Job);
+
+    private List<Result>? _results;
+    private bool _all;
+    private bool _loading;
+    private string _filter = "";
+    private string? _expanded;
+    private RunningJob? _job;
+    private Timer? _timer;
+
+    private Result? Current => _results?.FirstOrDefault(r => r.Server.Id == Server.Id);
+    private bool Busy => _job is { Job.IsFinished: false };
+
+    protected override void OnStudioInitialized()
+    {
+        _ = LoadAsync();
+        _timer = new Timer(_ => InvokeAsync(PollJobAsync), null, 1000, 1000);
+    }
+
+    public override void Dispose()
+    {
+        _timer?.Dispose();
+        base.Dispose();
+    }
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+        var servers = _all ? Iis.Servers.Where(s => Iis.Status(s).Health == ServerHealth.Online || s.Id == Server.Id).ToList() : new List<IisServerEntry> { Server };
+        var results = servers.Select(s => new Result { Server = s }).ToList();
+        await Task.WhenAll(results.Select(async r =>
+        {
+            try
+            {
+                var client = Iis.Client(r.Server);
+                var ping = await client.PingAsync();
+                if (AgentDefaults.IsOlderThan(ping.Version, AgentDefaults.MinimumCertificateVersion))
+                {
+                    r.Error = L.F("cert.agentTooOld", ping.Version, AgentDefaults.MinimumCertificateVersion);
+                    return;
+                }
+                r.Overview = await client.GetCertificatesAsync();
+            }
+            catch (AgentException e)
+            {
+                r.Error = e.Message;
+            }
+        }));
+        _results = results;
+        _loading = false;
+        StateHasChanged();
+    }
+
+    private bool Matches(CertificateInfo c) =>
+        _filter.Length == 0 || c.DnsNames.Any(n => n.Contains(_filter, StringComparison.OrdinalIgnoreCase)) || c.Subject.Contains(_filter, StringComparison.OrdinalIgnoreCase)
+        || c.Usages.Any(u => u.Target.Contains(_filter, StringComparison.OrdinalIgnoreCase)) || c.Thumbprint.StartsWith(_filter, StringComparison.OrdinalIgnoreCase);
+
+    private static int Severity(CertificateState s) => s switch
+    {
+        CertificateState.Expired => 5, CertificateState.ExpiresSoon => 4, CertificateState.Stale => 3, CertificateState.TooLong => 2, CertificateState.Unknown => 1, _ => 0,
+    };
+
+    private static string StateCss(CertificateState s) => s switch
+    {
+        CertificateState.Ok => "ok", CertificateState.Expired => "err", CertificateState.Unknown => "", _ => "warn",
+    };
+
+    private static bool? Served(CertificateUsage u, CertificateInfo c) =>
+        u.ServedThumbprint is { Length: > 0 } t ? t.Equals(c.Thumbprint, StringComparison.OrdinalIgnoreCase) : null;
+
+    private string UsageTitle(CertificateUsage u, CertificateInfo c)
+    {
+        var text = $"{u.Kind}: {u.Target}" + (u.Detail is { } d ? " – " + d : "");
+        if (u.Endpoint is { } ep)
+            text += "\n" + (Served(u, c) switch { true => L.F("cert.servedOk", ep), false => L.F("cert.servedOther", ep, u.ServedThumbprint![..8]), _ => L.F("cert.servedUnknown", ep) });
+        return text;
+    }
+
+    private static string UsageIcon(string kind) => kind switch { "iis" => "globe", "nginx" => "layers", "service" => "gear", "winacme" => "refresh", _ => "folder" };
+
+    private string SourceText(CertificateInfo c) => c.Source.StartsWith("store:") ? L["cert.inStore"] + " " + c.Source[6..] : c.Path ?? "";
+
+    private static string LineClass(string line) =>
+        line.Contains("[EROR]", StringComparison.OrdinalIgnoreCase) || line.StartsWith("Fehler", StringComparison.Ordinal) || line.Contains("failed", StringComparison.OrdinalIgnoreCase) ? "err-text"
+        : line.Contains("[WARN]", StringComparison.OrdinalIgnoreCase) ? "warn-text" : "";
+
+    // ------------------------------------------------------------------
+    // Details
+    // ------------------------------------------------------------------
+
+    private RenderFragment Details(IisServerEntry server, CertificateOverview o, CertificateInfo c) => __builder =>
+    {
+        var renewal = c.RenewalId is { } id ? o.Renewals.FirstOrDefault(r => r.Id == id) : null;
+        <div class="iis-appextras">
+            <div class="iis-appextras-grid">
+                <div class="iis-box">
+                    <div class="iis-kv">
+                        <span>@L["cert.names"]</span><b title="@string.Join(", ", c.DnsNames)">@string.Join(", ", c.DnsNames)</b>
+                        <span>@L["cert.issuer"]</span><b>@c.Issuer</b>
+                        <span>@L["cert.validFrom"]</span><b>@(c.NotBefore == default ? "–" : c.NotBefore.ToLocalTime().ToString("g", CultureInfo.CurrentCulture)) – @(c.NotAfter == default ? "–" : c.NotAfter.ToLocalTime().ToString("g", CultureInfo.CurrentCulture))</b>
+                        <span>@L["cert.thumbprint"]</span><b class="mono">@c.Thumbprint</b>
+                        <span>@L["cert.source"]</span><b title="@SourceText(c)">@SourceText(c)</b>
+                        @if (c.FriendlyName is { } fn) { <span>@L["cert.friendly"]</span><b>@fn</b> }
+                        @if (c.Error is { } err) { <span>@L["cert.note"]</span><b class="warn-text">@err</b> }
+                    </div>
+                </div>
+                <div class="iis-box">
+                    <div class="iis-versions-h"><b>@L["cert.usedBy"]</b></div>
+                    @foreach (var u in c.Usages.Where(u => u.Kind != "winacme"))
+                    {
+                        var served = Served(u, c);
+                        <div class="iis-cfg">
+                            <Icon Name="@UsageIcon(u.Kind)" />
+                            <span class="grow" title="@u.Detail"><b>@u.Target</b> <span class="dim">@u.Detail</span></span>
+                            @if (u.Endpoint is { } ep)
+                            {
+                                <span class="chip @(served == false ? "warnchip" : served == true ? "" : "")" title="@UsageTitle(u, c)">@(served switch { true => "✓ " + ep, false => "⚠ " + ep, _ => ep })</span>
+                            }
+                            @if (u.Kind == "service")
+                            {
+                                <button class="ibtn sm" title="@L["iis.svc.restart"]" disabled="@Busy" @onclick="() => RestartService(server, u.Target)"><Icon Name="restart" /></button>
+                            }
+                            @if (u.Kind == "nginx" && o.NginxExe is not null)
+                            {
+                                <button class="ibtn sm" title="@L["cert.reloadNginx"]" disabled="@Busy" @onclick="() => ReloadNginx(server)"><Icon Name="restart" /></button>
+                            }
+                        </div>
+                    }
+                    @if (!c.Usages.Any(u => u.Kind != "winacme")) { <div class="dim" style="font-size:12px;padding:4px 8px">@L["cert.unused"]</div> }
+                </div>
+                <div class="iis-box">
+                    <div class="iis-versions-h"><b>win-acme</b></div>
+                    @if (renewal is null)
+                    {
+                        <div class="dim" style="font-size:12px;padding:4px 8px">@L["cert.noRenewal"]</div>
+                    }
+                    else
+                    {
+                        <div class="iis-kv">
+                            <span>ID</span><b class="mono">@renewal.Id</b>
+                            <span>@L["cert.lastRun"]</span><b class="@(renewal.LastSuccess == false ? "err-text" : "")">@(renewal.LastRun?.ToLocalTime().ToString("g", CultureInfo.CurrentCulture) ?? "–") @(renewal.LastSuccess == false ? L["cert.failed"] : "")</b>
+                            @if (renewal.LastSuccess == false && renewal.LastError is { } le) { <span>@L["cert.error"]</span><b class="err-text" title="@le">@le</b> }
+                            <span>@L["cert.due"]</span><b>@(renewal.Due?.ToLocalTime().ToString("g", CultureInfo.CurrentCulture) ?? "–")</b>
+                            <span>@L["cert.stores"]</span><b title="@string.Join(" · ", renewal.Stores)">@string.Join(" · ", renewal.Stores)</b>
+                            @if (renewal.Installations.Count > 0) { <span>@L["cert.afterwards"]</span><b title="@string.Join(" · ", renewal.Installations)">@string.Join(" · ", renewal.Installations)</b> }
+                        </div>
+                        <div style="padding:4px 8px"><button class="btn sm ac" disabled="@Busy" @onclick="() => Renew(server, renewal.Id, c.DisplayName)"><Icon Name="refresh" />@L["cert.renewNow"]</button></div>
+                    }
+                </div>
+            </div>
+        </div>
+    };
+
+    private RenderFragment WinAcmeBox(CertificateOverview o, CertificatePolicy policy) => __builder =>
+    {
+        var w = o.WinAcme;
+        var (days, min) = policy.ForWinAcme();
+        var mismatch = w.Installed && (w.RenewalDays != days || w.RenewalMinimumValidDays != min || (policy.RequestValidDays && w.DefaultValidDays != policy.ValidDays));
+        <div class="cert-acme">
+            <Icon Name="refresh" />
+            @if (!w.Installed)
+            {
+                <span class="warn-text">@L["cert.noWinAcme"]</span>
+            }
+            else
+            {
+                <span><b>win-acme @w.Version</b> <span class="dim">· @(w.BaseUri ?? "?")</span></span>
+                <span class="dim" title="@w.TaskName">
+                    @L["cert.task"]: @(w.TaskState ?? L["cert.taskMissing"])
+                    @if (w.TaskLastRun is { } lr) { <text> · @L["cert.taskLast"] @lr.ToLocalTime().ToString("dd.MM. HH:mm", CultureInfo.CurrentCulture)</text> }
+                    @if (w.TaskLastResult is { } res && res != 0) { <b class="err-text"> (Fehler 0x@res.ToString("X"))</b> }
+                    @if (w.TaskNextRun is { } nr) { <text> · @L["cert.taskNext"] @nr.ToLocalTime().ToString("dd.MM. HH:mm", CultureInfo.CurrentCulture)</text> }
+                </span>
+                <span class="grow"></span>
+                <span class="@(mismatch ? "warn-text" : "dim")" title="@L["cert.settingsHint"]">
+                    @L.F("cert.settingsLine", w.RenewalDays?.ToString(CultureInfo.CurrentCulture) ?? "55", w.RenewalMinimumValidDays?.ToString(CultureInfo.CurrentCulture) ?? "–", w.DefaultValidDays?.ToString(CultureInfo.CurrentCulture) ?? "CA")
+                </span>
+                @if (mismatch) { <button class="btn sm" disabled="@Busy" @onclick="OpenPolicy"><Icon Name="alert" />@L["cert.applyPolicy"]</button> }
+            }
+        </div>
+    };
+
+    // ------------------------------------------------------------------
+    // Aktionen
+    // ------------------------------------------------------------------
+
+    private async Task StartJob(IisServerEntry server, Func<AgentClient, Task<CertificateJob>> start)
+    {
+        try
+        {
+            _job = new RunningJob(server, await start(Iis.Client(server)));
+        }
+        catch (AgentException e)
+        {
+            Ui.ShowToast(e.Message, ToastKind.Error, 6000);
+        }
+    }
+
+    private async Task PollJobAsync()
+    {
+        if (_job is not { Job.IsFinished: false } running) return;
+        try
+        {
+            var job = await Iis.Client(running.Server).GetCertificateJobAsync(running.Job.Id);
+            _job = running with { Job = job };
+            if (job.IsFinished)
+            {
+                Ui.ShowToast(job.State == "succeeded" ? L.F("cert.jobOk", job.Title) : L.F("cert.jobFailed", job.Title), job.State == "succeeded" ? ToastKind.Success : ToastKind.Error, 4000);
+                await LoadAsync();
+            }
+            StateHasChanged();
+        }
+        catch (AgentException) { }
+    }
+
+    private async Task Renew(IisServerEntry server, string id, string name)
+    {
+        if (!await Confirm(L.F("cert.renewTitle", name), L["cert.renewText"], L["cert.renewNow"], danger: false)) return;
+        await StartJob(server, c => c.RenewCertificateAsync(id));
+    }
+
+    private async Task RenewAll(IisServerEntry server, bool force)
+    {
+        if (!await Confirm(L["cert.renewDue"], L["cert.renewDueText"], L["cert.renewDue"], danger: false)) return;
+        await StartJob(server, c => c.RenewAllCertificatesAsync(force));
+    }
+
+    private async Task CancelRenewal(AcmeRenewalInfo r)
+    {
+        if (!await Confirm(L.F("cert.cancelTitle", r.Hosts.FirstOrDefault() ?? r.Name), L["cert.cancelText"], L["cert.cancelRenewal"])) return;
+        await StartJob(Server, c => c.CancelRenewalAsync(r.Id));
+    }
+
+    private async Task ReloadNginx(IisServerEntry server) => await StartJob(server, c => c.ReloadNginxAsync());
+
+    private async Task RestartService(IisServerEntry server, string name)
+    {
+        if (!await Confirm(L.F("cert.restartTitle", name), L["cert.restartText"], L["iis.svc.restart"])) return;
+        try
+        {
+            await Iis.Client(server).ServiceActionAsync(name, "restart");
+            Ui.ShowToast(L.F("iis.svc.restarted", name), ToastKind.Success, 2400);
+            await LoadAsync();
+        }
+        catch (AgentException e)
+        {
+            Ui.ShowToast(e.Message, ToastKind.Error, 6000);
+        }
+    }
+
+    private async Task<bool> Confirm(string title, string? text, string ok, bool danger = true) =>
+        await Ui.ShowDialogAsync(new DialogRequest { Title = title, Message = text, OkText = ok, CancelText = L["action.cancel"], Danger = danger }) == DialogResult.Ok;
+
+    // ------------------------------------------------------------------
+    // Richtlinie
+    // ------------------------------------------------------------------
+
+    private CertificatePolicy? _policyEdit;
+    private bool _policyAllServers;
+    private string? _policyResult;
+
+    private void OpenPolicy()
+    {
+        var p = Settings.Current.CertificatePolicy;
+        _policyEdit = new CertificatePolicy { ValidDays = p.ValidDays, RenewBeforeDays = p.RenewBeforeDays, RequestValidDays = p.RequestValidDays };
+        _policyResult = null;
+    }
+
+    private void SavePolicy(CertificatePolicy p)
+    {
+        p.Normalize();
+        Settings.Current.CertificatePolicy = p;
+        Settings.Save();
+    }
+
+    private async Task ApplyPolicy(CertificatePolicy p)
+    {
+        SavePolicy(p);
+        var servers = _policyAllServers ? Iis.Servers.Where(s => Iis.Status(s).Health == ServerHealth.Online).ToList() : new List<IisServerEntry> { Server };
+        var lines = new List<string>();
+        foreach (var s in servers)
+        {
+            try
+            {
+                var w = await Iis.Client(s).SetCertificatePolicyAsync(p);
+                lines.Add($"{s.Display}: RenewalDays={w.RenewalDays}, RenewalMinimumValidDays={w.RenewalMinimumValidDays}, DefaultValidDays={w.DefaultValidDays?.ToString(CultureInfo.InvariantCulture) ?? "–"}");
+            }
+            catch (AgentException e)
+            {
+                lines.Add($"{s.Display}: {e.Message}");
+            }
+        }
+        _policyResult = string.Join("\n", lines);
+        await LoadAsync();
+    }
+
+    private RenderFragment PolicySheet(CertificatePolicy p) => __builder =>
+    {
+        var (days, min) = p.ForWinAcme();
+        <div class="iis-sheet-back" @onclick="() => _policyEdit = null">
+            <div class="iis-sheet" @onclick:stopPropagation="true">
+                <h3><Icon Name="lock" />@L["cert.policyTitle"]</h3>
+                <p class="dim" style="font-size:12.5px;margin-top:0">@L["cert.policyText"]</p>
+                <div class="cert-grid2">
+                    <div class="row2"><label>@L["cert.validDays"]</label><div class="f"><input type="number" min="2" max="3650" value="@p.ValidDays" @onchange="e => p.ValidDays = int.TryParse(e.Value?.ToString(), out var v) ? v : p.ValidDays" /></div></div>
+                    <div class="row2"><label>@L["cert.renewBefore"]</label><div class="f"><input type="number" min="1" max="60" value="@p.RenewBeforeDays" @onchange="e => p.RenewBeforeDays = int.TryParse(e.Value?.ToString(), out var v) ? v : p.RenewBeforeDays" /></div></div>
+                </div>
+                <label class="check" style="font-size:12.5px"><input type="checkbox" checked="@p.RequestValidDays" @onchange="e => p.RequestValidDays = e.Value is true" />@L.F("cert.requestValid", p.ValidDays)</label>
+                <small class="dim" style="display:block;margin:4px 0 10px 22px">@L["cert.requestValidHint"]</small>
+                <div class="banner" style="margin:0 0 10px"><Icon Name="info" /><span>@L.F("cert.policyEffect", days, min, p.RequestValidDays ? p.ValidDays.ToString(CultureInfo.CurrentCulture) : L["cert.byCa"])</span></div>
+                <label class="check" style="font-size:12.5px"><input type="checkbox" checked="@_policyAllServers" @onchange="e => _policyAllServers = e.Value is true" />@L["cert.applyAll"]</label>
+                @if (_policyResult is { } res) { <pre class="iis-log mono" style="margin-top:8px">@res</pre> }
+                <div class="btns">
+                    <button class="btn left" @onclick="() => _policyEdit = null">@L["action.close"]</button>
+                    <button class="btn" @onclick="() => { SavePolicy(p); _policyEdit = null; }">@L["cert.saveStudio"]</button>
+                    <button class="btn ac" @onclick="() => ApplyPolicy(p)"><Icon Name="check" />@L["cert.applyPolicy"]</button>
+                </div>
+            </div>
+        </div>
+    };
+
+    // ------------------------------------------------------------------
+    // Neues Zertifikat
+    // ------------------------------------------------------------------
+
+    private sealed class CreateForm
+    {
+        public AcmeOrderRequest Request { get; } = new();
+        public string Hosts { get; set; } = "";
+        public bool Pem { get; set; }
+        public bool Pfx { get; set; }
+        public List<SiteInfo>? Sites { get; set; }
+        public List<ServiceInfo>? Services { get; set; }
+        public string? Error { get; set; }
+    }
+
+    private CreateForm? _create;
+
+    private async Task OpenCreate()
+    {
+        var nginx = Current?.Overview?.NginxExe;
+        var form = new CreateForm();
+        if (nginx is not null) form.Request.PemPath = Path.Combine(Path.GetDirectoryName(nginx) ?? @"C:\nginx", "certs");
+        _create = form;
+        try
+        {
+            var client = Iis.Client(Server);
+            form.Sites = await client.GetSitesAsync();
+            form.Services = await client.GetServicesAsync();
+        }
+        catch (AgentException) { }
+    }
+
+    private string? Preview(CreateForm f)
+    {
+        try
+        {
+            Sync(f);
+            var args = WinAcmeArguments.Create(f.Request, @"<Agent>\Cert-Hook.ps1", Current?.Overview?.NginxExe ?? "nginx.exe");
+            f.Error = null;
+            return WinAcmeArguments.Display("wacs.exe", args);
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException)
+        {
+            f.Error = e.Message;
+            return null;
+        }
+    }
+
+    private static void Sync(CreateForm f)
+    {
+        f.Request.Hosts = f.Hosts.Split(new[] { ',', ';', ' ', '\n', '\r', '\t' }, StringSplitOptions.RemoveEmptyEntries).ToList();
+        if (!f.Pem) f.Request.ReloadNginx = false;
+    }
+
+    private async Task SubmitCreate(CreateForm f)
+    {
+        Sync(f);
+        var request = new AcmeOrderRequest
+        {
+            Hosts = f.Request.Hosts, FriendlyName = f.Request.FriendlyName, Validation = f.Request.Validation, ValidationPort = f.Request.ValidationPort, WebRoot = f.Request.WebRoot,
+            CertificateStore = f.Request.CertificateStore, IisSiteId = f.Request.IisSiteId,
+            PemPath = f.Pem ? f.Request.PemPath : null, ReloadNginx = f.Pem && f.Request.ReloadNginx,
+            PfxPath = f.Pfx ? f.Request.PfxPath : null, PfxPassword = f.Pfx ? f.Request.PfxPassword : null, RestartService = f.Request.RestartService,
+            ExtraArguments = f.Request.ExtraArguments,
+        };
+        try
+        {
+            WinAcmeArguments.Create(request, "x.ps1", Current?.Overview?.NginxExe ?? "nginx.exe");
+        }
+        catch (Exception e) when (e is ArgumentException or InvalidOperationException)
+        {
+            f.Error = e.Message;
+            return;
+        }
+        _create = null;
+        await StartJob(Server, c => c.CreateCertificateAsync(request));
+    }
+
+    private RenderFragment CreateSheet(CreateForm f) => __builder =>
+    {
+        var r = f.Request;
+        var nginx = Current?.Overview?.NginxExe;
+        var preview = Preview(f);
+        <div class="iis-sheet-back" @onclick="() => _create = null">
+            <div class="iis-sheet cert-create" @onclick:stopPropagation="true">
+                <h3><Icon Name="plus" />@L["cert.newTitle"]</h3>
+                <div class="row2"><label>@L["cert.hosts"]</label><div class="f"><input value="@f.Hosts" spellcheck="false" placeholder="shop.intern.example, api.intern.example" @oninput="e => f.Hosts = e.Value?.ToString() ?? string.Empty" /></div></div>
+                <div class="row2"><label>@L["cert.friendly"] <span class="dim">(@L["cert.optional"])</span></label><div class="f"><input value="@r.FriendlyName" @onchange="e => r.FriendlyName = e.Value?.ToString()" /></div></div>
+
+                <div class="row2"><label>@L["cert.validation"]</label>
+                    <div class="seg">
+                        <button class="@(r.Validation == "selfhosting" ? "on" : "")" @onclick='() => r.Validation = "selfhosting"'>@L["cert.val.selfhosting"]</button>
+                        <button class="@(r.Validation == "filesystem" ? "on" : "")" @onclick='() => r.Validation = "filesystem"'>@L["cert.val.filesystem"]</button>
+                        <button class="@(r.Validation == "none" ? "on" : "")" @onclick='() => r.Validation = "none"'>@L["cert.val.none"]</button>
+                    </div>
+                    <small class="dim">@L["cert.val." + r.Validation + "Hint"]</small>
+                </div>
+                @if (r.Validation == "selfhosting")
+                {
+                    <div class="row2"><label>@L["cert.valPort"]</label><div class="f" style="width:120px"><input type="number" value="@r.ValidationPort" placeholder="80" @onchange="e => r.ValidationPort = int.TryParse(e.Value?.ToString(), out var v) ? v : null" /></div></div>
+                }
+                else if (r.Validation == "filesystem")
+                {
+                    <div class="row2"><label>Webroot</label><div class="f"><input value="@r.WebRoot" spellcheck="false" placeholder="C:\inetpub\wwwroot" @onchange="e => r.WebRoot = e.Value?.ToString()" /></div></div>
+                }
+
+                <h4 class="cert-h">@L["cert.targets"]</h4>
+                <div class="cert-target">
+                    <label class="check"><input type="checkbox" checked="@(r.CertificateStore || r.IisSiteId is not null)" disabled="@(r.IisSiteId is not null)" @onchange="e => r.CertificateStore = e.Value is true" /><Icon Name="globe" />@L["cert.t.store"]</label>
+                    <div class="f" style="margin-left:24px"><select value="@(r.IisSiteId?.ToString(CultureInfo.InvariantCulture) ?? "")" @onchange="e => r.IisSiteId = long.TryParse(e.Value?.ToString(), out var id) ? id : null">
+                        <option value="">@L["cert.t.noIis"]</option>
+                        @foreach (var s in f.Sites ?? new()) { <option value="@s.Id">@L.F("cert.t.iisSite", s.Name)</option> }
+                    </select></div>
+                </div>
+                <div class="cert-target">
+                    <label class="check"><input type="checkbox" checked="@f.Pem" @onchange="e => f.Pem = e.Value is true" /><Icon Name="layers" />@L["cert.t.pem"]</label>
+                    @if (f.Pem)
+                    {
+                        <div class="f" style="margin-left:24px"><input value="@r.PemPath" spellcheck="false" placeholder="C:\nginx\certs" @onchange="e => r.PemPath = e.Value?.ToString()" /></div>
+                        <label class="check" style="margin-left:24px"><input type="checkbox" checked="@r.ReloadNginx" disabled="@(nginx is null)" @onchange="e => r.ReloadNginx = e.Value is true" />@(nginx is null ? L["cert.t.noNginx"] : L.F("cert.t.reloadNginx", nginx))</label>
+                    }
+                </div>
+                <div class="cert-target">
+                    <label class="check"><input type="checkbox" checked="@f.Pfx" @onchange="e => f.Pfx = e.Value is true" /><Icon Name="gear" />@L["cert.t.pfx"]</label>
+                    @if (f.Pfx)
+                    {
+                        <div class="cert-grid2" style="margin-left:24px">
+                            <div class="f"><input value="@r.PfxPath" spellcheck="false" placeholder="D:\services\shop\certs" @onchange="e => r.PfxPath = e.Value?.ToString()" /></div>
+                            <div class="f"><input type="password" value="@r.PfxPassword" placeholder="@L["cert.t.pfxPassword"]" autocomplete="new-password" @onchange="e => r.PfxPassword = e.Value?.ToString()" /></div>
+                        </div>
+                        <small class="dim" style="display:block;margin:2px 0 0 24px">@L["cert.t.pfxHint"]</small>
+                    }
+                    <div class="f" style="margin:6px 0 0 24px"><select value="@(r.RestartService ?? "")" @onchange="e => r.RestartService = string.IsNullOrEmpty(e.Value?.ToString()) ? null : e.Value!.ToString()">
+                        <option value="">@L["cert.t.noRestart"]</option>
+                        @foreach (var s in (f.Services ?? new()).Where(s => s.Managed || s.State == "Running").OrderBy(s => !s.Managed).ThenBy(s => s.Name)) { <option value="@s.Name">@L.F("cert.t.restart", s.Name)</option> }
+                    </select></div>
+                </div>
+
+                <details style="margin-top:8px"><summary class="dim" style="font-size:12px">@L["cert.extra"]</summary>
+                    <div class="f" style="margin-top:6px"><input value="@r.ExtraArguments" spellcheck="false" placeholder="--keytype ec --ocsp-must-staple" @onchange="e => r.ExtraArguments = e.Value?.ToString()" /></div>
+                </details>
+
+                @if (preview is not null) { <pre class="iis-log mono cert-preview">@preview</pre> }
+                @if (f.Error is { } err && f.Hosts.Length > 0) { <div class="err-text" style="font-size:12px;margin-top:6px">@err</div> }
+                <div class="btns">
+                    <button class="btn left" @onclick="() => _create = null">@L["action.cancel"]</button>
+                    <button class="btn ac" disabled="@(preview is null || Busy)" @onclick="() => SubmitCreate(f)"><Icon Name="check" />@L["cert.order"]</button>
+                </div>
+            </div>
+        </div>
+    };
+}

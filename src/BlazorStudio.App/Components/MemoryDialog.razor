@@ -421,13 +421,13 @@
             <div class="f" style="width:280px"><Icon Name="search" /><input placeholder="@L["mem.filter"]" value="@_filter" @oninput="e => { _filter = e.Value?.ToString() ?? string.Empty; _typeLimit = 200; }" /></div>
             <span class="grow"></span>
             <label class="dim" style="font-size:12px">@L["mem.compare"]</label>
-            <select class="sel" style="max-width:260px" value="@(_compareId ?? "")" @onchange="e => SetCompare(e.Value?.ToString())">
+            <div class="f" style="width:260px"><select value="@(_compareId ?? "")" @onchange="e => SetCompare(e.Value?.ToString())">
                 <option value="">@L["mem.compareNone"]</option>
                 @foreach (var o in others)
                 {
                     <option value="@o.Id">@((o.Label.Length > 0 ? o.Label : o.ProcessName) + " · " + o.CreatedAt.ToLocalTime().ToString("dd.MM. HH:mm:ss", CultureInfo.CurrentCulture))</option>
                 }
-            </select>
+            </select></div>
         </div>
         if (_types is null)
         {

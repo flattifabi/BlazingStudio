@@ -90,6 +90,9 @@ public sealed class AppSettings
 
     /// <summary>Docker-Deploy-Einstellungen je Projektdatei.</summary>
     public Dictionary<string, DockerDeployProfile> DockerDeployProfiles { get; set; } = new();
+
+    /// <summary>Zertifikatsrichtlinie der Firma (Laufzeit, Vorlauf) – Bewertung in Studio und Vorgabe für win-acme.</summary>
+    public BlazorStudio.Deploy.CertificatePolicy CertificatePolicy { get; set; } = new();
 }
 
 public sealed class IisServerEntry

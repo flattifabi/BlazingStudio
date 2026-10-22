@@ -92,6 +92,7 @@
                             case "pools": @PoolsTab(sel) break;
                             case "sites": @SitesTab(sel) break;
                             case "services": @ServicesTab(sel) break;
+                            case "certs": <CertificatesPanel Server="sel" @key="sel.Id" /> break;
                             case "deploy": @DeployTab() break;
                             case "history": @HistoryTab(sel) break;
                             default: @OverviewTab(st) break;
@@ -121,7 +122,7 @@
 
     private static readonly TabDef[] Tabs =
     {
-        new("overview", "activity"), new("pools", "layers"), new("sites", "globe"), new("services", "gear"), new("deploy", "rocket"), new("history", "history"),
+        new("overview", "activity"), new("pools", "layers"), new("sites", "globe"), new("services", "gear"), new("certs", "lock"), new("deploy", "rocket"), new("history", "history"),
     };
 
     private IisServerEntry? _selected;

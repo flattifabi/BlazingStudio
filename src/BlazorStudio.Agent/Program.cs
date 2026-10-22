@@ -33,6 +33,7 @@ builder.Services.AddSingleton<SiteConfigService>();
 builder.Services.AddSingleton<ServiceManager>();
 builder.Services.AddSingleton<ServiceConfigService>();
 builder.Services.AddSingleton<MemoryService>();
+builder.Services.AddSingleton<CertificateService>();
 builder.Services.AddSingleton<DeploymentService>();
 builder.Services.AddHttpClient("health").ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
 {

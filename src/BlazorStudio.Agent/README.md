@@ -38,6 +38,9 @@ Das Skript gibt am Ende **Adresse und API-Schlüssel** aus – beides in Blazor 
 | `Agent:KeepVersions` | `5` | so viele Versionen bleiben je Site (aktive + vorherige immer) |
 | `Agent:MaxPackageMegabytes` | `2048` | maximale Paketgröße |
 | `Agent:HealthCheckSeconds` | `60` | so lange wartet der Health-Check auf eine Antwort < 400 |
+| `Agent:WinAcmePath` | automatisch | Pfad zu `wacs.exe` (sonst aus der geplanten Aufgabe von win-acme bzw. `C:\Program Files\win-acme`, `C:\win-acme`, `C:\tools\win-acme`) |
+| `Agent:NginxPath` | automatisch | Pfad zu `nginx.exe` oder `nginx.conf` (sonst laufender nginx-Prozess bzw. `C:\nginx`) |
+| `Agent:CertificateFiles` | `[]` | weitere PEM/CRT/PFX-Dateien für die Zertifikatsübersicht |
 | `Kestrel:Endpoints` | `http://*:8790` | Adresse/Port, HTTPS siehe oben |
 
 Nach Änderungen: `Restart-Service BlazorStudioAgent`.
@@ -90,6 +93,13 @@ Fertige Vorlagen für GitHub Actions, Azure DevOps und GitLab erzeugt der Pipeli
 | GET/PUT | `/api/services/{name}/persist`, `/api/services/{name}/config[/{file}]` | persistente Dateien, appsettings*.json |
 | GET/PUT | `/api/sites/{name}/persist?app=/` | persistente Dateien/Ordner `{ paths: ["app.db", "App_Data"] }` – wandern bei jedem Umschalten mit |
 | GET | `/api/sites/{name}/logs?app=/`, `/api/sites/{name}/logs/{file}?app=/` | stdout-Logs (Ende der Datei, max. 512 KB) |
+| GET | `/api/certificates?probe=true` | Zertifikate: Windows-Speicher (+ IIS-Bindungen), nginx (`ssl_certificate`), Dienste (`Kestrel:Certificates`), win-acme-Erneuerungen; `probe` prüft, welches Zertifikat lokal tatsächlich ausgeliefert wird |
+| PUT | `/api/certificates/policy` | `{ validDays, renewBeforeDays, requestValidDays }` → schreibt `ScheduledTask.RenewalDays`/`RenewalMinimumValidDays` (und optional `Order.DefaultValidDays`) in die settings.json von win-acme (mit Sicherung) |
+| POST | `/api/certificates/renewals` | neues Zertifikat (`AcmeOrderRequest`: hosts, validation, certificateStore, iisSiteId, pemPath, pfxPath, pfxPassword, restartService, reloadNginx) → Lauf |
+| POST | `/api/certificates/renewals/{id}/renew`, `/api/certificates/renew?force=` | eine / alle fälligen Erneuerungen sofort ausführen → Lauf |
+| DELETE | `/api/certificates/renewals/{id}` | Erneuerung entfernen (`wacs --cancel`) |
+| POST | `/api/certificates/nginx/reload` | `nginx -t` + `nginx -s reload` |
+| GET | `/api/certificates/jobs[/{id}]` | Läufe mit Protokoll (Passwörter maskiert) |
 | GET | `/api/memory/processes` | .NET-Prozesse (IIS-Worker, Dienste, andere) für die Speicheranalyse |
 | GET/POST | `/api/memory/snapshots` | Snapshots auflisten / erstellen `{ processId, label }` (läuft im Hintergrund) |
 | GET/DELETE | `/api/memory/snapshots/{id}` | Stand / löschen |
@@ -100,6 +110,8 @@ Fertige Vorlagen für GitHub Actions, Azure DevOps und GitLab erzeugt der Pipeli
 | POST | `/api/deployments` | multipart: `package` (ZIP) + `site`, `version`, `appPath`, `healthUrl`, `rollback`, `createSite`, `binding`, `pool`, `runtime`, `overwrite`, `activate`, `source`, `commit`, `notes` → 202 |
 | GET | `/api/deployments?site=&take=` | Verlauf |
 | GET | `/api/deployments/{id}` | Stand mit Log (zum Abfragen bis `state` ≠ Queued/Running) |
+
+Zertifikate: Der Agent ruft dafür `wacs.exe` (win-acme) auf. Bei neuen Zertifikaten mit „Dienst neu starten“ oder „nginx neu laden“ richtet er `Cert-Hook.ps1` (liegt neben dem Agent) als Installationsschritt in win-acme ein – die Folgeaktion läuft dann auch bei den automatischen Erneuerungen der geplanten Aufgabe. PFX-Passwörter gibt der Agent nur an win-acme weiter (dort verschlüsselt gespeichert) und liefert sie nie zurück.
 
 Speicheranalyse: Der Agent erstellt mit `PssCaptureSnapshot` eine Kopie des Prozesses (die App wird nur Millisekunden angehalten) und liest den .NET-Heap mit ClrMD direkt auf dem Server. Die Typ-Statistik liegt in `<DataDirectory>\memory`; die Kopie bleibt für Objekt-Details bis 20 Minuten nach dem letzten Zugriff offen (höchstens zwei gleichzeitig). Nur 64-Bit-Prozesse; der Agent braucht dafür LocalSystem/Administrator.
 

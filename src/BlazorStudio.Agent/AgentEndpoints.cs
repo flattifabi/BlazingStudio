@@ -176,6 +176,17 @@ public static class AgentEndpoints
             return Results.NoContent();
         });
 
+        // ---------------- Zertifikate (win-acme, IIS, nginx, Dienste) ----------------
+        api.MapGet("/certificates", async (CertificateService certs, bool? probe, CancellationToken ct) => await certs.ScanAsync(probe != false, ct));
+        api.MapPut("/certificates/policy", async (CertificateService certs, CertificatePolicy policy) => await certs.SetPolicyAsync(policy));
+        api.MapPost("/certificates/renewals", async (CertificateService certs, AcmeOrderRequest r) => await certs.CreateAsync(r));
+        api.MapPost("/certificates/renewals/{id}/renew", async (CertificateService certs, string id) => await certs.RenewAsync(id));
+        api.MapPost("/certificates/renew", async (CertificateService certs, bool? force) => await certs.RenewAllAsync(force == true));
+        api.MapDelete("/certificates/renewals/{id}", async (CertificateService certs, string id) => await certs.CancelAsync(id));
+        api.MapPost("/certificates/nginx/reload", (CertificateService certs) => certs.ReloadNginx());
+        api.MapGet("/certificates/jobs", (CertificateService certs) => certs.Jobs());
+        api.MapGet("/certificates/jobs/{id}", (CertificateService certs, string id) => certs.Job(id));
+
         // ---------------- Speicheranalyse ----------------
         api.MapGet("/memory/processes", (MemoryService memory) => memory.Processes());
         api.MapGet("/memory/snapshots", (MemoryService memory) => memory.List());

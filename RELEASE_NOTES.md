@@ -1,3 +1,13 @@
+## Neu: Zertifikate im Griff (win-acme, IIS, nginx, Dienste)
+- Im IIS-Fenster neuer Reiter **Zertifikate**: alle Zertifikate des Servers in einer Liste – aus dem Windows-Zertifikatsspeicher (mit den IIS-Bindungen, die sie nutzen), aus der **nginx**-Konfiguration (`ssl_certificate`, inkl. `include`), aus **Diensten mit PFX-Datei** (`Kestrel:Certificates` in appsettings.json) und aus den **win-acme-Erneuerungen**. Mit „alle Server“ alle Server in einer Übersicht.
+- Pro Zertifikat: Namen, Aussteller, gültig bis (Tage übrig), Laufzeit, wo es verwendet wird, zugehörige win-acme-Erneuerung mit letztem Lauf, Fehler und Fälligkeit.
+- **Ausgeliefert = aktuell?** Der Agent prüft, welches Zertifikat IIS und nginx tatsächlich ausliefern. Ein nicht neu geladenes nginx oder ein Dienst mit altem Zertifikat wird als „alt ausgeliefert“ markiert.
+- **Firmenrichtlinie** (Standard: höchstens 30 Tage gültig, Erneuerung 7 Tage vor Ablauf). Studio markiert, was abweicht. **„Richtlinie auf Server anwenden“** stellt win-acme passend ein: `RenewalDays` und `RenewalMinimumValidDays`, optional `DefaultValidDays` (Laufzeit bei der eigenen ACME-CA anfordern). Die settings.json wird vorher gesichert, auf Wunsch auf allen Servern.
+- **Jetzt erneuern** (einzeln oder alle fälligen) mit Live-Protokoll von win-acme; **nginx neu laden**, **Dienst neu starten**, **Erneuerung entfernen**.
+- **Neues Zertifikat** über win-acme direkt aus Studio: Hostnamen, Prüfung (HTTP selbst, Webroot oder eigene Argumente), Ziele kombinierbar: Windows-Speicher plus https-Bindungen einer IIS-Site, **PEM-Dateien für nginx** (danach automatisch nginx neu laden), **PFX mit Passwort** für einen Dienst (danach automatisch Dienst neu starten). Der win-acme-Aufruf wird vorab angezeigt; das PFX-Passwort geht nur an win-acme auf dem Server.
+- Die Folgeaktionen richtet der Agent als Skript-Installation in win-acme ein (`Cert-Hook.ps1`). Sie laufen deshalb auch bei den automatischen Erneuerungen der geplanten Aufgabe.
+- **Agent 1.14.0 nötig.** Neue optionale Agent-Einstellungen: `WinAcmePath`, `NginxPath`, `CertificateFiles`.
+
 ## Neu: Speicheranalyse von Apps auf dem Server
 - Im IIS-Fenster gibt es bei laufenden **App-Pools** und **Diensten** den Knopf **„Speicher analysieren“** (Puls-Symbol). Der Agent erstellt eine Kopie des Prozesses – die App wird dabei nur Millisekunden angehalten – und wertet den .NET-Heap direkt auf dem Server aus (Microsoft ClrMD). Es wird kein Dump übertragen.
 - **Woher kommt der Speicher?** Verwalteter Heap vs. Working Set, Aufteilung auf Gen 0/1/2, Large Object Heap und Pinned Heap, Fragmentierung, und eine Tabelle aller Typen nach Größe und Anzahl (filterbar).

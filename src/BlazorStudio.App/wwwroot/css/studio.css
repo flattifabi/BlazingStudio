@@ -1266,3 +1266,24 @@ textarea.dk-area { width: 100%; min-height: 64px; resize: vertical; font-size: 1
 .mem-path:first-of-type { border-top: 0; }
 .mem-path .iis-link { margin-right: 0; }
 .mem-text { margin: 8px 0 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); font-size: 12px; max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+
+/* ---------------- Zertifikate ---------------- */
+.warn-text { color: var(--warn) !important; }
+.cert-acme { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--island-2); font-size: 12px; margin-bottom: 8px; }
+.cert-acme > svg { width: 15px; height: 15px; color: var(--ac); }
+.cert-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0 0 8px; }
+.chip.ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+.chip.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.chip.err { background: color-mix(in srgb, var(--err) 16%, transparent); color: var(--err); }
+.cert-table td { vertical-align: middle; }
+.cert-table tr.cert-norow { cursor: default; }
+.cert-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip.cert-use { display: inline-flex; align-items: center; gap: 4px; margin: 1px 4px 1px 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip.cert-use svg { width: 11px; height: 11px; flex: none; }
+.cert-h { margin: 16px 0 6px; font-size: 12.5px; font-weight: 650; color: var(--text-2); }
+.cert-notes { margin-top: 12px; font-size: 11.5px; }
+.cert-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cert-target { display: grid; gap: 5px; padding: 8px 0; border-top: 1px solid var(--line); }
+.cert-target .check svg { width: 13px; height: 13px; color: var(--ac); margin-right: 2px; }
+.cert-create { width: min(720px, 94%); }
+.cert-preview { max-height: 120px; margin-top: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--field); }
